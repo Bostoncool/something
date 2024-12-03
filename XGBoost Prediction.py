@@ -1,4 +1,5 @@
 # 导入必要的库
+import os
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -91,7 +92,21 @@ def plot_results(y_test, predictions):
 
 def main():
     # 加载数据
-    file_path = 'CHAP_PM2.5_D1K_20230101_V1.csv'  # 替换为实际文件路径
+    # 设置数据文件夹路径
+    data_dir = 'data'  # 替换为实际数据文件夹路径
+    all_files = []
+    
+    # 递归遍历所有子文件夹
+    for root, dirs, files in os.walk(data_dir):
+        for file in files:
+            if file.endswith('.csv'):  # 只处理CSV文件
+                file_path = os.path.join(root, file)
+                all_files.append(file_path)
+                
+    if not all_files:
+        raise FileNotFoundError("未找到任何CSV文件")
+        
+    print(f"找到{len(all_files)}个CSV文件")
     df = load_and_preprocess_data(file_path)
     
     # 特征工程
