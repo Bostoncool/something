@@ -108,6 +108,11 @@ def batch_convert(input_folder, output_folder):
                     csv_path = os.path.join(year_output_path, 
                                           filename.replace('.nc', '.csv'))
                     
+                    # 检查输出文件是否已经存在
+                    if os.path.exists(csv_path):
+                        print(f"文件已存在，跳过转换: {csv_path}")
+                        continue
+                    
                     print(f"\n正在转换文件: {filename}")
                     nc_to_csv(nc_path, csv_path)
                     
