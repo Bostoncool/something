@@ -2,6 +2,7 @@ import netCDF4 as nc
 import pandas as pd
 import numpy as np
 import os
+import time
 
 def nc_to_csv(nc_file_path, output_csv_path):
     """
@@ -114,7 +115,10 @@ def batch_convert(input_folder, output_folder):
                         continue
                     
                     print(f"\n正在转换文件: {filename}")
+                    start_time = time.time()  # 记录开始时间
                     nc_to_csv(nc_path, csv_path)
+                    end_time = time.time()  # 记录结束时间
+                    print(f"文件 {filename} 转换完成，耗时: {end_time - start_time:.2f} 秒")
                     
             except Exception as year_error:
                 print(f"处理年份 {year_folder} 时出错: {str(year_error)}")
