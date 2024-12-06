@@ -55,7 +55,7 @@ def extract_archives(source_dir):
 
 if __name__ == "__main__":
     # 指定要处理的目录路径
-    source_directory = r"D:\BaiduNetdiskDownload\北京空气质量"  # 替换为你的目录路径
+    source_directory = r"H:\全国空气质量"  # 替换为你的目录路径
     
     try:
         extract_archives(source_directory)
