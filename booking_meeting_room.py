@@ -265,9 +265,14 @@ class MeetingRoomBooker:
 
 def main():
     # 获取用户输入
-    date_str = input("请输入预定日期 (YYYY-MM-DD): ")
-    start_time = input("请输入开始时间 (HH:MM): ")
-    end_time = input("请输入结束时间 (HH:MM): ")
+    
+    # date_str = input("请输入预定日期 (YYYY-MM-DD): ")
+    # start_time = input("请输入开始时间 (HH:MM): ")
+    # end_time = input("请输入结束时间 (HH:MM): ")
+
+    date_str = "2024-12-19"
+    start_time = "23:30"
+    end_time = "24:00"
 
     # 创建预定实例
     booker = MeetingRoomBooker()
