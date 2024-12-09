@@ -65,7 +65,7 @@ def prepare_data(data_path, seq_length=24, train_split=0.8):
     df = pd.read_csv(data_path)
     
     # 选择特征
-    features = ['pm2.5', 'DEWP', 'TEMP', 'PRES', 'lws', 'ls', 'lr']
+    features = ['pm2.5', 'DEWP', 'TEMP', 'PRES', 'Iws', 'Is', 'Ir']
     
     # 处理缺失值
     df[features] = df[features].fillna(method='ffill')
@@ -178,7 +178,7 @@ def main():
     
     # 准备数据
     train_dataset, test_dataset, scaler = prepare_data(
-        'PRSA_Data_20130301-20170228/data.csv',
+        'PRSA_Data_20130301-20170228/PRSA_data_2010.1.1-2014.12.31.csv',
         seq_length=seq_length
     )
     
