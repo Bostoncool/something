@@ -95,23 +95,24 @@ class MeetingRoomBooker:
             # 等待验证码加载
             time.sleep(2)
             
-            # 获取验证码图片元素
-            slider = self.wait.until(
-                EC.presence_of_element_located((By.CLASS_NAME, "verify-move-block"))
+            # 定位右侧的滑动按钮（红色方框）
+            slider_button = self.wait.until(
+                EC.presence_of_element_located((By.CLASS_NAME, "verify-move-btn"))
             )
+            
+            # 获取背景图片元素用于分析缺口
             background = self.wait.until(
                 EC.presence_of_element_located((By.CLASS_NAME, "verify-img-block"))
             )
             
             # 保存验证码图片
             background.screenshot("background.png")
-            slider.screenshot("slider.png")
             
             # 图片处理和缺口识别
-            gap_position = self.find_gap()
+            gap_position = self.find_gap_without_slider()
             
             # 模拟滑动
-            self.simulate_drag(slider, gap_position)
+            self.simulate_drag(slider_button, gap_position)
             
             # 等待验证结果
             time.sleep(1)
@@ -120,71 +121,66 @@ class MeetingRoomBooker:
             print(f"滑块验证过程出现错误: {str(e)}")
             raise e
 
-    def find_gap(self):
-        # 读取图片
+    def find_gap_without_slider(self):
+        # 读取背景图片
         background = cv2.imread("background.png")
-        slider = cv2.imread("slider.png")
         
         # 转换为灰度图
         gray_background = cv2.cvtColor(background, cv2.COLOR_BGR2GRAY)
-        gray_slider = cv2.cvtColor(slider, cv2.COLOR_BGR2GRAY)
         
         # 高斯模糊处理
         blur_background = cv2.GaussianBlur(gray_background, (5, 5), 0)
-        blur_slider = cv2.GaussianBlur(gray_slider, (5, 5), 0)
         
         # Canny边缘检测
-        edges_background = cv2.Canny(blur_background, 100, 200)
-        edges_slider = cv2.Canny(blur_slider, 100, 200)
+        edges = cv2.Canny(blur_background, 100, 200)
         
         # 查找轮廓
-        contours, _ = cv2.findContours(edges_slider, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # 获取最大轮廓
-        max_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(max_contour)
-        
-        # 在背景图中匹配滑块
-        result = cv2.matchTemplate(edges_background, edges_slider, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-        
-        # 计算缺口位置（需要加上滑块的偏移）
-        gap_position = max_loc[0] + w//2
+        # 分析轮廓找到缺口位置
+        gap_position = 0
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            # 根据缺口特征（位置和大小）判断
+            if 50 < x < 400 and 10 < w < 50 and h > 20:  # 这些阈值可能需要调整
+                gap_position = x
+                break
         
         return gap_position
 
-    def simulate_drag(self, slider, distance):
+    def simulate_drag(self, slider_button, distance):
         try:
             action = ActionChains(self.driver)
             
-            # 先移动到滑块元素
-            action.move_to_element(slider)
-            # 先点击
-            action.click()
-            # 再次点击并按住,准备拖动
-            action.click_and_hold().perform()
-            # 短暂停顿,模拟人类行为
+            # 移动到滑动按钮
+            action.move_to_element(slider_button)
+            time.sleep(0.2)
+            
+            # 点击并按住滑动按钮
+            action.click_and_hold(slider_button).perform()
             time.sleep(0.2)
             
             # 更真实的轨迹模拟
-            # 先快后慢，并加入微小的Y轴移动来模拟人手抖动
             current = 0
             while current < distance:
-                # 随机位移
-                x_offset = min(10, distance - current)
-                y_offset = np.random.randint(-2, 2)  # 微小的垂直抖动
+                # 计算每次移动的距离
+                move = min(5, distance - current)  # 每次最多移动5个像素
                 
-                action.move_by_offset(x_offset, y_offset).perform()
-                current += x_offset
+                # 添加随机的y轴抖动
+                y_offset = np.random.randint(-2, 2)
+                
+                # 执行移动
+                action.move_by_offset(move, y_offset).perform()
+                current += move
                 
                 # 随机停顿
                 time.sleep(np.random.randint(10, 50) / 1000)
             
-            # 模拟人在终点附近的微调
+            # 在终点附近微调
             action.move_by_offset(distance - current, 0).perform()
             time.sleep(0.5)
             
-            # 释放滑块
+            # 释放滑动按钮
             action.release().perform()
             time.sleep(0.5)
             
@@ -196,12 +192,9 @@ class MeetingRoomBooker:
         """生成移动轨迹"""
         tracks = []
         current = 0
-        # 减速阈值
-        mid = distance * 4 / 5
-        # 计算间隔
-        t = 0.2
-        # 初速度
-        v = 0
+        mid = distance * 4 / 5 # 减速阈值
+        t = 0.2 # 计算间隔
+        v = 0 # 初速度
         
         while current < distance:
             if current < mid:
