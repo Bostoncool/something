@@ -64,8 +64,21 @@ def prepare_data(data_path, seq_length=24, train_split=0.8):
     # 读取数据
     df = pd.read_csv(data_path)
     
-    # 选择特征
-    features = ['pm2.5', 'DEWP', 'TEMP', 'PRES', 'Iws', 'Is', 'Ir']
+    # 打印列名以进行检查
+    print("数据集中的列名：")
+    print(df.columns.tolist())
+    
+    # 打印数据集前几行以检查列名
+    print("数据集前几行:")
+    print(df.head())
+    
+    # 选择特征 - 根据实际数据集的列名调整
+    features = [col.strip() for col in ['pm2.5', 'DEWP', 'TEMP', 'PRES', 'Iws', 'Is', 'Ir']]
+    
+    # 验证所有特征是否存在
+    missing_features = [f for f in features if f not in df.columns]
+    if missing_features:
+        raise ValueError(f"以下特征在数据集中不存在: {missing_features}")
     
     # 处理缺失值
     df[features] = df[features].fillna(method='ffill')
@@ -165,22 +178,31 @@ def plot_results(train_losses, test_losses):
 
 def main():
     # 超参数设置
-    seq_length = 24  # 使用前24小时数据预测
+    seq_length = 24
     hidden_size = 128
     num_layers = 2
     num_epochs = 100
     batch_size = 32
     learning_rate = 0.001
     
-    # 检查GPU可用性
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'使用设备: {device}')
     
-    # 准备数据
-    train_dataset, test_dataset, scaler = prepare_data(
-        'PRSA_Data_20130301-20170228/PRSA_data_2010.1.1-2014.12.31.csv',
-        seq_length=seq_length
-    )
+    # 修改这里的数据路径
+    try:
+        data_path = r'C:\Users\IU\Desktop\Code\something\Long-short term memory\PRSA_Data\PRSA_data_2010.1.1-2014.12.31.csv'  # 使用相对路径
+        print(f'尝试读取数据文件: {data_path}')
+        train_dataset, test_dataset, scaler = prepare_data(
+            data_path,
+            seq_length=seq_length
+        )
+    except FileNotFoundError:
+        print("错误：找不到数据文件，请确保数据文件路径正确")
+        print("请检查以下几点：")
+        print("1. 数据文件是否存在于正确的位置")
+        print("2. 文件名是否正确")
+        print("3. 文件路径是否���确")
+        return
     
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
