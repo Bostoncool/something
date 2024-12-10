@@ -51,20 +51,18 @@ def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
 dataset = read_csv('pollution.csv', header=0, index_col=0)  # 读取CSV文件,第一行为列名,第一列为索引
 values = dataset.values  # 将DataFrame转换为numpy数组
 
-# 对风向列进行整数编码
-encoder = LabelEncoder()  # 创建标签编码器
-# 将第7列(索引为6)的风向数据(SE,cv,NW,NE)转换为整数编码
-# astype(str)确保输入为字符串类型
-# fit_transform()方法将不同的风向映射为0,1,2,3整数
-values[:,6] = encoder.fit_transform(values[:,6].astype(str))
-
-# 清理数据中的空格
+# 首先确保所有字符串数据被清理
 for i in range(values.shape[1]):
     if isinstance(values[0,i], str):
         values[:,i] = [x.strip() if isinstance(x, str) else x for x in values[:,i]]
 
-# 现在可以安全地转换为float32
+# 然后对风向列进行编码
+encoder = LabelEncoder()
+values[:,4] = encoder.fit_transform(values[:,4].astype(str))
+
+# 最后转换为float32
 values = values.astype('float32')
+
 # normalize features
 scaler = MinMaxScaler(feature_range=(0, 1))
 scaled = scaler.fit_transform(values)
@@ -106,10 +104,10 @@ criterion = nn.L1Loss()  # MAE损失
 optimizer = torch.optim.Adam(model.parameters())
 
 # 训练模型
-train_losses = []
-val_losses = []
-epochs = 50
-batch_size = 72
+train_losses = []  # 训练集损失
+val_losses = []  # 测试集损失
+epochs = 100   # 训练次数
+batch_size = 72  # 批次大小
 
 for epoch in range(epochs):
     model.train()
