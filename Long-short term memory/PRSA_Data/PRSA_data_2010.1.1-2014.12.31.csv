@@ -1,4 +1,4 @@
-No    ,year ,month ,day ,hour ,pm2.5 ,DEWP ,TEMP        ,PRES        ,cbwd ,Iws    ,Is ,Ir
+No,year,month,day,hour,pm2.5,DEWP,TEMP,PRES,cbwd,Iws,Is,Ir
     1 ,2010 ,    1 ,  1 ,   0 ,NA    ,-21  ,-11         ,1021        ,NW   ,  1.79 , 0 , 0
     2 ,2010 ,    1 ,  1 ,   1 ,NA    ,-21  ,-12         ,1020        ,NW   ,  4.92 , 0 , 0
     3 ,2010 ,    1 ,  1 ,   2 ,NA    ,-21  ,-11         ,1019        ,NW   ,  6.71 , 0 , 0
