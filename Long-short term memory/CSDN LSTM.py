@@ -7,7 +7,14 @@ from pandas import concat
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_squared_error
-from tensorflow.keras.models import Sequential
+# 需要先安装tensorflow库:
+# pip install tensorflow
+# 如果仍然无法运行,可能是因为:
+# 1. Python版本与tensorflow不兼容
+# 2. 系统环境配置问题
+# 3. GPU版本不匹配等
+# 建议使用conda创建新的虚拟环境来运行
+from tensorflow.keras.models import Sequential 
 from tensorflow.keras.layers import Dense, LSTM
  
 # convert series to supervised learning
