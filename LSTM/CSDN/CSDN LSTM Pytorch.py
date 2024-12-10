@@ -47,13 +47,16 @@ def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
         agg.dropna(inplace=True)
     return agg
  
-# load dataset
-dataset = read_csv(r'C:\Users\IU\Desktop\Code\something\Long-short term memory\PRSA_Data\PRSA_data_2010.1.1-2014.12.31.csv', header=0, index_col=0)
-values = dataset.values
-# integer encode direction
-encoder = LabelEncoder()
-# 假设第4列是风向列（基于PRSA数据集的结构）
-values[:,4] = encoder.fit_transform(values[:,4].astype(str))
+# 加载数据集
+dataset = read_csv('pollution.csv', header=0, index_col=0)  # 读取CSV文件,第一行为列名,第一列为索引
+values = dataset.values  # 将DataFrame转换为numpy数组
+
+# 对风向列进行整数编码
+encoder = LabelEncoder()  # 创建标签编码器
+# 将第7列(索引为6)的风向数据(SE,cv,NW,NE)转换为整数编码
+# astype(str)确保输入为字符串类型
+# fit_transform()方法将不同的风向映射为0,1,2,3整数
+values[:,6] = encoder.fit_transform(values[:,6].astype(str))
 
 # 清理数据中的空格
 for i in range(values.shape[1]):
