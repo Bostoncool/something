@@ -90,7 +90,7 @@ train_y = torch.FloatTensor(train_y)
 test_X = torch.FloatTensor(test_X)
 test_y = torch.FloatTensor(test_y)
 
-# 检查CUDA是否可用并设置设备
+# 检查CUDA是否可用并设置设备，不会装驱动的朋友，可以去查一下教程，不再赘述。
 print(f"CUDA是否可用: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"当前CUDA设备数量: {torch.cuda.device_count()}")
@@ -116,7 +116,7 @@ optimizer = torch.optim.Adam(model.parameters())
 # 训练模型
 train_losses = []  # 训练集损失
 val_losses = []  # 测试集损失
-epochs = 10   # 训练次数
+epochs = 10000   # 训练次数
 batch_size = 72  # 批次大小
 
 for epoch in range(epochs):
