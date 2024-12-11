@@ -90,8 +90,18 @@ train_y = torch.FloatTensor(train_y)
 test_X = torch.FloatTensor(test_X)
 test_y = torch.FloatTensor(test_y)
 
-# 设置设备
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# 检查CUDA是否可用并设置设备
+print(f"CUDA是否可用: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"当前CUDA设备数量: {torch.cuda.device_count()}")
+    print(f"当前CUDA设备名称: {torch.cuda.get_device_name(0)}")
+    device = torch.device('cuda')
+    # 设置默认CUDA设备
+    torch.cuda.set_device(0)
+    print(f"使用GPU进行训练")
+else:
+    device = torch.device('cpu')
+    print(f"CUDA不可用,使用CPU进行训练")
 
 # 定义模型参数
 input_dim = train_X.shape[2]  # 特征数量
@@ -106,7 +116,7 @@ optimizer = torch.optim.Adam(model.parameters())
 # 训练模型
 train_losses = []  # 训练集损失
 val_losses = []  # 测试集损失
-epochs = 100   # 训练次数
+epochs = 10   # 训练次数
 batch_size = 72  # 批次大小
 
 for epoch in range(epochs):
