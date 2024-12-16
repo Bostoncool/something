@@ -116,7 +116,7 @@ optimizer = torch.optim.Adam(model.parameters())
 # 训练模型
 train_losses = []  # 训练集损失
 val_losses = []  # 测试集损失
-epochs = 10000   # 训练次数
+epochs = 50   # 训练次数
 batch_size = 72  # 批次大小
 
 for epoch in range(epochs):
