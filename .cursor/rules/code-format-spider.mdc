@@ -1,0 +1,87 @@
+---
+description: Guidelines for Web-Spider.
+globs: *.py
+alwaysApply: false
+---
+
+---
+description:
+globs:
+---
+
+# Your rule content
+
+- You can @ files here
+- You can use markdown but dont have to
+
+# Project Rules for Developing a Web Crawler
+
+## 1. Legal and Ethical Considerations
+- **Compliance with Robots.txt:** Always check and respect the site's robots.txt file to ensure that your crawler is allowed to access specific URLs.
+- **Terms of Service:** Review and abide by the website’s Terms of Service. Avoid any actions that may violate their policies.
+- **Data Privacy:** Ensure that your project complies with relevant data privacy laws (e.g., GDPR) by not collecting personal data without consent.
+
+## 2. Technical Guidelines
+- **Efficient Request Handling:**  
+  - Implement rate limiting to avoid overloading the target server.  
+  - Use proxies or rotating IP addresses if necessary, but do so responsibly.
+- **Error Handling and Retries:**  
+  - Include robust error handling for HTTP errors, timeouts, and unexpected server responses.  
+  - Implement retry mechanisms with exponential backoff.
+- **Concurrency and Parallelism:**  
+  - Use asynchronous I/O (e.g., asyncio) or multithreading/multiprocessing to handle concurrent requests efficiently.
+- **Data Extraction:**  
+  - Use libraries such as BeautifulSoup, lxml, or Scrapy for HTML parsing and data extraction.  
+  - Validate and clean extracted data before further processing.
+
+## 3. Code Structure and Documentation
+- **Modular Design:**  
+  - Organize the code into modules: request handling, parsing, data storage, and error logging.
+- **Reusable Components:**  
+  - Create functions or classes for common tasks like sending requests, parsing HTML, and saving data.
+- **Documentation and Comments:**  
+  - Provide clear inline comments and maintain updated documentation for the codebase.
+- **Version Control:**  
+  - Use git for version control. Commit frequently and provide meaningful commit messages.
+
+## 4. Testing and Maintenance
+- **Unit Testing:**  
+  - Write unit tests for core functions to ensure reliability.
+- **Logging:**  
+  - Implement logging to monitor crawler performance and errors. Use libraries like Python’s built-in `logging` module.
+- **Monitoring and Alerts:**  
+  - Set up monitoring tools to track crawler status and receive alerts for critical failures.
+
+## 5. Performance and Optimization
+- **Resource Management:**  
+  - Optimize memory and CPU usage by processing data in batches.
+- **Asynchronous Processing:**  
+  - Leverage asynchronous programming (e.g., using `aiohttp` for asynchronous HTTP requests) for I/O-bound tasks.
+- **Scalability:**  
+  - Design the system to be easily scalable, whether by modifying crawling parameters or distributing tasks across multiple machines.
+
+## 6. Data Storage and Output
+- **File Formats:**  
+  - Store crawled data in standardized formats like JSON, CSV, or a database system for structured queries.
+- **Backup and Recovery:**  
+  - Regularly backup collected data and maintain a recovery plan in case of data loss.
+- **Data Validation:**  
+  - Validate and transform the data before storage to ensure consistency and usability.
+
+## 7. Security
+- **Sanitize Inputs/Outputs:**  
+  - Implement measures to sanitize inputs and outputs to prevent injection attacks.
+- **Secure Connections:**  
+  - Use HTTPS to ensure secure data transmission.
+- **Access Restrictions:**  
+  - Limit access to sensitive parts of the code or data through proper authentication and authorization mechanisms.
+
+## 8. Collaboration and Contribution
+- **Code Reviews:**  
+  - Establish a code review process to ensure quality and maintainability.
+- **Guidelines for Contributions:**  
+  - Create a CONTRIBUTING.md file to guide external contributions.
+- **Consistent Coding Style:**  
+  - Follow PEP 8 guidelines for Python code and maintain consistency across the project.
+
+By following these project rules, you can ensure that your web crawler project is ethical, efficient, and maintainable while being robust against common pitfalls.
