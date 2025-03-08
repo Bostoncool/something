@@ -1,0 +1,5 @@
+{
+    "python.analysis.extraPaths": [
+        "./LSTM/CSDN/CSDN LSTM Py"
+    ]
+}
