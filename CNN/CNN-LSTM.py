@@ -392,6 +392,7 @@ def visualize_predictions(model, test_loader, time_index, lats, lons, scaler, de
     # 创建动画展示时空变化
     create_spatiotemporal_animation(inputs_np, targets_np, outputs_np, lats, lons, output_dir)
 
+# 创建时间趋势分析图
 def create_trend_analysis(inputs, targets, outputs, time_index, output_dir):
     """
     创建PM2.5时间趋势分析图
@@ -443,6 +444,7 @@ def create_trend_analysis(inputs, targets, outputs, time_index, output_dir):
     # 创建年度趋势图
     create_annual_trend(time_index, inputs, targets, outputs, output_dir)
 
+# 创建年度趋势图
 def create_annual_trend(time_index, inputs, targets, outputs, output_dir):
     """
     创建年度PM2.5变化趋势图
@@ -487,6 +489,7 @@ def create_annual_trend(time_index, inputs, targets, outputs, output_dir):
     plt.savefig(os.path.join(output_dir, 'pm25_annual_trend.png'), dpi=300)
     plt.close()
 
+# 创建时空变化动画
 def create_spatiotemporal_animation(inputs, targets, outputs, lats, lons, output_dir):
     """
     创建PM2.5时空变化动画
