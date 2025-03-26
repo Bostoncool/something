@@ -11,7 +11,8 @@ from sklearn.preprocessing import MinMaxScaler
 import os
 import seaborn as sns
 from matplotlib.animation import FuncAnimation
-from mpl_toolkits.basemap import Basemap
+from cartopy import crs as ccrs
+import cartopy.feature as cfeature
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -343,41 +344,33 @@ def visualize_predictions(model, test_loader, time_index, lats, lons, scaler, de
                 
                 # 绘制最后一个输入时间步
                 ax = axes[0]
-                m = Basemap(ax=ax, llcrnrlon=min(lons), llcrnrlat=min(lats),
-                           urcrnrlon=max(lons), urcrnrlat=max(lats),
-                           resolution='l', projection='merc')
-                m.drawcoastlines()
-                m.drawcountries()
-                m.drawprovinces()
+                ax.set_extent([min(lons), max(lons), min(lats), max(lats)], crs=ccrs.PlateCarree())
+                ax.add_feature(cfeature.COASTLINE)
+                ax.add_feature(cfeature.BORDERS)
                 
                 lons_grid, lats_grid = np.meshgrid(lons, lats)
-                x, y = m(lons_grid, lats_grid)
-                
-                cs = m.contourf(x, y, inputs_np[0, -1], cmap=cmap, levels=np.linspace(0, 300, 30))
+                cs = ax.pcolormesh(lons_grid, lats_grid, inputs_np[0, -1], 
+                                  cmap=cmap, vmin=0, vmax=300, transform=ccrs.PlateCarree())
                 ax.set_title(f'最后输入 (历史数据)')
                 
                 # 绘制目标
                 ax = axes[1]
-                m = Basemap(ax=ax, llcrnrlon=min(lons), llcrnrlat=min(lats),
-                           urcrnrlon=max(lons), urcrnrlat=max(lats),
-                           resolution='l', projection='merc')
-                m.drawcoastlines()
-                m.drawcountries()
-                m.drawprovinces()
+                ax.set_extent([min(lons), max(lons), min(lats), max(lats)], crs=ccrs.PlateCarree())
+                ax.add_feature(cfeature.COASTLINE)
+                ax.add_feature(cfeature.BORDERS)
                 
-                cs = m.contourf(x, y, targets_np[0, i], cmap=cmap, levels=np.linspace(0, 300, 30))
+                cs = ax.pcolormesh(lons_grid, lats_grid, targets_np[0, i], 
+                                  cmap=cmap, vmin=0, vmax=300, transform=ccrs.PlateCarree())
                 ax.set_title(f'实际值 (真实未来)')
                 
                 # 绘制预测
                 ax = axes[2]
-                m = Basemap(ax=ax, llcrnrlon=min(lons), llcrnrlat=min(lats),
-                           urcrnrlon=max(lons), urcrnrlat=max(lats),
-                           resolution='l', projection='merc')
-                m.drawcoastlines()
-                m.drawcountries()
-                m.drawprovinces()
+                ax.set_extent([min(lons), max(lons), min(lats), max(lats)], crs=ccrs.PlateCarree())
+                ax.add_feature(cfeature.COASTLINE)
+                ax.add_feature(cfeature.BORDERS)
                 
-                cs = m.contourf(x, y, outputs_np[0, i], cmap=cmap, levels=np.linspace(0, 300, 30))
+                cs = ax.pcolormesh(lons_grid, lats_grid, outputs_np[0, i], 
+                                  cmap=cmap, vmin=0, vmax=300, transform=ccrs.PlateCarree())
                 ax.set_title(f'预测值 (模型预测)')
                 
                 # 添加颜色条
@@ -522,16 +515,12 @@ def create_spatiotemporal_animation(inputs, targets, outputs, lats, lons, output
     
     def update(frame):
         ax.clear()
-        m = Basemap(ax=ax, llcrnrlon=min(lons), llcrnrlat=min(lats),
-                   urcrnrlon=max(lons), urcrnrlat=max(lats),
-                   resolution='l', projection='merc')
-        m.drawcoastlines()
-        m.drawcountries()
+        ax.set_extent([min(lons), max(lons), min(lats), max(lats)], crs=ccrs.PlateCarree())
+        ax.add_feature(cfeature.COASTLINE)
+        ax.add_feature(cfeature.BORDERS)
         
         lons_grid, lats_grid = np.meshgrid(lons, lats)
-        x, y = m(lons_grid, lats_grid)
-        
-        cs = m.contourf(x, y, combined_data[frame], cmap=cmap, levels=np.linspace(0, 300, 30))
+        cs = ax.pcolormesh(lons_grid, lats_grid, combined_data[frame], cmap=cmap, vmin=0, vmax=300, transform=ccrs.PlateCarree())
         
         if frame < seq_length:
             ax.set_title(f'历史PM2.5数据 - 时间步 {frame+1}/{seq_length}')
