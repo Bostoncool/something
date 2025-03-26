@@ -14,6 +14,7 @@ from matplotlib.animation import FuncAnimation
 from cartopy import crs as ccrs
 import cartopy.feature as cfeature
 import warnings
+import time
 warnings.filterwarnings('ignore')
 
 # 设置随机种子以确保结果可复现
@@ -239,7 +240,7 @@ def train_model(model, train_loader, val_loader, num_epochs, learning_rate, devi
         val_loader: 验证数据加载器
         num_epochs: 训练轮数
         learning_rate: 学习率
-        device: 训练设备(CPU/GPU/HPU)
+        device: 训练设备(CPU/GPU)
     
     Returns:
         训练好的模型和训练历史
@@ -247,25 +248,69 @@ def train_model(model, train_loader, val_loader, num_epochs, learning_rate, devi
     model = model.to(device)
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
     
     train_losses = []
     val_losses = []
+    best_val_loss = float('inf')
+    
+    # 确保模型在训练模式
+    model.train()
+    print("\n确认模型训练模式:", model.training)
+    
+    # 打印CUDA信息
+    if torch.cuda.is_available():
+        print(f"CUDA版本: {torch.version.cuda}")
+        print(f"当前设备: {torch.cuda.get_device_name(0)}")
+        print(f"显存使用: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
+        print(f"显存缓存: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
+    
+    torch.cuda.synchronize()  # 确保GPU同步
     
     print("开始训练模型...")
     for epoch in range(num_epochs):
+        epoch_start_time = time.time()
+        
         # 训练阶段
         model.train()
         train_loss = 0.0
-        for inputs, targets in train_loader:
+        batch_times = []
+        
+        # 预热GPU
+        if epoch == 0:
+            print("预热GPU...")
+            warmup_tensor = torch.randn(32, train_loader.dataset[0][0].shape[0], 
+                                      train_loader.dataset[0][0].shape[1], 
+                                      train_loader.dataset[0][0].shape[2]).to(device)
+            with torch.no_grad():
+                for _ in range(10):
+                    model(warmup_tensor)
+            torch.cuda.synchronize()
+        
+        for batch_idx, (inputs, targets) in enumerate(train_loader):
+            batch_start_time = time.time()
+            
             inputs, targets = inputs.to(device), targets.to(device)
             
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)  # 更高效的梯度清零
             outputs = model(inputs)
             loss = criterion(outputs, targets)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
             train_loss += loss.item()
+            
+            # 计算批次时间
+            torch.cuda.synchronize()  # 确保GPU操作完成
+            batch_time = time.time() - batch_start_time
+            batch_times.append(batch_time)
+            
+            if batch_idx % 5 == 0:  # 更频繁地打印进度
+                print(f'Epoch [{epoch+1}/{num_epochs}] Batch [{batch_idx}/{len(train_loader)}] '
+                      f'Loss: {loss.item():.4f} '
+                      f'Batch Time: {batch_time:.3f}s '
+                      f'GPU Memory: {torch.cuda.memory_allocated(0) / 1024**2:.2f}MB')
         
         train_loss /= len(train_loader)
         train_losses.append(train_loss)
@@ -283,7 +328,30 @@ def train_model(model, train_loader, val_loader, num_epochs, learning_rate, devi
         val_loss /= len(val_loader)
         val_losses.append(val_loss)
         
-        print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
+        # 更新学习率
+        scheduler.step(val_loss)
+        
+        # 保存最佳模型
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), 'best_cnnlstm_model.pth')
+        
+        # 打印epoch统计信息
+        epoch_time = time.time() - epoch_start_time
+        avg_batch_time = sum(batch_times) / len(batch_times)
+        
+        print(f'\nEpoch {epoch+1} 统计:')
+        print(f'训练损失: {train_loss:.4f}')
+        print(f'验证损失: {val_loss:.4f}')
+        print(f'总耗时: {epoch_time:.2f}s')
+        print(f'平均批次时间: {avg_batch_time:.3f}s')
+        print(f'当前学习率: {optimizer.param_groups[0]["lr"]:.6f}')
+        print(f'GPU显存使用: {torch.cuda.memory_allocated(0) / 1024**2:.2f}MB')
+        print(f'GPU显存缓存: {torch.cuda.memory_reserved(0) / 1024**2:.2f}MB')
+        
+        # 清理GPU缓存
+        if epoch % 5 == 0:
+            torch.cuda.empty_cache()
     
     history = {
         'train_loss': train_losses,
@@ -557,8 +625,16 @@ def main():
     hidden_dim = 128
     num_layers = 2
     
-    # 检查是否有GPU可用
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 检查CUDA是否可用
+    print("CUDA是否可用:", torch.cuda.is_available())
+    if torch.cuda.is_available():
+        print("当前CUDA设备:", torch.cuda.get_device_name(0))
+        print("CUDA设备数量:", torch.cuda.device_count())
+        device = torch.device("cuda")
+    else:
+        print("警告：未检测到CUDA设备，将使用CPU进行训练（训练速度会很慢）")
+        device = torch.device("cpu")
+    
     print(f"使用设备: {device}")
     
     # 加载并预处理数据
