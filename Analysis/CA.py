@@ -541,7 +541,7 @@ def main():
     print("\nSpearman相关系数矩阵:")
     print(spearman_corr)
     
-    print("\nKendall相关系数矩阵:")
+    print("Kendall相关系数矩阵:")
     print(kendall_corr)
     
     # 可视化相关系数矩阵
