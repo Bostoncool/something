@@ -238,7 +238,7 @@ def train_model(model, train_loader, val_loader, num_epochs, learning_rate, devi
         val_loader: 验证数据加载器
         num_epochs: 训练轮数
         learning_rate: 学习率
-        device: 训练设备(CPU/GPU)
+        device: 训练设备(CPU/GPU/HPU)
     
     Returns:
         训练好的模型和训练历史
