@@ -73,8 +73,23 @@ def load_data(data_dir):
     for filename in os.listdir(data_dir):
         if filename.endswith('.tif'):
             image_paths.append(os.path.join(data_dir, filename))
-            # 这里假设标签从文件名中提取，请根据实际情况修改
-            label = float(filename.split('_')[1].replace('.tif', ''))
+            
+            # 提取文件名中的example部分
+            example = filename.split('_')[3]
+            
+            # 根据长度判断标签类型
+            if len(example) == 4:
+                # 可能是年份
+                label = float(example)
+            elif len(example) == 6:
+                # 可能是月份
+                label = float(example)
+            elif len(example) == 8:
+                # 可能是日期
+                label = float(example)
+            else:
+                raise ValueError(f"Unexpected format in filename: {filename}")
+            
             labels.append(label)
     
     return image_paths, labels
@@ -127,8 +142,12 @@ def main():
     # 设置随机种子
     torch.manual_seed(42)
     
+    # 检查CUDA是否可用，如果不可用则抛出错误
+    if not torch.cuda.is_available():
+        raise RuntimeError("需要CUDA支持才能运行此程序！请确保您的GPU已正确配置。")
+    
     # 设置设备
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda')
     
     # 数据预处理
     transform = transforms.Compose([
@@ -139,7 +158,7 @@ def main():
     ])
     
     # 加载数据
-    data_dir = 'path/to/your/tif/images'  # 请替换为实际的数据目录
+    data_dir = r"G:\PM2.5(TIF)\2000"  # 请替换为实际的数据目录
     image_paths, labels = load_data(data_dir)
     
     # 划分训练集和验证集
@@ -158,8 +177,9 @@ def main():
     model = CNNRegressor().to(device)
     
     # 定义损失函数和优化器
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    
+    criterion = nn.MSELoss()# 使用均方误差损失函数
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)# 使用Adam优化器
     
     # 训练模型
     num_epochs = 50
