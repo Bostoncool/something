@@ -55,7 +55,7 @@ def extract_archives(source_dir):
 
 if __name__ == "__main__":
     # 指定要处理的目录路径
-    source_directory = r"F:\北京空气质量"  # 替换为你的目录路径
+    source_directory = r"D:\ArcGIS\矢量地图（练习时下载这个）全国省级、地市级、县市级行政区划shp"  # 替换为你的目录路径
     
     try:
         extract_archives(source_directory)
