@@ -26,7 +26,7 @@ def rename_folders(directory_path):
             # 检查文件夹名称中是否包含'Add-on--'
             if '&' in dir_name:
                 # 构建新的文件夹名称
-                new_name = dir_name.replace('重污染天气', 'AQI_200+')
+                new_name = dir_name.replace('和', ' and ')
                 new_path = os.path.join(root, new_name)
                 
                 try:
@@ -38,6 +38,6 @@ def rename_folders(directory_path):
 
 if __name__ == '__main__':
     # 在这里指定要处理的目录路径
-    target_directory = r"C:\Users\IU\Desktop\Moderately Polluted\AQI-200"  # 示例路径，请根据实际情况修改
+    target_directory = r"D:\AI算法工程师就业班\07、Machine Learning-无监督学习\Chapter2：EM算法和GMM高斯混合模型"  # 示例路径，请根据实际情况修改
     rename_folders(target_directory)
     print('重命名操作完成！')
