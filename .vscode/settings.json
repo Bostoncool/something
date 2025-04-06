@@ -1,5 +1,6 @@
 {
     "python.analysis.extraPaths": [
         "./LSTM/CSDN/CSDN LSTM Py"
-    ]
+    ],
+    "git.ignoreLimitWarning": true
 }
