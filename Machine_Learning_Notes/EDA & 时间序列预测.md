@@ -1,5 +1,5 @@
-```
- 加载包
+```python
+# 加载包
 import numpy as np 
 import pandas as pd 
 import seaborn as sns 
@@ -26,7 +26,7 @@ plt.style.use('ggplot')
 
 In [3]:
 
-```
+```python
 # 轰炸数据
 aerial = pd.read_csv("./WWII1212/operations.csv")
 # 第一个天气数据，包括国家、纬度和经度等位置。
@@ -80,7 +80,7 @@ weather = pd.read_csv("./weather5785/Summary of Weather.csv")
 
 In [4]:
 
-```
+```python
 # 删除国家中的NaN
 aerial = aerial[pd.isna(aerial.Country)==False]
 # 删除目标经度中的NaN
@@ -106,7 +106,7 @@ aerial = aerial[ aerial.iloc[:,9]!=1355]   # drop this takeoff longitude
 
 In [5]:
 
-```
+```python
 aerial.info()
 <class 'pandas.core.frame.DataFrame'>
 Int64Index: 2555 entries, 0 to 178080
@@ -134,7 +134,7 @@ memory usage: 359.3+ KB
 
 In [6]:
 
-```
+```python
 # 使用的特征
 weather_station_location = weather_station_location.loc[:,["WBAN","NAME","STATE/COUNTRY ID","Latitude","Longitude"] ]
 weather_station_location.info()
@@ -152,7 +152,7 @@ memory usage: 6.4+ KB
 
 In [7]:
 
-```
+```python
 # 使用的特征
 weather = weather.loc[:,["STA","Date","MeanTemp"] ]
 weather.info()
@@ -180,7 +180,7 @@ memory usage: 2.7+ MB
 
 In [8]:
 
-```
+```python
 # 国家
 print(aerial['Country'].value_counts())
 plt.figure(figsize=(22,10))
@@ -197,7 +197,7 @@ Name: Country, dtype: int64
 
 In [9]:
 
-```
+```python
 # 目标国家
 print(aerial['Target Country'].value_counts()[:10])
 plt.figure(figsize=(22,10))
@@ -221,7 +221,7 @@ Name: Target Country, dtype: int64
 
 In [10]:
 
-```
+```python
 # 飞机型号
 data = aerial['Aircraft Series'].value_counts()
 print(data[:10])
@@ -261,7 +261,7 @@ Name: Aircraft Series, dtype: int64
 
 In [11]:
 
-```
+```python
 # ATTACK
 aerial["color"] = ""
 aerial.color[aerial.Country == "USA"] = "rgb(0,116,217)"
@@ -305,7 +305,7 @@ iplot(fig)
 
 In [12]:
 
-```
+```python
 # 轰炸路径
 airports = [ dict(
         type = 'scattergeo',
@@ -384,7 +384,7 @@ iplot( fig )
 
 In [13]:
 
-```
+```python
 #战区
 print(aerial['Theater of Operations'].value_counts())
 plt.figure(figsize=(22,10))
@@ -404,7 +404,7 @@ Name: Theater of Operations, dtype: int64
 
 In [14]:
 
-```
+```python
 # 气象站位置
 
 data = [dict(
@@ -444,7 +444,7 @@ iplot(fig)
 
 In [15]:
 
-```
+```python
 weather_station_id = weather_station_location[weather_station_location.NAME == "BINDUKURI"].WBAN 
 weather_bin = weather[weather.STA == 32907]
 weather_bin["Date"] = pd.to_datetime(weather_bin["Date"])
@@ -464,7 +464,7 @@ plt.show()
 
 In [16]:
 
-```
+```python 
 aerial = pd.read_csv("./WWII1212/operations.csv")
 aerial["year"] = [ each.split("/")[2] for each in aerial["Mission Date"]]
 aerial["month"] = [ each.split("/")[0] for each in aerial["Mission Date"]]
@@ -484,7 +484,7 @@ aerial_war = aerial_war[aerial_war["Target City"] == city]
 
 In [17]:
 
-```
+```python
 liste = []
 aa = []
 for each in aerial_war["Mission Date"]:
@@ -558,7 +558,7 @@ iplot(fig)
 
 In [18]:
 
-```
+```python
 # 本迪库里地区平均气温
 plt.figure(figsize=(22,10))
 plt.plot(weather_bin.Date,weather_bin.MeanTemp)
@@ -582,7 +582,7 @@ ts = timeSeries.drop("Date",axis=1)
 
 In [19]:
 
-```
+```python
 # 加载adfuller库
 from statsmodels.tsa.stattools import adfuller
 # check_adfuller
@@ -656,7 +656,7 @@ Critical Values: {'1%': -3.439229783394421, '5%': -2.86545894814762, '10%': -2.5
 
 In [56]:
 
-```
+```python
 # 移动平均法
 moving_avg = ts.rolling(6).mean()
 plt.figure(figsize=(22,10))
@@ -675,7 +675,7 @@ plt.show()
 
 In [59]:
 
-```
+```python
 ts_moving_avg_diff = ts - moving_avg
 ts_moving_avg_diff.head(6)
 ```
@@ -696,7 +696,7 @@ Out[59]:
 
 In [21]:
 
-```
+```python
 ts_moving_avg_diff.dropna(inplace=True) 
 
 # 检验稳定性:均值，方差(std)和adfuller检验
@@ -720,7 +720,7 @@ Critical Values: {'1%': -3.4392539652094154, '5%': -2.86546960465041, '10%': -2.
 
 In [22]:
 
-```
+```python
 # 差分法
 ts_diff = ts - ts.shift()
 plt.figure(figsize=(22,10))
@@ -735,7 +735,7 @@ plt.show()
 
 In [23]:
 
-```
+```python
 ts_diff.dropna(inplace=True) # 由于移动，这里有nan值
 # 检验平稳:均值，方差(std)和adfuller检验
 check_mean_std(ts_diff)
@@ -770,7 +770,7 @@ Critical Values: {'1%': -3.439229783394421, '5%': -2.86545894814762, '10%': -2.5
 
 In [24]:
 
-```
+```python 
 # ACF 和 PACF 
 from statsmodels.tsa.stattools import acf, pacf
 lag_acf = acf(ts_diff, nlags=20)
@@ -805,7 +805,7 @@ plt.tight_layout()
 
 In [52]:
 
-```
+```python 
 # 加载ARIMA库
 from statsmodels.tsa.arima_model import ARIMA
 from pandas import datetime
@@ -834,7 +834,7 @@ plt.show()
 
 In [51]:
 
-```
+```python
 # 平均平方误差
 from sklearn.metrics import mean_squared_error
 error = mean_squared_error(ts, forecast)
