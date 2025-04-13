@@ -1,4 +1,4 @@
-```
+```python
 # 加载教程中会用到的包
 import numpy as np 
 import pandas as pd 
@@ -16,11 +16,11 @@ In [2]:
 
 In [3]:
 
-```
+```python
 # 从csv文件中写入数据
 data = pd.read_csv('.column_2C_weka.csv')
 print(plt.style.available)   # 列出所有可用的绘图样式
-plt.style.use('ggplot')      # 使用“ggplot”样式
+plt.style.use('ggplot')      # 使用"ggplot"样式
 ['seaborn-pastel', 'seaborn-white', 'classic', 'seaborn-dark', 'ggplot', 'seaborn-talk', 'Solarize_Light2', 'fast', 'bmh', '_classic_test', 'seaborn-muted', 'seaborn-bright', 'seaborn-paper', 'fivethirtyeight', 'seaborn-notebook', 'seaborn', 'dark_background', 'seaborn-dark-palette', 'seaborn-deep', 'seaborn-colorblind', 'seaborn-poster', 'seaborn-whitegrid', 'seaborn-darkgrid', 'seaborn-ticks', 'grayscale', 'tableau-colorblind10']
 ```
 
@@ -37,17 +37,17 @@ plt.style.use('ggplot')      # 使用“ggplot”样式
 
 ## 监督学习
 
-- 监督学习（Supervised learning）: 使用带有标签的数据。例如，骨科患者的数据有“
+- 监督学习（Supervised learning）: 使用带有标签的数据。例如，骨科患者的数据有"
 
   normal
 
-  ”和“
+  "和"
 
   abnormal
 
-  ”的标签。
+  "的标签。
 
-  - 数据集中含有特征变量和目标变量，特征变量如*pelvic radius（盆腔半径）*、*sacral slope（骶骨倾斜角）*，目标变量为 *normal* 和 *abnormal* 。本次监督学习的目的是根据给定的特征（输入变量）预测目标变量（输出变量）是“*normal*”还是“*abnormal*”。
+  - 数据集中含有特征变量和目标变量，特征变量如*pelvic radius（盆腔半径）*、*sacral slope（骶骨倾斜角）*，目标变量为 *normal* 和 *abnormal* 。本次监督学习的目的是根据给定的特征（输入变量）预测目标变量（输出变量）是"*normal*"还是"*abnormal*"。
 
 - 分类模型:预测离散值，如：这是一张狗、猫还是兔子图片？
 
@@ -60,12 +60,12 @@ plt.style.use('ggplot')      # 使用“ggplot”样式
 ### EDA
 
 - 首先，我们需要对数据进行探索，让数据创造价值。详细的探索性数据分析介绍在[Data Sicence入门教程](https://www.kesci.com/home/project/5c1b4b54f8caa6002bc7abe9)中。
-- 本文使用 head() 查看特征“ *pelvic_incidence（骨盆入射角）、pelvic_tilt numeric（骨盆倾斜角度）、lumbar_lordosis_angle(腰椎前凸角度)、sacral_slope(骶骨倾斜角)、pelvic_radius(盆腔半径) 和 degree_spondylolisthesis(脊椎前移程度)* 以及目标变量 *class* ”
+- 本文使用 head() 查看特征" *pelvic_incidence（骨盆入射角）、pelvic_tilt numeric（骨盆倾斜角度）、lumbar_lordosis_angle(腰椎前凸角度)、sacral_slope(骶骨倾斜角)、pelvic_radius(盆腔半径) 和 degree_spondylolisthesis(脊椎前移程度)* 以及目标变量 *class* "
 - head(): 它的默认值显示前5行(示例)，如果你想看100行就写head(100)
 
 In [4]:
 
-```
+```python
 # 查看特征值和目标值
 data.head()
 ```
@@ -82,7 +82,7 @@ Out[4]:
 
 In [5]:
 
-```
+```python
 # 想要知道数据里是否含有NaN值及数据规模多大，使用info查看
 data.info()
 <class 'pandas.core.frame.DataFrame'>
@@ -110,7 +110,7 @@ memory usage: 17.0+ KB
 
 In [6]:
 
-```
+```python
 data.describe()
 ```
 
@@ -141,7 +141,7 @@ Out[6]:
 
 In [7]:
 
-```
+```python
 # 建议大家动手改变参数运行一下，这样有助于更好的理解
 color_list = ['red' if i=='Abnormal' else 'green' for i in data.loc[:,'class']]
 pd.plotting.scatter_matrix(data.loc[:, data.columns != 'class'],   
@@ -168,7 +168,7 @@ plt.show()
 
 In [8]:
 
-```
+```python
 # 看一下两个类分别有多少个数据
 sns.countplot(x="class", data=data)
 data.loc[:,'class'].value_counts()
@@ -176,7 +176,7 @@ data.loc[:,'class'].value_counts()
 
 Out[8]:
 
-```
+```python
 Abnormal    210
 Normal      100
 Name: class, dtype: int64
@@ -201,7 +201,7 @@ Name: class, dtype: int64
 
 In [9]:
 
-```
+```python
 # KNN
 from sklearn.neighbors import KNeighborsClassifier
 knn = KNeighborsClassifier(n_neighbors = 3)
@@ -255,6 +255,8 @@ Prediction: ['Abnormal' 'Abnormal' 'Abnormal' 'Abnormal' 'Abnormal' 'Normal' 'No
  'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal'
  'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal'
  'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal'
+ 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal'
+ 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Normal'
  'Abnormal' 'Normal' 'Normal' 'Normal' 'Abnormal' 'Normal' 'Normal'
  'Normal' 'Normal' 'Normal' 'Normal' 'Normal' 'Abnormal' 'Normal'
  'Abnormal' 'Normal' 'Normal']
@@ -280,7 +282,7 @@ Prediction: ['Abnormal' 'Abnormal' 'Abnormal' 'Abnormal' 'Abnormal' 'Normal' 'No
 
 In [10]:
 
-```
+```python   
 from sklearn.model_selection import train_test_split
 # 切分数据集、测试集，固定随机种子（保证数据集每次的切分都一样）
 x_train,x_test,y_train,y_test = train_test_split(x,y,test_size = 0.3,random_state = 1)
@@ -327,7 +329,7 @@ With KNN (K=3) accuracy is:  0.8602150537634409
 
 In [11]:
 
-```
+```python 
 # 模型复杂度
 neig = np.arange(1, 25)
 train_accuracy = []
@@ -359,7 +361,7 @@ print("Best accuracy is {} with K = {}".format(np.max(test_accuracy),1+test_accu
 
 ![img](https://cdn.kesci.com/rt_upload/59BD9D1FDA5D418A9BD1FC7C6D26E11B/pm11xspo8m.png)
 
-```
+```python
 Best accuracy is 0.8817204301075269 with K = 18
 ```
 
@@ -400,7 +402,7 @@ Best accuracy is 0.8817204301075269 with K = 18
 
 In [12]:
 
-```
+```python
 # 创建data1，其中包括特征pelvic_incidence和预测值sacral_slope
 data1 = data[data['class'] =='Abnormal']
 x = np.array(data1.loc[:,'pelvic_incidence']).reshape(-1,1)
@@ -450,7 +452,7 @@ y′=ω1x1+b0
 
 In [13]:
 
-```
+```python
 # 线性回归
 from sklearn.linear_model import LinearRegression
 reg = LinearRegression()
@@ -493,7 +495,7 @@ R^2 score:  0.6458410481075871
 
 In [14]:
 
-```
+```python
 # 交叉验证（cv）
 from sklearn.model_selection import cross_val_score
 reg = LinearRegression()
@@ -557,7 +559,7 @@ Linear VS Ridge VS Lasso
 
 In [15]:
 
-```
+```python
 # Ridge
 from sklearn.linear_model import Ridge
 # 固定随机种子，random_state=2得到的划分与random_state=1时不同
@@ -571,7 +573,7 @@ Ridge score:  0.5608287918841997
 
 In [16]:
 
-```
+```python
 # Lasso
 from sklearn.linear_model import Lasso
 x = np.array(data1.loc[:,['pelvic_incidence','pelvic_tilt numeric','lumbar_lordosis_angle','pelvic_radius']])
@@ -583,7 +585,7 @@ print('Lasso score: ',lasso.score(x_test,y_test))
 print('Lasso coefficients: ',lasso.coef_)
 Lasso score:  0.9640334804327547
 Lasso coefficients:  [ 0.82498243 -0.7209057   0.         -0.        ]
-```
+  ```
 
 正你所看到的， *pelvic_incidence* 和 *pelvic_tilt numeric* 是重要的特征，其他特性并不重要。
 
@@ -629,7 +631,7 @@ Recall=TPTP+FN
 
 In [17]:
 
-```
+```python
 # 随机森林的混淆矩阵(confusion matrix)
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.ensemble import RandomForestClassifier
@@ -657,7 +659,7 @@ weighted avg       0.84      0.84      0.84        93
 
 In [18]:
 
-```
+```python
 # 使用seaborn库进行可视化
 sns.heatmap(cm,annot=True,fmt="d") 
 plt.show()
@@ -685,7 +687,7 @@ plt.show()
 
 In [19]:
 
-```
+```python
 # ROC曲线与逻辑回归
 from sklearn.metrics import roc_curve
 from sklearn.linear_model import LogisticRegression
@@ -730,7 +732,7 @@ plt.show()
 
 In [20]:
 
-```
+```python 
 # 网格搜索与超参数调优
 from sklearn.model_selection import GridSearchCV
 grid = {'n_neighbors': np.arange(1,50)}
@@ -756,7 +758,7 @@ Best score: 0.7548387096774194
 
 In [21]:
 
-```
+```python
 # 网格搜索交叉验证与2个超参数
 # 1. 超参数为C:logistic回归正则化参数
 # 2. 惩罚L1或L2
@@ -783,7 +785,7 @@ Best Accuracy: 0.8525345622119815
 
 In [22]:
 
-```
+```python
 # 加载数据
 data = pd.read_csv('.column_2C_weka.csv')
 # get_dummies：将拥有不同值的变量转换为0/1数值
@@ -808,7 +810,7 @@ Out[22]:
 
 In [23]:
 
-```
+```python
 # 删除其中一个特征
 df.drop("class_Normal",axis = 1, inplace = True) 
 df.head(10)
@@ -840,7 +842,7 @@ Out[23]:
 
 In [24]:
 
-```
+```python
 # SVM, pre-process 和 pipeline
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
@@ -879,7 +881,7 @@ Tuned Model Parameters: {'SVM__C': 100, 'SVM__gamma': 0.01}
 
 In [25]:
 
-```
+```python
 # 数据没有lable
 data = pd.read_csv('.column_2C_weka.csv')
 plt.scatter(data['pelvic_radius'],data['degree_spondylolisthesis'])
@@ -892,7 +894,7 @@ plt.show()
 
 In [26]:
 
-```
+```python
 # K-Means聚类
 data2 = data.loc[:,['degree_spondylolisthesis','pelvic_radius']]
 from sklearn.cluster import KMeans
@@ -918,7 +920,7 @@ plt.show()
 
 In [27]:
 
-```
+```python
 # 交叉表
 df = pd.DataFrame({'labels':labels,"class":data['class']})
 ct = pd.crosstab(df['labels'],df['class'])
@@ -940,7 +942,7 @@ labels
 
 In [28]:
 
-```
+```python
 # inertia
 inertia_list = np.empty(8)
 for i in range(1,8):
@@ -964,14 +966,14 @@ plt.show()
 
 In [29]:
 
-```
+```python
 data = pd.read_csv('.column_2C_weka.csv')
 data3 = data.drop('class',axis = 1)
 ```
 
 In [30]:
 
-```
+```python
 # StandardScaler：相当于（原始数值-均值）/标准差，使各特征的均值为0，方差为1
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
@@ -997,7 +999,7 @@ labels
 
 In [31]:
 
-```
+```python
 from scipy.cluster.hierarchy import linkage,dendrogram
 # 使用linkage函数对samples进行层次聚类
 merg = linkage(data3.iloc[200:220,:],method = 'single')
@@ -1022,7 +1024,7 @@ plt.show()
 
 In [32]:
 
-```
+```python
 from sklearn.manifold import TSNE
 model = TSNE(learning_rate=100)
 transformed = model.fit_transform(data2)
@@ -1050,7 +1052,7 @@ plt.show()
 
 In [33]:
 
-```
+```python
 # PCA
 from sklearn.decomposition import PCA
 model = PCA()
@@ -1073,7 +1075,7 @@ Principle components:  [[ 3.23645647e-01  1.13192291e-01  3.03674740e-01  2.1045
 
 In [34]:
 
-```
+```python
 # PCA方差
 scaler = StandardScaler()
 pca = PCA()
@@ -1095,7 +1097,7 @@ plt.show()
 
 In [35]:
 
-```
+```python 
 # PCA
 pca = PCA(n_components = 2)
 pca.fit(data3)

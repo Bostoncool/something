@@ -6,7 +6,7 @@
 
 In [1]:
 
-```
+```python
 #加载库
 import pandas as pd
 import numpy as np
@@ -19,7 +19,7 @@ import seaborn as sns
 
 In [2]:
 
-```
+```python
 #加载数据
 df = pd.read_csv("./winequality-red.csv")
 df.head()
@@ -37,7 +37,7 @@ Out[2]:
 
 In [3]:
 
-```
+```python
 #查看数据集行列数
 print("该数据集共有 {} 行 {} 列".format(df.shape[0],df.shape[1])) 
 该数据集共有 1599 行 12 列
@@ -45,7 +45,7 @@ print("该数据集共有 {} 行 {} 列".format(df.shape[0],df.shape[1]))
 
 In [4]:
 
-```
+```python
 #查看特征和空值
 print("查看空值：")
 df.isnull().any()
@@ -54,7 +54,7 @@ df.isnull().any()
 
 Out[4]:
 
-```
+```python
 fixed acidity           False
 volatile acidity        False
 citric acid             False
@@ -72,7 +72,7 @@ dtype: bool
 
 In [5]:
 
-```
+```python
 # 查看葡萄酒质量情况分布
 score = df.groupby("quality").agg({"fixed acidity": lambda x: len(x)})
 score = score.reset_index()
@@ -93,7 +93,7 @@ Out[5]:
 
 In [11]:
 
-```
+```python
 sns.barplot(x = 'quality', y = 'count', data = score, palette="rocket").set_title("葡萄酒质量分布")
 plt.show()
 ```
@@ -108,7 +108,7 @@ plt.show()
 
 In [12]:
 
-```
+```python
 df["GoodWine"] = df.quality.apply(lambda x: 1 if x >=6 else 0)
 ```
 
@@ -118,7 +118,7 @@ SciKit-Learn接受NumPy Arrays形式的输入，因此我们把11个特征(featu
 
 In [13]:
 
-```
+```python
 #特征
 X = np.array(df[df.columns[:11]])
 X
@@ -126,7 +126,7 @@ X
 
 Out[13]:
 
-```
+```python 
 array([[ 7.4  ,  0.7  ,  0.   , ...,  3.51 ,  0.56 ,  9.4  ],
        [ 7.8  ,  0.88 ,  0.   , ...,  3.2  ,  0.68 ,  9.8  ],
        [ 7.8  ,  0.76 ,  0.04 , ...,  3.26 ,  0.65 ,  9.8  ],
@@ -138,7 +138,7 @@ array([[ 7.4  ,  0.7  ,  0.   , ...,  3.51 ,  0.56 ,  9.4  ],
 
 In [14]:
 
-```
+```python
 #分类标签
 y = np.array(df.GoodWine)
 y
@@ -146,7 +146,7 @@ y
 
 Out[14]:
 
-```
+```python
 array([0, 0, 0, ..., 1, 0, 1])
 ```
 
@@ -156,7 +156,7 @@ array([0, 0, 0, ..., 1, 0, 1])
 
 In [15]:
 
-```
+```python
 # 将数据打乱并分开
 from sklearn.cross_validation import train_test_split
 X_train_unproc, X_test_unproc, y_train, y_test = train_test_split(X,y,test_size = 0.3)
@@ -167,7 +167,7 @@ X_train_unproc
 
 Out[15]:
 
-```
+```python   
 array([[ 6.3 ,  0.76,  0.  , ...,  3.51,  0.6 , 11.5 ],
        [ 7.  ,  0.54,  0.09, ...,  3.43,  0.59, 11.5 ],
        [ 7.6 ,  0.41,  0.24, ...,  3.28,  0.59,  9.5 ],
@@ -183,7 +183,7 @@ array([[ 6.3 ,  0.76,  0.  , ...,  3.51,  0.6 , 11.5 ],
 
 In [16]:
 
-```
+```python 
 # data normalisation
 from sklearn.preprocessing import StandardScaler
 scaler = StandardScaler().fit(X_train_unproc)
@@ -196,7 +196,7 @@ X_train
 
 Out[16]:
 
-```
+```python
 array([[-1.16646468,  1.33099342, -1.39981201, ...,  1.35100935,
         -0.33536614,  1.03872132],
        [-0.76136967,  0.07449276, -0.93434806, ...,  0.81310526,
@@ -226,7 +226,7 @@ KNN算法主要考虑三个重要要素：
 
 In [17]:
 
-```
+```python
 from sklearn.neighbors import KNeighborsClassifier
 
 #初始化
@@ -239,7 +239,7 @@ clf.fit(X_train, y_train)
 
 Out[17]:
 
-```
+```python
 KNeighborsClassifier(algorithm='auto', leaf_size=30, metric='minkowski',
            metric_params=None, n_jobs=1, n_neighbors=3, p=2,
            weights='uniform')
@@ -247,7 +247,7 @@ KNeighborsClassifier(algorithm='auto', leaf_size=30, metric='minkowski',
 
 In [18]:
 
-```
+```python
 # training set正确率
 print("训练集正确率：{}%".format(round(clf.score(X_train, y_train)*100,2)))
 训练集正确率：86.51%
@@ -257,7 +257,7 @@ print("训练集正确率：{}%".format(round(clf.score(X_train, y_train)*100,2)
 
 In [19]:
 
-```
+```python
 # cross validation正确率
 from sklearn import cross_validation as cv
 scores = cv.cross_val_score(clf, X_train, y_train, cv = 5)
@@ -274,7 +274,7 @@ print("交叉验证正确率：{}%".format(round(score*100, 2)))
 
 In [20]:
 
-```
+```python
 # selecting the best k
 ks = range(1,100)
 inSampleScores = []
@@ -291,7 +291,7 @@ for k in ks:
 
 In [21]:
 
-```
+```python
 # 画图
 import matplotlib.pyplot as plt
 
@@ -305,7 +305,7 @@ plt.show()
 
 In [22]:
 
-```
+```python
 # 选择最好的k
 best_k = sorted(d.items(), key = lambda x:x[1], reverse = True)[0][0]
 print("最优的k值：{}".format(best_k))
@@ -316,7 +316,7 @@ print("最优的k值：{}".format(best_k))
 
 In [23]:
 
-```
+```python
 #建模
 clf = KNeighborsClassifier(best_k).fit(X_train, y_train)
 
@@ -326,7 +326,7 @@ y_test_pred = clf.predict(X_test)
 
 In [24]:
 
-```
+```python
 #正确率
 print("测试集正确率：{}%".format(round(clf.score(X_test, y_test)*100, 2)))
 测试集正确率：73.54%
@@ -334,7 +334,7 @@ print("测试集正确率：{}%".format(round(clf.score(X_test, y_test)*100, 2))
 
 In [28]:
 
-```
+```python
 # 混淆矩阵 (confusion matrix)
 from sklearn.metrics import confusion_matrix
 cnf_matrix = confusion_matrix(y_test, y_test_pred)
@@ -348,7 +348,7 @@ plt.show()
 
 In [30]:
 
-```
+```python 
 # 评估报告
 from sklearn.metrics import classification_report
 print(classification_report(y_test, y_test_pred))
