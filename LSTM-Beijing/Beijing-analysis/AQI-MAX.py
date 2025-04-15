@@ -83,7 +83,7 @@ def process_aqi_data(df):
             df['type'] = df.iloc[:, 0]  # 第一列包含type信息
         
         # 筛选包含AQI的行（考虑到可能有数字前缀）
-        aqi_df = df[df['type'].astype(str).str.contains('AQI', regex=True, case=False)].copy()
+        aqi_df = df[df['type'].astype(str).str.contains('NO2', regex=True, case=False)].copy()
         print(f"AQI数据筛选后记录数: {len(aqi_df)}")
         
         if len(aqi_df) == 0:
@@ -151,7 +151,7 @@ def analyze_heavy_pollution(df):
     df['value'] = df['value'].fillna(0)
     
     # 筛选AQI>200的重污染天气
-    heavy_pollution = df[df['value'] > 200].copy()
+    heavy_pollution = df[df['value'] > 1200].copy()
     
     # 分析重污染天气的基本统计信息
     total_days = len(df['date'].dt.date.unique())
@@ -230,7 +230,7 @@ def save_data_to_desktop(df, filename):
 
 def main():
     # 读取数据
-    root_folder = r"C:\Users\IU\Desktop\Beijing-AQI-Benchmark\all"
+    root_folder = r"C:\Users\IU\Desktop\Beijing-AQI-Benchmark"
     
     if not os.path.exists(root_folder):
         print("错误：指定的文件夹不存在")
