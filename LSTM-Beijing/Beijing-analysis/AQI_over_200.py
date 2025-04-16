@@ -93,7 +93,7 @@ def process_aqi_data(df):
         
         # 筛选包含AQI的行（考虑到可能有数字前缀）
         global index_name 
-        index_name = 'SO2'
+        index_name = 'PM10_24h'
         index_df = df[df['type'].astype(str).str.contains(index_name, regex=True, case=False)].copy()
         print(f"{index_name}数据筛选后记录数: {len(index_df)}")
         
@@ -203,7 +203,7 @@ def analyze_heavy_pollution(df):
     df['value'] = df['value'].fillna(0)
     
     # 筛选阈值超标的数据
-    index_threshold = 800
+    index_threshold = 350
     heavy_pollution = df[df['value'] > index_threshold].copy()
     
     # 分析重污染天气的基本统计信息
@@ -271,22 +271,58 @@ def analyze_heavy_pollution(df):
     
     # 月度分布
     ax2 = plt.subplot(2, 2, 2)
-    monthly_rate.plot(kind='bar', color=sns.color_palette('YlOrRd', n_colors=12), ax=ax2)
+    # 定义月份对应的季节颜色（起始和结束颜色）
+    month_colors = [
+        ('#4F94CD', '#87CEEB'),  # 1月 - 冬季蓝色
+        ('#4F94CD', '#87CEEB'),  # 2月 - 冬季蓝色
+        ('#228B22', '#90EE90'),  # 3月 - 春季绿色
+        ('#228B22', '#98FB98'),  # 4月 - 春季绿色
+        ('#228B22', '#32CD32'),  # 5月 - 春季绿色
+        ('#CD2626', '#FF6B6B'),  # 6月 - 夏季红色
+        ('#CD2626', '#FF4040'),  # 7月 - 夏季红色
+        ('#CD2626', '#FF0000'),  # 8月 - 夏季红色
+        ('#B8860B', '#FFD700'),  # 9月 - 秋季黄色
+        ('#B8860B', '#DAA520'),  # 10月 - 秋季金色
+        ('#B8860B', '#CD853F'),  # 11月 - 秋季棕色
+        ('#4F94CD', '#87CEEB'),  # 12月 - 冬季蓝色
+    ]
+    
+    # 绘制月度渐变柱状图
+    x = np.arange(len(monthly_rate))
+    for i, (rate, (color_start, color_end)) in enumerate(zip(monthly_rate.values, month_colors)):
+        gradient_bar(ax2, [i + 0.5], [rate], width=0.7, color_start=color_start, color_end=color_end)
+    
     plt.title(f'{index_name}超标月度发生率(%)', pad=20)
     plt.ylabel('发生率(%)')
     plt.xlabel('月份')
+    plt.xlim(-0.2, len(monthly_rate))
+    plt.ylim(0, monthly_rate.max() * 1.15)
     plt.xticks(range(12), ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'], 
-               rotation = 45, ha ='right')
-    plt.grid(axis='y', linestyle='--', alpha = 0.7)
+               rotation=45, ha='right')
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
     
     # 季节分布
     ax3 = plt.subplot(2, 2, 3)
-    seasonal_rate.plot(kind='bar', color=sns.color_palette('Greens', n_colors=4), ax=ax3)
+    # 定义季节颜色（起始和结束颜色）
+    season_colors = [
+        ('#4F94CD', '#87CEEB'),  # 春季
+        ('#CD2626', '#FF4040'),  # 夏季
+        ('#228B22', '#90EE90'),  # 秋季
+        ('#B8860B', '#FFD700')   # 冬季
+    ]
+    
+    # 绘制季节渐变柱状图
+    x = np.arange(len(seasonal_rate))
+    for i, (rate, (color_start, color_end)) in enumerate(zip(seasonal_rate.values, season_colors)):
+        gradient_bar(ax3, [i + 0.5], [rate], width=0.7, color_start=color_start, color_end=color_end)
+    
     plt.title(f'{index_name}超标季节发生率(%)', pad=20)
     plt.ylabel('发生率(%)')
     plt.xlabel('季节')
+    plt.xlim(-0.2, len(seasonal_rate))
+    plt.ylim(0, seasonal_rate.max() * 1.15)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.xticks(rotation=0)  # 季节标签不需要旋转
+    plt.xticks(np.arange(len(seasonal_rate)) + 0.5, seasonal_rate.index, rotation=0)
     
     # 站点分布
     ax4 = plt.subplot(2, 2, 4)
