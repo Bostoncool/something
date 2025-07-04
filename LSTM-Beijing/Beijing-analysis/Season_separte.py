@@ -23,8 +23,8 @@ def load_and_process_data(root_folder):
     """加载并处理数据，返回季节性统计数据和站点季节数据"""
     seasonal_data = {}
     station_seasonal_data = {}  # 新增：存储站点季节数据
-    pollutants = ['PM2.5', 'PM10', 'AQI']
-    # pollutants = ['CO', 'NO2', 'SO2', 'O3']
+    # pollutants = ['PM2.5', 'PM10', 'AQI']
+    pollutants = ['CO', 'NO2', 'SO2', 'O3']
 
     def get_season(month):
         if 3 <= month <= 5: return '春季'
@@ -125,8 +125,8 @@ def save_station_seasonal_data(station_seasonal_data, output_dir):
         for station in sorted(station_seasonal_data[year].keys()):
             # 创建数据框
             seasons = ['春季', '夏季', '秋季', '冬季']
-            pollutants = ['PM2.5', 'PM10', 'AQI']
-            # pollutants = ['CO', 'NO2', 'SO2', 'O3']
+            # pollutants = ['PM2.5', 'PM10', 'AQI']
+            pollutants = ['CO', 'NO2', 'SO2', 'O3']
             data = []
             for season in seasons:
                 row = {'季节': season}
@@ -149,8 +149,9 @@ def plot_seasonal_changes(seasonal_data, output_dir):
     
     seasons = ['春季', '夏季', '秋季', '冬季']
     years = sorted(seasonal_data.keys())
-    # pollutants = ['CO', 'NO2', 'SO2', 'O3']
-    pollutants = ['PM2.5', 'PM10', 'AQI']  
+    
+    # pollutants = ['PM2.5', 'PM10', 'AQI']  
+    pollutants = ['CO', 'NO2', 'SO2', 'O3']
     # 为每种污染物创建单独的图表
     for pollutant in pollutants:
         plt.figure(figsize=(12, 6))
@@ -216,8 +217,8 @@ def plot_seasonal_changes(seasonal_data, output_dir):
         plt.close()
 
 if __name__ == "__main__":
-    # root_folder = r"C:\Users\IU\Desktop\Beijing-AQI-Benchmark\extra"
-    root_folder = r"C:\Users\IU\Desktop\Beijing-AQI-Benchmark\all"
+    root_folder = r"C:\Users\IU\Desktop\Benchmark\extra"
+    # root_folder = r"C:\Users\IU\Desktop\Benchmark\all"
     output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
     
     seasonal_data, station_seasonal_data = load_and_process_data(root_folder)

@@ -93,7 +93,7 @@ def process_aqi_data(df):
         
         # 筛选包含AQI的行（考虑到可能有数字前缀）
         global index_name 
-        index_name = 'PM10_24h'
+        index_name = 'AQI'
         index_df = df[df['type'].astype(str).str.contains(index_name, regex=True, case=False)].copy()
         print(f"{index_name}数据筛选后记录数: {len(index_df)}")
         
@@ -203,7 +203,7 @@ def analyze_heavy_pollution(df):
     df['value'] = df['value'].fillna(0)
     
     # 筛选阈值超标的数据
-    index_threshold = 350
+    index_threshold = 200
     heavy_pollution = df[df['value'] > index_threshold].copy()
     
     # 分析重污染天气的基本统计信息
