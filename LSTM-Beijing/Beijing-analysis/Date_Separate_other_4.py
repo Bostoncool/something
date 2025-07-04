@@ -13,8 +13,8 @@ rcParams['axes.unicode_minus'] = False  # 显示负号
 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
 
 # 定义污染物类型
-pollutants = ["PM2.5", "PM10", "AQI"]
-# pollutants = ["CO","NO2","O3","SO2"]
+# pollutants = ["PM2.5", "PM10", "AQI"]
+pollutants = ["CO","NO2","O3","SO2"]
 
 # 按年份循环处理数据
 for year in range(2015, 2025): # 左闭右开
@@ -36,8 +36,7 @@ for year in range(2015, 2025): # 左闭右开
 
     # 设定该年份的文件夹路径
     # path_name = fr"C:\Users\IU\Desktop\Beijing-AQI-Date\beijing_{year}0101-{year}1231\all"
-    # path_name = fr"E:\DATA Science\Datebase Origin\Date\beijing_{year}0101-{year}1231\extra"
-    path_name = fr"E:\DATA Science\Datebase Origin\Date\beijing_{year}0101-{year}1231\all"
+    path_name = fr"E:\DATA Science\Datebase Origin\Date\beijing_{year}0101-{year}1231\extra"
     folder_path = os.path.join(path_name)
 
     # 检查文件夹是否存在
@@ -111,10 +110,10 @@ for year in range(2015, 2025): # 左闭右开
     df_overall_avg = df_station_avg.groupby(["date", "type"]).mean().reset_index()
 
     # 绘制全站点均值的趋势图
-    fig, axes = plt.subplots(3, 1, figsize=(12, 15))
+    fig, axes = plt.subplots(4, 1, figsize=(12, 20))
     fig.suptitle(f"北京{year}年主要污染物变化趋势 (全站点平均值)", fontsize=14)
 
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
     for idx, (pollutant, color) in enumerate(zip(pollutants, colors)):
         df_plot = df_overall_avg[df_overall_avg["type"] == pollutant]
         axes[idx].plot(df_plot["date"], df_plot[station_cols].mean(axis=1), 
@@ -132,7 +131,7 @@ for year in range(2015, 2025): # 左闭右开
 
     # 绘制每个站点的趋势图
     for station in station_cols:
-        fig, axes = plt.subplots(3, 1, figsize=(12, 15))
+        fig, axes = plt.subplots(4, 1, figsize=(12, 20))
         fig.suptitle(f"{station} {year}年污染物变化趋势", fontsize=14)
         
         for idx, (pollutant, color) in enumerate(zip(pollutants, colors)):
