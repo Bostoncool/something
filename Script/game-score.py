@@ -153,7 +153,7 @@ if __name__ == '__main__':
     n_test = 8
     # n 可以是 1 到 14 之间的任意整数
 
-    y_test = 8523
+    y_test = 8883
 
 
     start_time = time.time() # 开始计时
