@@ -3,7 +3,7 @@ import os
 def rename_folders(directory_path):
     """
     递归遍历指定目录及其子目录中的所有文件夹，重命名包含'Add-on--'的文件夹
-    
+    批量更改文件夹名称
     Args:
         directory_path (str): 要处理的目录路径
     """

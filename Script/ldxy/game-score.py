@@ -147,6 +147,8 @@ def solve_game_scores_optimized(n, y):
     solutions.sort()
     return solutions
 
+# 修罗血战常规无平局计算，了解对手的动向
+
 # --- 如何使用 ---
 if __name__ == '__main__':
     # 示例：第 n 天，总分 y
