@@ -5,7 +5,7 @@ from pathlib import Path
 def extract_archives(source_dir):
     """
     遍历目录中的压缩文件并解压到同名文件夹
-    
+    批量解压一个文件夹内的所有压缩文件
     Parameters:
         source_dir: str, 需要处理的目录路径
     """

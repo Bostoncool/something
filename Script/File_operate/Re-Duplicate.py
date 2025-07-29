@@ -1,6 +1,9 @@
 import os
 import shutil
 
+# 去除文件解压过程中的重复文件夹
+
+
 def remove_nested_folders(base_path):
     """
     遍历指定路径，删除多余的同名文件夹，同时保留文件。

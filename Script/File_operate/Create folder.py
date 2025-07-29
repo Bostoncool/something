@@ -1,5 +1,7 @@
 import os
 
+# 在某个路径下批量生成指定名称文件夹
+
 def create_folders(base_path):
     for year in range(2000, 2024):
         folder_name = str(year)
