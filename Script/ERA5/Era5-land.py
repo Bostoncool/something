@@ -23,7 +23,7 @@ if __name__ == '__main__':
     dic = {
         'product_type': 'reanalysis',  # 产品类型
         'format': 'netcdf',  # 数据格式
-        'variable': '2m_temperature',  # 变量名称
+        'variable': 'toa_incident_solar_radiation',  # 变量名称
         'year': '',  # 年，设为空
         'month': '',  # 月，设为空
         'day': [],  # 日，设为空
@@ -48,6 +48,6 @@ if __name__ == '__main__':
 
             r = c.retrieve('reanalysis-era5-single-levels', dic, )  # 文件下载器
             url = r.location  # 获取文件下载地址
-            path = r'F:\2m_temperature'  # 存放文件夹
+            path = r'F:\toa_incident_solar_radiation'  # 存放文件夹
             filename = str(y) + str(m).zfill(2) + '.nc'  # 文件名
             idmDownloader(url, path, filename)  # 添加进IDM中下载
