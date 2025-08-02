@@ -168,6 +168,11 @@ def batch_convert_parallel(input_folder, output_folder, max_workers=None):
         
         print(f"总共需要处理 {len(all_tasks)} 个文件")
         
+        # 检查是否有文件需要处理
+        if len(all_tasks) == 0:
+            print("没有需要处理的文件，所有文件都已转换完成或输入文件夹为空")
+            return
+        
         # 使用多进程处理
         with mp.Pool(processes=max_workers) as pool:
             # 使用tqdm显示进度
@@ -186,7 +191,13 @@ def batch_convert_parallel(input_folder, output_folder, max_workers=None):
         print(f"成功转换: {success_count} 个文件")
         print(f"转换失败: {error_count} 个文件")
         print(f"总耗时: {overall_end - overall_start:.2f} 秒")
-        print(f"平均每个文件耗时: {(overall_end - overall_start) / len(all_tasks):.2f} 秒")
+        
+        # 检查是否有处理的任务，避免除零错误
+        if len(all_tasks) > 0:
+            print(f"平均每个文件耗时: {(overall_end - overall_start) / len(all_tasks):.2f} 秒")
+        else:
+            print("没有需要处理的文件")
+            
         print(f"最终内存使用: {get_memory_usage():.1f} MB")
         
         # 显示错误信息
@@ -216,6 +227,11 @@ def batch_convert(input_folder, output_folder):
         total_years = len(year_folders)
         overall_start = time.time()
         
+        # 检查是否有年份文件夹
+        if not year_folders:
+            print("没有找到年份文件夹，请检查输入路径")
+            return
+            
         # 年份文件夹进度条
         for year_folder in tqdm(year_folders, desc="年份进度"):
             try:
@@ -225,6 +241,11 @@ def batch_convert(input_folder, output_folder):
                 os.makedirs(year_output_path, exist_ok=True)
                 nc_files = [f for f in os.listdir(year_input_path) if f.endswith('.nc')]
                 print(f"在 {year_folder} 中找到 {len(nc_files)} 个NC文件")
+                
+                # 检查是否有NC文件
+                if not nc_files:
+                    print(f"在 {year_folder} 中没有找到NC文件，跳过")
+                    continue
                 
                 # 文件进度条
                 for filename in tqdm(nc_files, desc=f"{year_folder}文件进度", leave=False):
@@ -334,8 +355,8 @@ def nc_to_csv(nc_file_path, output_csv_path):
 if __name__ == "__main__":
     try:
         # 批量转换
-        input_folder = r"C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing"
-        output_folder = r"C:\Users\IU\Desktop\Datebase Origin\NC-CSV"
+        input_folder = r"C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-NC"
+        output_folder = r"C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-CSV"
         print(f"开始批量转换\n输入文件夹: {input_folder}\n输出文件夹: {output_folder}")
         
         # 使用多进程版本（推荐）
