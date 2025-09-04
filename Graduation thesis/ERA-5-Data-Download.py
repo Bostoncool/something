@@ -45,7 +45,6 @@ SINGLE_VARS = [
     "soil_temperature_level_1",
     "volumetric_soil_water_layer_1",
     "snow_depth",
-    "snow_cover",
     "skin_temperature",
     "total_column_water_vapour"
 ]
