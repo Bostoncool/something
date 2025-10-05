@@ -7,7 +7,7 @@ x = sp.symbols('x')
 r = float(input('输入币商给的比例：'))
 
 # 定义方程
-equation = sp.Eq(x / (0.85 * r), 30 + (x - 104) / (0.9 * r))
+equation = sp.Eq(x / (0.85 * r), 30 + (x - 113) / (0.9 * r))
 
 # 求解方程
 solution = sp.solve(equation, x)

@@ -2,5 +2,8 @@
     "python.analysis.extraPaths": [
         "./LSTM/CSDN/CSDN LSTM Py"
     ],
-    "git.ignoreLimitWarning": true
+    "git.ignoreLimitWarning": true,
+    "cursorpyright.analysis.extraPaths": [
+        "./LSTM/CSDN/CSDN LSTM Py"
+    ]
 }
