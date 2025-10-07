@@ -139,10 +139,10 @@ class NetCDFToCSVConverter:
                                 df[time_col] = df[time_col].dt.strftime('%Y-%m-%d %H:%M:%S')
                                 print(f"    已转换时间格式: {time_col}")
                         
-                        # 添加单位信息到列名
-                        units = data_array.attrs.get('units', '')
-                        if units:
-                            df = df.rename(columns={var_name: f"{var_name} ({units})"})
+                        # 不添加单位信息到列名，保持原始变量名
+                        # units = data_array.attrs.get('units', '')
+                        # if units:
+                        #     df = df.rename(columns={var_name: f"{var_name} ({units})"})
                         
                         all_dfs.append(df)
                         

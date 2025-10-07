@@ -48,4 +48,4 @@ def inspect_nc_file(nc_file_path):
         print(f"错误: {e}")
  
 # 使用示例
-inspect_nc_file(r"C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-NC\total_precipitation\201501.nc")
+inspect_nc_file(r"C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-NC\boundary_layer_height\201501.nc")

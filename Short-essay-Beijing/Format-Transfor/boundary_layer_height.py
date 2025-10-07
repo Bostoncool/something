@@ -127,11 +127,11 @@ class NetCDFToCSVConverter:
                         aggfunc='first'  # 如果有重复值，取第一个
                     ).reset_index()
                     
-                    # 添加单位信息到列名
-                    units_info = df.groupby('variable')['units'].first().to_dict()
-                    for var_name, units in units_info.items():
-                        if var_name in df_wide.columns and units != 'unknown':
-                            df_wide = df_wide.rename(columns={var_name: f"{var_name} ({units})"})
+                    # 注释掉添加单位到列名的代码，只保留纯变量名
+                    # units_info = df.groupby('variable')['units'].first().to_dict()
+                    # for var_name, units in units_info.items():
+                    #     if var_name in df_wide.columns and units != 'unknown':
+                    #         df_wide = df_wide.rename(columns={var_name: f"{var_name} ({units})"})
                     
                     df = df_wide
                 

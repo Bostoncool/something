@@ -7,7 +7,7 @@
 import pathlib, multiprocessing as mp, xarray as xr, pandas as pd
 
 # ---------- 路径写死 ----------
-IN_DIR  = pathlib.Path(r"C:\Users\IU\Desktop\Datebase Origin\   ERA5-Beijing-NC\2m_temperature")
+IN_DIR  = pathlib.Path(r"C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-NC\2m_temperature")
 OUT_DIR = pathlib.Path(r"C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-CSV\2m_temperature")
 N_WORKERS = mp.cpu_count()          # 想用多少核就改这里
 # ------------------------------
@@ -27,10 +27,9 @@ def process_one(nc_file: pathlib.Path) -> str:
         df = df.drop(columns=["valid_time"])
 
         # K → °C
-        df["t2m[°C]"] = df["t2m"].apply(
+        df["t2m"] = df["t2m"].apply(
             lambda x: "" if pd.isna(x) else f"{x - 273.15:.3f}"
         )
-        df = df.drop(columns=["t2m"])
 
         # expver
         exp_df = ds["expver"].to_series().reset_index()
@@ -38,7 +37,7 @@ def process_one(nc_file: pathlib.Path) -> str:
         exp_df = exp_df.drop(columns=["valid_time"]).rename(columns={"expver": "expver"})
         df = df.merge(exp_df, on="time", how="left")
 
-        df = df[["time", "latitude", "longitude", "expver", "t2m[°C]"]]
+        df = df[["time", "latitude", "longitude", "expver", "t2m"]]
         df = df.sort_values(["time", "latitude", "longitude"])
         df.to_csv(csv_file, index=False, float_format="%.3f")
         return f"✔ {nc_file.name}"
