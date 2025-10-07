@@ -172,15 +172,7 @@ class NCToCSVConverter:
         
         # 写入CSV文件
         with open(output_file, 'w', encoding='utf-8') as f:
-            # 写入元数据注释
-            if units_info:
-                for info in units_info:
-                    f.write(f"# {info}\n")
-            f.write(f"# 数据来源: {os.path.basename(output_file)}\n")
-            f.write(f"# 转换时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"# 总数据行数: {len(df)}\n")
-            
-            # 写入数据
+        # 写入数据
             df.to_csv(f, index=False)
     
     def batch_convert(self):

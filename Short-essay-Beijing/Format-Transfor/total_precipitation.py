@@ -145,9 +145,9 @@ class NCtoCSVConverter:
                                     precip_mm = precip_val * 1000.0
                                     # 只有当值大于阈值时才记录
                                     if precip_mm >= self.min_precipitation_mm:
-                                        record[f'{precip_var}_mm'] = round(float(precip_mm), 4)
+                                        record[precip_var] = round(float(precip_mm), 4)
                                     else:
-                                        record[f'{precip_var}_mm'] = 0.0
+                                        record[precip_var] = 0.0
                                 else:
                                     # 保持原始单位，但确保精度
                                     if precip_val > 0:
@@ -172,9 +172,9 @@ class NCtoCSVConverter:
                                     if 'm' in units and 'mm' not in units:
                                         precip_mm = precip_val * 1000.0
                                         if precip_mm > 0.001:
-                                            record[f'{precip_var}_mm'] = round(float(precip_mm), 4)
+                                            record[precip_var] = round(float(precip_mm), 4)
                                         else:
-                                            record[f'{precip_var}_mm'] = 0.0
+                                            record[precip_var] = 0.0
                                     else:
                                         if precip_val > 0:
                                             record[precip_var] = round(float(precip_val), 8)
@@ -215,8 +215,7 @@ class NCtoCSVConverter:
                         has_precipitation = False
                         if precip_var and precip_var in ds.variables:
                             # 检查是否有降水数据
-                            precip_key = f'{precip_var}_mm' if f'{precip_var}_mm' in record else precip_var
-                            if precip_key in record and record[precip_key] > 0:
+                            if precip_var in record and record[precip_var] > 0:
                                 has_precipitation = True
                         
                         # 如果设置了过滤阈值，只保留有降水的记录

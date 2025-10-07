@@ -86,8 +86,8 @@ class NCToCSVConverter:
             # 温度单位转换
             df = self.convert_temperature_units_global(df, ds)
             
-            # 添加单位信息到列名
-            df = self.add_unit_info_global(df, ds)
+            # 添加单位信息到列名（已禁用 - 保持原始变量名）
+            # df = self.add_unit_info_global(df, ds)
             
             # 数据采样（如果数据量过大）
             df = self.sample_data_if_large(df)
