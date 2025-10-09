@@ -1,0 +1,2 @@
+﻿objective,max_depth,learning_rate,n_estimators,min_child_weight,subsample,colsample_bytree,random_state,n_jobs,eval_metric,early_stopping_rounds
+reg:squarederror,3,0.1,200,5,0.9,0.8,42,15,rmse,50

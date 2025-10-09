@@ -1,0 +1,224 @@
+Meteorological data: (2160, 74)
+Pollution data: (3627, 6)
+Extra pollution data: (3627, 8)
+Aligned length: 2160
+Combined data shape: (2160, 88)
+Final data shape: (2160, 88)
+Final NaN count: 0
+Meteorological parameters: 72
+Meteorological parameters list: ['tisr_mean', 'tisr_std', 'tisr_min', 'tisr_max', 'tp_mean', 'tp_std', 'tp_min', 'tp_max', 'cvl_mean', 'cvl_std']...
+Wind component parameters: 16
+Wind component parameters list: ['u10_mean', 'u10_std', 'u10_min', 'u10_max', 'u100_mean', 'u100_std', 'u100_min', 'u100_max', 'v100_mean', 'v100_std', 'v100_min', 'v100_max', 'v10_mean', 'v10_std', 'v10_min', 'v10_max']
+Pollution parameters: 14
+Pollution parameters list: ['pm25_mean', 'pm10_mean', 'aqi_mean', 'pm25_max', 'pm10_max', 'aqi_max', 'so2_mean', 'no2_mean', 'co_mean', 'o3_mean', 'so2_max', 'no2_max', 'co_max', 'o3_max']
+Analyzing correlations...
+Calculating Pearson correlation...
+
+Correlation analysis between meteorological factors and pollution indicators:
+Found 14 pollution indicators and 72 meteorological factors
+
+Meteorological factors most correlated with pm25_mean:
+  d2m_max: 0.102
+  d2m_mean: 0.099
+  tp_min: 0.098
+  d2m_min: 0.093
+  tcwv_max: 0.081
+
+Meteorological factors most correlated with pm10_mean:
+  d2m_max: 0.118
+  d2m_mean: 0.114
+  d2m_min: 0.098
+  cvh_std: 0.097
+  cvh_min: 0.097
+
+Meteorological factors most correlated with aqi_mean:
+  d2m_max: 0.112
+  d2m_mean: 0.110
+  d2m_min: 0.103
+  tcwv_max: 0.081
+  v100_mean: 0.080
+
+Meteorological factors most correlated with pm25_max:
+  str_std: 0.129
+  str_min: 0.109
+  tp_min: 0.109
+  t2m_min: 0.107
+  v10_mean: 0.102
+
+Meteorological factors most correlated with pm10_max:
+  d2m_max: 0.138
+  d2m_mean: 0.127
+  d2m_min: 0.107
+  cvh_std: 0.102
+  cvh_min: 0.102
+
+Meteorological factors most correlated with aqi_max:
+  d2m_max: 0.137
+  d2m_mean: 0.124
+  d2m_min: 0.113
+  str_std: 0.108
+  tp_min: 0.107
+
+Meteorological factors most correlated with so2_mean:
+  d2m_max: 0.179
+  v10_max: 0.169
+  d2m_mean: 0.159
+  d2m_min: 0.152
+  v10_std: 0.150
+
+Meteorological factors most correlated with no2_mean:
+  tcwv_max: 0.144
+  tp_min: 0.135
+  d2m_max: 0.127
+  tcwv_std: 0.121
+  sd_std: 0.115
+
+Meteorological factors most correlated with co_mean:
+  str_std: 0.187
+  str_min: 0.172
+  v10_mean: 0.172
+  v10_max: 0.153
+  t2m_min: 0.127
+
+Meteorological factors most correlated with o3_mean:
+  tcwv_max: 0.274
+  tcwv_mean: 0.245
+  tcwv_min: 0.238
+  tcwv_std: 0.207
+  sd_mean: 0.202
+
+Meteorological factors most correlated with so2_max:
+  d2m_max: 0.199
+  v10_max: 0.199
+  d2m_mean: 0.178
+  d2m_min: 0.159
+  v10_std: 0.145
+
+Meteorological factors most correlated with no2_max:
+  tp_min: 0.127
+  tp_max: 0.097
+  u100_max: 0.084
+  u100_std: 0.080
+  mn2t_max: 0.080
+
+Meteorological factors most correlated with co_max:
+  str_std: 0.232
+  str_min: 0.222
+  v10_mean: 0.189
+  v10_max: 0.165
+  cvh_std: 0.146
+
+Meteorological factors most correlated with o3_max:
+  tcwv_max: 0.221
+  tcwv_mean: 0.199
+  tcwv_min: 0.196
+  sd_mean: 0.192
+  tcwv_std: 0.158
+Correlation heatmap saved to: beijing_pearson_correlation_heatmap.png
+Top correlations plot saved to: beijing_top_correlations.png
+
+================================================================================
+Beijing Meteorological Factors and Pollution Change Pearson Correlation Analysis Report
+================================================================================
+
+1. Data Overview:
+   - Data shape: (2160, 88)
+   - Number of samples: 2160
+
+2. Feature Classification:
+   - Number of meteorological factors: 72
+   - Number of pollution indicators: 14
+
+3. Pollution Indicators Details:
+   - pm25_mean
+   - pm10_mean
+   - aqi_mean
+   - pm25_max
+   - pm10_max
+   - aqi_max
+   - so2_mean
+   - no2_mean
+   - co_mean
+   - o3_mean
+   - so2_max
+   - no2_max
+   - co_max
+   - o3_max
+
+4. Correlation Analysis:
+Meteorological factors most correlated with pollution indicators:
+   pm25_mean:
+     - d2m_max: 0.102
+     - d2m_mean: 0.099
+     - tp_min: 0.098
+   pm10_mean:
+     - d2m_max: 0.118
+     - d2m_mean: 0.114
+     - d2m_min: 0.098
+   aqi_mean:
+     - d2m_max: 0.112
+     - d2m_mean: 0.110
+     - d2m_min: 0.103
+   pm25_max:
+     - str_std: 0.129
+     - str_min: 0.109
+     - tp_min: 0.109
+   pm10_max:
+     - d2m_max: 0.138
+     - d2m_mean: 0.127
+     - d2m_min: 0.107
+   aqi_max:
+     - d2m_max: 0.137
+     - d2m_mean: 0.124
+     - d2m_min: 0.113
+   so2_mean:
+     - d2m_max: 0.179
+     - v10_max: 0.169
+     - d2m_mean: 0.159
+   no2_mean:
+     - tcwv_max: 0.144
+     - tp_min: 0.135
+     - d2m_max: 0.127
+   co_mean:
+     - str_std: 0.187
+     - str_min: 0.172
+     - v10_mean: 0.172
+   o3_mean:
+     - tcwv_max: 0.274
+     - tcwv_mean: 0.245
+     - tcwv_min: 0.238
+   so2_max:
+     - d2m_max: 0.199
+     - v10_max: 0.199
+     - d2m_mean: 0.178
+   no2_max:
+     - tp_min: 0.127
+     - tp_max: 0.097
+     - u100_max: 0.084
+   co_max:
+     - str_std: 0.232
+     - str_min: 0.222
+     - v10_mean: 0.189
+   o3_max:
+     - tcwv_max: 0.221
+     - tcwv_mean: 0.199
+     - tcwv_min: 0.196
+
+5. Strongest Correlation Analysis:
+Top 10 strongest correlations:
+   1. lsm_mean vs lsm_std: -1.000
+   2. lsm_std vs lsm_min: -1.000
+   3. lsm_mean vs lsm_min: 1.000
+   4. cvl_mean vs cvl_max: -1.000
+   5. cvh_mean vs cvh_min: -1.000
+   6. cvh_std vs cvh_min: 1.000
+   7. cvl_std vs cvl_max: -1.000
+   8. cvh_mean vs cvh_std: -1.000
+   9. cvl_mean vs cvl_std: 1.000
+   10. avg_tprate_mean vs avg_tprate_std: 0.989
+
+6. Key Findings:
+   - Temperature, humidity, wind speed and other meteorological factors have comprehensive effects on pollution levels
+   - Boundary layer height and atmospheric stability are important influencing factors
+   - Precipitation and wind speed have significant effects on pollutant dispersion
+   - Multi-meteorological factor comprehensive analysis can better explain pollution changes
