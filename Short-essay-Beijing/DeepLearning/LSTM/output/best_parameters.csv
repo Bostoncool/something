@@ -1,0 +1,4 @@
+﻿hidden_size,num_layers,dropout,learning_rate,sequence_length
+64,3,0.1,0.001,7
+128,2,0.3,0.001,14
+128,1,0.1,0.001,30

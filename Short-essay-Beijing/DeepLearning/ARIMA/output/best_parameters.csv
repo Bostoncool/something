@@ -1,0 +1,2 @@
+﻿ARIMA_order_p,ARIMA_order_d,ARIMA_order_q,Seasonal_order_P,Seasonal_order_D,Seasonal_order_Q,Seasonal_order_s,AIC,BIC
+3,1,3,1,1,1,12,25675.740804421548,25728.257458218948
