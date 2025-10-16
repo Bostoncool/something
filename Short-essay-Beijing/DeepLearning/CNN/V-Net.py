@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class SEBlock(nn.Module):
-    """Squeeze-and-Excitation注意力模块"""
+    """Squeeze-and-Excitation attention module"""
     def __init__(self, channel, reduction=16):
         super(SEBlock, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
@@ -21,7 +21,7 @@ class SEBlock(nn.Module):
         return x * y.expand_as(x)
 
 class ResidualBlock(nn.Module):
-    """残差块"""
+    """Residual block"""
     def __init__(self, in_channels, out_channels):
         super(ResidualBlock, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
@@ -29,7 +29,7 @@ class ResidualBlock(nn.Module):
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(out_channels)
         
-        # 如果输入输出通道数不同，使用1x1卷积进行调整
+        # Use 1x1 convolution for adjustment if input/output channels differ
         self.shortcut = nn.Sequential()
         if in_channels != out_channels:
             self.shortcut = nn.Sequential(
@@ -49,7 +49,7 @@ class ResidualBlock(nn.Module):
         return out
 
 class DenseBlock(nn.Module):
-    """密集连接块"""
+    """Dense connection block"""
     def __init__(self, in_channels, growth_rate, num_layers):
         super(DenseBlock, self).__init__()
         self.layers = nn.ModuleList()
@@ -66,7 +66,7 @@ class DenseBlock(nn.Module):
         return torch.cat(features, 1)
 
 class AttentionBlock(nn.Module):
-    """改进的注意力模块"""
+    """Improved attention module"""
     def __init__(self, F_g, F_l, F_int):
         super(AttentionBlock, self).__init__()
         self.W_g = nn.Sequential(
@@ -94,7 +94,7 @@ class AttentionBlock(nn.Module):
         return x * psi
 
 class UNetPlusPlus(nn.Module):
-    """增强版U-Net++网络实现，包含深度监督、注意力机制、残差连接和密集连接"""
+    """Enhanced U-Net++ network implementation with deep supervision, attention mechanism, residual connections and dense connections"""
     def __init__(self, in_channels=1, out_channels=1, 
                  features=[32, 64, 128, 256, 512, 1024], 
                  deep_supervision=True,
@@ -107,14 +107,14 @@ class UNetPlusPlus(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         self.attention_blocks = nn.ModuleList()
         
-        # 初始卷积层
+        # Initial convolutional layer
         self.initial = nn.Sequential(
             nn.Conv2d(in_channels, features[0], kernel_size=3, padding=1),
             nn.BatchNorm2d(features[0]),
             nn.ReLU(inplace=True)
         )
         
-        # 下采样路径
+        # Downsampling path
         for i in range(len(features)-1):
             self.downs.append(
                 DenseBlock(features[i], growth_rate, num_layers)
@@ -123,10 +123,10 @@ class UNetPlusPlus(nn.Module):
                 nn.Conv2d(features[i] + growth_rate * num_layers, features[i+1], kernel_size=1)
             )
 
-        # 瓶颈层
+        # Bottleneck layer
         self.bottleneck = DenseBlock(features[-1], growth_rate, num_layers)
 
-        # 上采样路径和注意力模块
+        # Upsampling path and attention modules
         for i, feature in enumerate(reversed(features[:-1])):
             self.ups.append(
                 nn.ConvTranspose2d(
@@ -139,39 +139,39 @@ class UNetPlusPlus(nn.Module):
             self.ups.append(
                 DenseBlock(feature * 2, growth_rate, num_layers)
             )
-            if i < len(features)-2:  # 除了最后一层，都添加注意力模块
+            if i < len(features)-2:  # Add attention module except for last layer
                 self.attention_blocks.append(
                     AttentionBlock(feature, feature, feature//2)
                 )
 
-        # 深度监督输出层
+        # Deep supervision output layers
         self.deep_supervision_conv = nn.ModuleList([
             nn.Conv2d(features[0] + growth_rate * num_layers, out_channels, kernel_size=1)
             for _ in range(len(features)-1)
         ])
         
-        # 最终输出层
+        # Final output layer
         self.final_conv = nn.Conv2d(features[0] + growth_rate * num_layers, out_channels, kernel_size=1)
 
     def forward(self, x):
         skip_connections = []
         deep_supervision_outputs = []
 
-        # 初始特征提取
+        # Initial feature extraction
         x = self.initial(x)
 
-        # 下采样路径
+        # Downsampling path
         for i in range(0, len(self.downs), 2):
             x = self.downs[i](x)
             x = self.downs[i+1](x)
             skip_connections.append(x)
             x = self.pool(x)
 
-        # 瓶颈层
+        # Bottleneck layer
         x = self.bottleneck(x)
         skip_connections = skip_connections[::-1]
 
-        # 上采样路径
+        # Upsampling path
         for idx in range(0, len(self.ups), 2):
             x = self.ups[idx](x)
             skip_connection = skip_connections[idx//2]
@@ -179,14 +179,14 @@ class UNetPlusPlus(nn.Module):
             if x.shape != skip_connection.shape:
                 x = F.resize(x, size=skip_connection.shape[2:])
 
-            # 应用注意力机制
+            # Apply attention mechanism
             if idx//2 < len(self.attention_blocks):
                 skip_connection = self.attention_blocks[idx//2](x, skip_connection)
 
             concat_skip = torch.cat((skip_connection, x), dim=1)
             x = self.ups[idx+1](concat_skip)
 
-            # 深度监督输出
+            # Deep supervision output
             if self.deep_supervision and idx//2 < len(self.deep_supervision_conv):
                 deep_supervision_outputs.append(self.deep_supervision_conv[idx//2](x))
 
@@ -195,7 +195,7 @@ class UNetPlusPlus(nn.Module):
         return self.final_conv(x)
 
 class DiceLoss(nn.Module):
-    """Dice损失函数"""
+    """Dice loss function"""
     def __init__(self, smooth=1.0):
         super(DiceLoss, self).__init__()
         self.smooth = smooth
@@ -209,7 +209,7 @@ class DiceLoss(nn.Module):
                     (pred_flat.sum() + target_flat.sum() + self.smooth))
 
 class FocalLoss(nn.Module):
-    """Focal损失函数"""
+    """Focal loss function"""
     def __init__(self, alpha=0.25, gamma=2):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
@@ -222,7 +222,7 @@ class FocalLoss(nn.Module):
         return focal_loss.mean()
 
 class CombinedLoss(nn.Module):
-    """组合损失函数：Dice Loss + Focal Loss"""
+    """Combined loss function: Dice Loss + Focal Loss"""
     def __init__(self, alpha=0.5):
         super(CombinedLoss, self).__init__()
         self.alpha = alpha
@@ -230,12 +230,12 @@ class CombinedLoss(nn.Module):
         self.focal_loss = FocalLoss()
         
     def forward(self, pred, target):
-        if isinstance(pred, tuple):  # 处理深度监督的情况
+        if isinstance(pred, tuple):  # Handle deep supervision case
             main_pred, deep_sup_preds = pred
             loss = self.alpha * self.dice_loss(main_pred, target) + \
                    (1 - self.alpha) * self.focal_loss(main_pred, target)
             
-            # 添加深度监督损失
+            # Add deep supervision loss
             for deep_pred in deep_sup_preds:
                 loss += 0.4 * (self.alpha * self.dice_loss(deep_pred, target) + \
                              (1 - self.alpha) * self.focal_loss(deep_pred, target))
@@ -245,7 +245,7 @@ class CombinedLoss(nn.Module):
                    (1 - self.alpha) * self.focal_loss(pred, target)
 
 def test():
-    """测试函数"""
+    """Test function"""
     x = torch.randn((3, 1, 161, 161))
     model = UNetPlusPlus(
         in_channels=1, 
@@ -258,16 +258,15 @@ def test():
     
     if isinstance(preds, tuple):
         main_pred, deep_sup_preds = preds
-        print(f"主输出形状: {main_pred.shape}")
-        print(f"深度监督输出数量: {len(deep_sup_preds)}")
+        print(f"Main output shape: {main_pred.shape}")
+        print(f"Number of deep supervision outputs: {len(deep_sup_preds)}")
         for i, pred in enumerate(deep_sup_preds):
-            print(f"深度监督输出 {i+1} 形状: {pred.shape}")
+            print(f"Deep supervision output {i+1} shape: {pred.shape}")
     else:
-        print(f"输出形状: {preds.shape}")
+        print(f"Output shape: {preds.shape}")
     
-    print(f"输入形状: {x.shape}")
-    print("测试成功！")
+    print(f"Input shape: {x.shape}")
+    print("Test successful!")
 
 if __name__ == "__main__":
     test()
-

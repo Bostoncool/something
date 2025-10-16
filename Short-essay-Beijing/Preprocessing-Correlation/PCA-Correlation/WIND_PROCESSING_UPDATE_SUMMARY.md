@@ -1,41 +1,41 @@
-# PCA-Correlation 风分量数据处理更新总结
+# PCA-Correlation Wind Component Data Processing Update Summary
 
-## 更新概述
+## Update Overview
 
-基于Kendall-Correlation文件夹的代码和文档分析，成功更新了PCA-Correlation文件夹中的`old.py`代码，解决了风速计算问题。
+Based on code and documentation analysis from the Kendall-Correlation folder, successfully updated the `old.py` code in the PCA-Correlation folder, resolving wind speed calculation issues.
 
-## 主要问题和解决方案
+## Main Problems and Solutions
 
-### 1. 风分量数据文件搜索问题
+### 1. Wind Component Data File Search Problem
 
-**问题**: 原代码只能搜索主目录下按`YYYYMM.csv`格式命名的文件，无法找到存储在子目录中的风分量数据文件。
+**Problem**: Original code could only search for files named in `YYYYMM.csv` format in the main directory, unable to find wind component data files stored in subdirectories.
 
-**解决方案**:
-- 增强了`collect_all_meteo_files()`方法
-- 添加了递归搜索所有CSV文件的功能
-- 自动识别和统计风分量相关文件
+**Solution**:
+- Enhanced the `collect_all_meteo_files()` method
+- Added functionality to recursively search all CSV files
+- Automatically identify and count wind component-related files
 
 ```python
-# 方法1：按年月模式搜索
+# Method 1: Search by year-month pattern
 for year in range(2015, 2025):
     for month in range(1, 13):
         pattern = f"{year}{month:02d}.csv"
         files = self.find_files_optimized(self.meteo_data_dir, pattern)
         all_files.extend(files)
 
-# 方法2：搜索所有CSV文件（包括风分量等特殊命名的文件）
+# Method 2: Search all CSV files (including specially named files like wind components)
 search_pattern = os.path.join(self.meteo_data_dir, "**", "*.csv")
 all_csv_files = glob.glob(search_pattern, recursive=True)
 ```
 
-### 2. CSV文件注释行处理问题
+### 2. CSV File Comment Line Handling Problem
 
-**问题**: 从NC文件转换的CSV文件包含以`#`开头的元数据注释行，导致pandas读取时出现解析错误。
+**Problem**: CSV files converted from NC files contain metadata comment lines starting with `#`, causing parsing errors when pandas reads them.
 
-**解决方案**:
-- 添加了多种编码格式支持（UTF-8, GBK, Latin-1）
-- 增加了注释行处理参数
-- 改进了异常处理和错误恢复机制
+**Solution**:
+- Added support for multiple encoding formats (UTF-8, GBK, Latin-1)
+- Added comment line handling parameter
+- Improved exception handling and error recovery mechanisms
 
 ```python
 try:
@@ -46,7 +46,7 @@ except UnicodeDecodeError:
     except UnicodeDecodeError:
         df = pd.read_csv(filepath, encoding='latin-1', comment='#')
 except pd.errors.ParserError:
-    # 如果有解析错误，尝试跳过前几行注释
+    # If parsing error, try skipping first few comment lines
     try:
         df = pd.read_csv(filepath, encoding='utf-8', skiprows=4)
     except:
@@ -56,17 +56,17 @@ except pd.errors.ParserError:
             raise
 ```
 
-### 3. 多维数据维度处理问题
+### 3. Multidimensional Data Dimension Handling Problem
 
-**问题**: 风分量数据从NC文件转换后可能包含多维结构（时间×纬度×经度），原代码假设数据是1维时间序列。
+**Problem**: Wind component data converted from NC files may contain multidimensional structures (time × latitude × longitude), original code assumes data is a 1D time series.
 
-**解决方案**:
-- 增强了`calculate_stats_vectorized()`方法
-- 添加了多维数据自动检测和处理
-- 实现了按时间维度的空间数据聚合
+**Solution**:
+- Enhanced the `calculate_stats_vectorized()` method
+- Added automatic detection and handling of multidimensional data
+- Implemented spatial data aggregation along time dimension
 
 ```python
-# 处理多维数据 - 如果是2D或3D数组，展平为1D
+# Handle multidimensional data - if 2D or 3D array, flatten to 1D
 if hourly_data.ndim > 1:
     if hourly_data.ndim == 3:  # (time, lat, lon)
         hourly_data = np.nanmean(hourly_data, axis=(1, 2))
@@ -74,24 +74,24 @@ if hourly_data.ndim > 1:
         hourly_data = np.nanmean(hourly_data, axis=1)
 ```
 
-### 4. 风分量数据专门处理
+### 4. Dedicated Wind Component Data Processing
 
-**问题**: 风分量数据需要特殊的统计计算和异常值处理。
+**Problem**: Wind component data requires special statistical calculations and outlier handling.
 
-**解决方案**:
-- 新增了`process_wind_component_data()`专门方法
-- 实现了异常值检测和过滤
-- 添加了数据采样机制避免内存问题
+**Solution**:
+- Added dedicated `process_wind_component_data()` method
+- Implemented outlier detection and filtering
+- Added data sampling mechanism to avoid memory issues
 
 ```python
 def process_wind_component_data(self, df: pd.DataFrame, col: str) -> Dict[str, float]:
     values = df[col].values
     valid_values = values[~np.isnan(values)]
     
-    # 移除异常值（风分量通常在-100到100 m/s之间）
+    # Remove outliers (wind components usually between -100 and 100 m/s)
     valid_values = valid_values[(valid_values >= -100) & (valid_values <= 100)]
     
-    # 如果数据量太大，进行采样
+    # If data is too large, sample it
     if len(valid_values) > 50000:
         step = len(valid_values) // 50000
         valid_values = valid_values[::step]
@@ -104,14 +104,14 @@ def process_wind_component_data(self, df: pd.DataFrame, col: str) -> Dict[str, f
     }
 ```
 
-### 5. 空间数据聚合
+### 5. Spatial Data Aggregation
 
-**问题**: 多维数据需要按时间维度聚合空间数据。
+**Problem**: Multidimensional data needs to aggregate spatial data along the time dimension.
 
-**解决方案**:
-- 新增了`aggregate_spatial_data()`方法
-- 实现了时间维度的空间平均值计算
-- 支持多种空间数据结构
+**Solution**:
+- Added new `aggregate_spatial_data()` method
+- Implemented spatial mean calculation along time dimension
+- Supports various spatial data structures
 
 ```python
 def aggregate_spatial_data(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -126,34 +126,34 @@ def aggregate_spatial_data(self, df: pd.DataFrame) -> pd.DataFrame:
     return df
 ```
 
-## 新增功能
+## New Features
 
-### 1. 增强的调试信息
-- 显示文件基本信息（形状、列名）
-- 显示风分量列的检测结果
-- 显示合并后的数据结构
-- 统计风分量参数数量
+### 1. Enhanced Debug Information
+- Display basic file information (shape, column names)
+- Display wind component column detection results
+- Display merged data structure
+- Count wind component parameters
 
-### 2. 改进的错误处理
-- 单个列处理失败不影响整体流程
-- 详细的错误信息输出
-- 多种异常情况的容错处理
+### 2. Improved Error Handling
+- Single column processing failure does not affect overall workflow
+- Detailed error message output
+- Fault-tolerant handling of various exception cases
 
-### 3. 内存优化
-- 大数据集的自动采样
-- 数据类型优化
-- 缓存机制改进
+### 3. Memory Optimization
+- Automatic sampling of large datasets
+- Data type optimization
+- Improved caching mechanism
 
-## 测试验证
+## Test Verification
 
-创建了`test_wind_processing.py`测试脚本，验证了以下功能：
+Created `test_wind_processing.py` test script, verified the following functionality:
 
-1. **风分量数据专门处理方法**: ✅ 成功处理u10, v10, u100, v100四个风分量
-2. **空间数据聚合方法**: ✅ 成功将900行空间数据聚合为100行时间序列
-3. **多维数据统计计算**: ✅ 成功处理3D和2D数据
-4. **文件搜索功能**: ✅ 成功搜索气象数据文件
+1. **Dedicated wind component data processing method**: ✅ Successfully processed four wind components u10, v10, u100, v100
+2. **Spatial data aggregation method**: ✅ Successfully aggregated 900 rows of spatial data into 100 rows of time series
+3. **Multidimensional data statistical calculation**: ✅ Successfully processed 3D and 2D data
+4. **File search functionality**: ✅ Successfully searched meteorological data files
 
-### 测试结果示例
+### Test Results Example
 ```
 Test data shape: (1000, 4)
 Test data columns: ['u10', 'v10', 'u100', 'v100']
@@ -171,42 +171,42 @@ Aggregated data shape: (100, 3)
 2D data statistics: {'mean': 3.071, 'std': 0.476, 'min': 2.070, 'max': 4.170}
 ```
 
-## 预期效果
+## Expected Results
 
-更新后的代码应该能够：
+The updated code should be able to:
 
-1. **成功找到风分量数据文件**: 在子目录中搜索所有风分量相关的CSV文件
-2. **正确处理多维数据**: 自动检测和处理从NC文件转换的多维数据结构
-3. **生成风分量统计信息**: 为每个风分量计算mean, std, min, max统计量
-4. **在PCA分析中包含风分量**: 风分量特征将出现在PCA结果和相关性分析中
-5. **在热力图中显示风分量**: 风分量与污染指标的相关性将显示在热力图中
+1. **Successfully find wind component data files**: Search all wind component-related CSV files in subdirectories
+2. **Correctly handle multidimensional data**: Automatically detect and handle multidimensional data structures converted from NC files
+3. **Generate wind component statistics**: Calculate mean, std, min, max statistics for each wind component
+4. **Include wind components in PCA analysis**: Wind component features will appear in PCA results and correlation analysis
+5. **Display wind components in heatmap**: Correlation between wind components and pollution indicators will be displayed in the heatmap
 
-## 使用方法
+## Usage Instructions
 
-1. 确保风分量数据文件存储在正确的子目录结构中
-2. 运行更新后的`old.py`代码
-3. 查看控制台输出确认风分量文件被正确加载
-4. 检查合并后的数据是否包含风分量列
-5. 验证PCA分析和热力图是否包含风分量数据
+1. Ensure wind component data files are stored in the correct subdirectory structure
+2. Run the updated `old.py` code
+3. Check console output to confirm wind component files are loaded correctly
+4. Check if merged data contains wind component columns
+5. Verify that PCA analysis and heatmap include wind component data
 
-## 文件修改清单
+## File Modification List
 
-- ✅ `old.py`: 主要更新文件
-- ✅ `test_wind_processing.py`: 新增测试脚本
-- ✅ `WIND_PROCESSING_UPDATE_SUMMARY.md`: 新增总结文档
+- ✅ `old.py`: Main update file
+- ✅ `test_wind_processing.py`: New test script
+- ✅ `WIND_PROCESSING_UPDATE_SUMMARY.md`: New summary document
 
-## 技术改进
+## Technical Improvements
 
-1. **代码可维护性**: 添加了详细的中文注释和文档
-2. **错误处理**: 增强了异常处理和错误恢复机制
-3. **性能优化**: 实现了数据采样和内存优化
-4. **调试友好**: 添加了详细的调试信息输出
-5. **扩展性**: 代码结构支持未来添加更多气象参数类型
+1. **Code maintainability**: Added detailed comments and documentation
+2. **Error handling**: Enhanced exception handling and error recovery mechanisms
+3. **Performance optimization**: Implemented data sampling and memory optimization
+4. **Debug-friendly**: Added detailed debug information output
+5. **Extensibility**: Code structure supports future addition of more meteorological parameter types
 
-## 下一步建议
+## Next Steps Recommendations
 
-1. 在实际数据上测试更新后的代码
-2. 根据实际运行结果进一步优化参数
-3. 考虑添加风速和风向的计算功能
-4. 扩展支持更多气象参数类型
-5. 添加数据质量检查和验证功能
+1. Test updated code on actual data
+2. Further optimize parameters based on actual results
+3. Consider adding wind speed and direction calculation functionality
+4. Extend support for more meteorological parameter types
+5. Add data quality checking and validation functionality

@@ -1,12 +1,12 @@
 """
-GPU性能测试脚本
-用于测试GPU加速效果和验证环境配置
+GPU Performance Testing Script
+Used to test GPU acceleration effect and verify environment configuration
 
-功能:
-1. 检测GPU可用性
-2. 测试混合精度训练速度
-3. 对比CPU vs GPU训练时间
-4. 显存使用监控
+Features:
+1. Detect GPU availability
+2. Test mixed precision training speed
+3. Compare CPU vs GPU training time
+4. Memory usage monitoring
 """
 
 import torch
@@ -17,32 +17,32 @@ import time
 import numpy as np
 
 print("=" * 80)
-print("CNN-LSTM GPU性能测试")
+print("CNN-LSTM GPU Performance Test")
 print("=" * 80)
 
-# ============================== 1. 环境检测 ==============================
-print("\n【1. 环境检测】")
-print(f"PyTorch版本: {torch.__version__}")
-print(f"CUDA可用: {torch.cuda.is_available()}")
+# ============================== 1. Environment Detection ==============================
+print("\n[1. Environment Detection]")
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
 
 if torch.cuda.is_available():
-    print(f"CUDA版本: {torch.version.cuda}")
-    print(f"cuDNN版本: {torch.backends.cudnn.version()}")
-    print(f"GPU数量: {torch.cuda.device_count()}")
-    print(f"当前GPU: {torch.cuda.current_device()}")
-    print(f"GPU名称: {torch.cuda.get_device_name(0)}")
+    print(f"CUDA version: {torch.version.cuda}")
+    print(f"cuDNN version: {torch.backends.cudnn.version()}")
+    print(f"GPU count: {torch.cuda.device_count()}")
+    print(f"Current GPU: {torch.cuda.current_device()}")
+    print(f"GPU name: {torch.cuda.get_device_name(0)}")
     
     gpu_props = torch.cuda.get_device_properties(0)
-    print(f"GPU显存: {gpu_props.total_memory / 1e9:.2f} GB")
-    print(f"计算能力: {gpu_props.major}.{gpu_props.minor}")
-    print(f"多核心数: {gpu_props.multi_processor_count}")
+    print(f"GPU memory: {gpu_props.total_memory / 1e9:.2f} GB")
+    print(f"Compute capability: {gpu_props.major}.{gpu_props.minor}")
+    print(f"Multiprocessor count: {gpu_props.multi_processor_count}")
 else:
-    print("⚠️  警告: 未检测到CUDA GPU")
-    print("   将无法进行GPU性能测试")
+    print("⚠️  Warning: CUDA GPU not detected")
+    print("   GPU performance testing will not be possible")
 
-# ============================== 2. 简化模型定义 ==============================
+# ============================== 2. Simplified Model Definition ==============================
 class SimpleCNNLSTM(nn.Module):
-    """简化的CNN-LSTM模型用于测试"""
+    """Simplified CNN-LSTM model for testing"""
     def __init__(self, input_size=50, hidden_size=64, num_filters=32):
         super(SimpleCNNLSTM, self).__init__()
         
@@ -78,34 +78,34 @@ class SimpleCNNLSTM(nn.Module):
         
         return output
 
-# ============================== 3. 生成测试数据 ==============================
-print("\n【2. 生成测试数据】")
+# ============================== 3. Generate Test Data ==============================
+print("\n[2. Generating Test Data]")
 
 seq_length = 14
 batch_size_cpu = 64
 batch_size_gpu = 128
 input_size = 50
-num_batches = 50  # 测试批次数
+num_batches = 50  # Number of test batches
 
-print(f"序列长度: {seq_length}")
-print(f"CPU批处理大小: {batch_size_cpu}")
-print(f"GPU批处理大小: {batch_size_gpu}")
-print(f"输入特征数: {input_size}")
-print(f"测试批次数: {num_batches}")
+print(f"Sequence length: {seq_length}")
+print(f"CPU batch size: {batch_size_cpu}")
+print(f"GPU batch size: {batch_size_gpu}")
+print(f"Input feature count: {input_size}")
+print(f"Test batch count: {num_batches}")
 
-# ============================== 4. CPU训练测试 ==============================
-print("\n【3. CPU训练测试】")
+# ============================== 4. CPU Training Test ==============================
+print("\n[3. CPU Training Test]")
 
 model_cpu = SimpleCNNLSTM(input_size=input_size)
 model_cpu = model_cpu.to('cpu')
 criterion = nn.MSELoss()
 optimizer_cpu = optim.Adam(model_cpu.parameters(), lr=0.001)
 
-print("开始CPU训练测试...")
+print("Starting CPU training test...")
 cpu_times = []
 
 for batch_idx in range(num_batches):
-    # 生成随机数据
+    # Generate random data
     X_batch = torch.randn(batch_size_cpu, seq_length, input_size)
     y_batch = torch.randn(batch_size_cpu, 1)
     
@@ -121,29 +121,29 @@ for batch_idx in range(num_batches):
     cpu_times.append(batch_time)
     
     if (batch_idx + 1) % 10 == 0:
-        print(f"  批次 {batch_idx + 1}/{num_batches}, 时间: {batch_time*1000:.2f}ms")
+        print(f"  Batch {batch_idx + 1}/{num_batches}, time: {batch_time*1000:.2f}ms")
 
 cpu_avg_time = np.mean(cpu_times)
 cpu_total_time = np.sum(cpu_times)
 cpu_throughput = batch_size_cpu / cpu_avg_time
 
-print(f"\nCPU训练结果:")
-print(f"  总时间: {cpu_total_time:.2f}s")
-print(f"  平均每批次: {cpu_avg_time*1000:.2f}ms")
-print(f"  吞吐量: {cpu_throughput:.0f} samples/s")
+print(f"\nCPU Training Results:")
+print(f"  Total time: {cpu_total_time:.2f}s")
+print(f"  Average per batch: {cpu_avg_time*1000:.2f}ms")
+print(f"  Throughput: {cpu_throughput:.0f} samples/s")
 
-# ============================== 5. GPU训练测试 (不使用AMP) ==============================
+# ============================== 5. GPU Training Test (without AMP) ==============================
 if torch.cuda.is_available():
-    print("\n【4. GPU训练测试 (FP32)】")
+    print("\n[4. GPU Training Test (FP32)]")
     
     model_gpu = SimpleCNNLSTM(input_size=input_size)
     model_gpu = model_gpu.to('cuda')
     criterion_gpu = nn.MSELoss()
     optimizer_gpu = optim.Adam(model_gpu.parameters(), lr=0.001)
     
-    print("开始GPU训练测试 (FP32)...")
+    print("Starting GPU training test (FP32)...")
     
-    # 预热
+    # Warmup
     for _ in range(5):
         X_warmup = torch.randn(batch_size_gpu, seq_length, input_size).to('cuda')
         y_warmup = torch.randn(batch_size_gpu, 1).to('cuda')
@@ -176,21 +176,21 @@ if torch.cuda.is_available():
         if (batch_idx + 1) % 10 == 0:
             mem_allocated = torch.cuda.memory_allocated() / 1e9
             mem_reserved = torch.cuda.memory_reserved() / 1e9
-            print(f"  批次 {batch_idx + 1}/{num_batches}, 时间: {batch_time*1000:.2f}ms, "
-                  f"显存: {mem_allocated:.2f}/{mem_reserved:.2f}GB")
+            print(f"  Batch {batch_idx + 1}/{num_batches}, time: {batch_time*1000:.2f}ms, "
+                  f"memory: {mem_allocated:.2f}/{mem_reserved:.2f}GB")
     
     gpu_avg_time = np.mean(gpu_times)
     gpu_total_time = np.sum(gpu_times)
     gpu_throughput = batch_size_gpu / gpu_avg_time
     
-    print(f"\nGPU训练结果 (FP32):")
-    print(f"  总时间: {gpu_total_time:.2f}s")
-    print(f"  平均每批次: {gpu_avg_time*1000:.2f}ms")
-    print(f"  吞吐量: {gpu_throughput:.0f} samples/s")
-    print(f"  峰值显存: {torch.cuda.max_memory_allocated() / 1e9:.2f}GB")
+    print(f"\nGPU Training Results (FP32):")
+    print(f"  Total time: {gpu_total_time:.2f}s")
+    print(f"  Average per batch: {gpu_avg_time*1000:.2f}ms")
+    print(f"  Throughput: {gpu_throughput:.0f} samples/s")
+    print(f"  Peak memory: {torch.cuda.max_memory_allocated() / 1e9:.2f}GB")
     
-    # ============================== 6. GPU + AMP训练测试 ==============================
-    print("\n【5. GPU训练测试 (FP16混合精度)】")
+    # ============================== 6. GPU + AMP Training Test ==============================
+    print("\n[5. GPU Training Test (FP16 Mixed Precision)]")
     
     model_amp = SimpleCNNLSTM(input_size=input_size)
     model_amp = model_amp.to('cuda')
@@ -198,11 +198,11 @@ if torch.cuda.is_available():
     optimizer_amp = optim.Adam(model_amp.parameters(), lr=0.001)
     scaler = GradScaler()
     
-    print("开始GPU+AMP训练测试 (FP16)...")
+    print("Starting GPU+AMP training test (FP16)...")
     
     torch.cuda.reset_peak_memory_stats()
     
-    # 预热
+    # Warmup
     for _ in range(5):
         X_warmup = torch.randn(batch_size_gpu, seq_length, input_size).to('cuda')
         y_warmup = torch.randn(batch_size_gpu, 1).to('cuda')
@@ -243,64 +243,63 @@ if torch.cuda.is_available():
         if (batch_idx + 1) % 10 == 0:
             mem_allocated = torch.cuda.memory_allocated() / 1e9
             mem_reserved = torch.cuda.memory_reserved() / 1e9
-            print(f"  批次 {batch_idx + 1}/{num_batches}, 时间: {batch_time*1000:.2f}ms, "
-                  f"显存: {mem_allocated:.2f}/{mem_reserved:.2f}GB")
+            print(f"  Batch {batch_idx + 1}/{num_batches}, time: {batch_time*1000:.2f}ms, "
+                  f"memory: {mem_allocated:.2f}/{mem_reserved:.2f}GB")
     
     amp_avg_time = np.mean(amp_times)
     amp_total_time = np.sum(amp_times)
     amp_throughput = batch_size_gpu / amp_avg_time
     
-    print(f"\nGPU+AMP训练结果 (FP16):")
-    print(f"  总时间: {amp_total_time:.2f}s")
-    print(f"  平均每批次: {amp_avg_time*1000:.2f}ms")
-    print(f"  吞吐量: {amp_throughput:.0f} samples/s")
-    print(f"  峰值显存: {torch.cuda.max_memory_allocated() / 1e9:.2f}GB")
+    print(f"\nGPU+AMP Training Results (FP16):")
+    print(f"  Total time: {amp_total_time:.2f}s")
+    print(f"  Average per batch: {amp_avg_time*1000:.2f}ms")
+    print(f"  Throughput: {amp_throughput:.0f} samples/s")
+    print(f"  Peak memory: {torch.cuda.max_memory_allocated() / 1e9:.2f}GB")
     
-    # ============================== 7. 性能对比 ==============================
+    # ============================== 7. Performance Comparison ==============================
     print("\n" + "=" * 80)
-    print("【6. 性能对比总结】")
+    print("[6. Performance Comparison Summary]")
     print("=" * 80)
     
-    print(f"\n训练速度对比:")
+    print(f"\nTraining Speed Comparison:")
     print(f"  CPU (batch={batch_size_cpu}):        {cpu_throughput:.0f} samples/s")
     print(f"  GPU FP32 (batch={batch_size_gpu}):   {gpu_throughput:.0f} samples/s  ({gpu_throughput/cpu_throughput:.2f}x)")
     print(f"  GPU FP16 (batch={batch_size_gpu}):   {amp_throughput:.0f} samples/s  ({amp_throughput/cpu_throughput:.2f}x)")
     
-    print(f"\n单批次时间对比:")
+    print(f"\nBatch Time Comparison:")
     print(f"  CPU:      {cpu_avg_time*1000:.2f}ms")
-    print(f"  GPU FP32: {gpu_avg_time*1000:.2f}ms  ({cpu_avg_time/gpu_avg_time:.2f}x 加速)")
-    print(f"  GPU FP16: {amp_avg_time*1000:.2f}ms  ({cpu_avg_time/amp_avg_time:.2f}x 加速)")
+    print(f"  GPU FP32: {gpu_avg_time*1000:.2f}ms  ({cpu_avg_time/gpu_avg_time:.2f}x speedup)")
+    print(f"  GPU FP16: {amp_avg_time*1000:.2f}ms  ({cpu_avg_time/amp_avg_time:.2f}x speedup)")
     
-    print(f"\n显存使用 (GPU):")
-    print(f"  FP32峰值: {torch.cuda.max_memory_allocated() / 1e9:.2f}GB")
-    print(f"  FP16相对节省: ~50% (估计)")
+    print(f"\nMemory Usage (GPU):")
+    print(f"  FP32 peak: {torch.cuda.max_memory_allocated() / 1e9:.2f}GB")
+    print(f"  FP16 relative saving: ~50% (estimated)")
     
-    print(f"\n推荐配置:")
+    print(f"\nRecommended Configuration:")
     if gpu_throughput / cpu_throughput > 2:
-        print("  ✓ GPU加速效果显著，建议使用GPU版本")
-        print(f"  ✓ 使用混合精度可获得 {amp_throughput/gpu_throughput:.2f}x 额外加速")
+        print("  ✓ Significant GPU acceleration, GPU version recommended")
+        print(f"  ✓ Using mixed precision can achieve {amp_throughput/gpu_throughput:.2f}x additional speedup")
     else:
-        print("  ⚠️  GPU加速效果不明显，可能存在以下问题:")
-        print("     - GPU性能较低")
-        print("     - 数据传输开销过大")
-        print("     - 模型规模较小")
+        print("  ⚠️  GPU acceleration effect not significant, possible issues:")
+        print("     - Low GPU performance")
+        print("     - Excessive data transfer overhead")
+        print("     - Small model size")
     
     torch.cuda.empty_cache()
 
 else:
-    print("\n⚠️  跳过GPU测试（未检测到CUDA）")
-    print("\n如需启用GPU加速，请:")
-    print("  1. 安装支持CUDA的PyTorch")
-    print("  2. 确保已安装NVIDIA驱动")
-    print("  3. 检查CUDA环境配置")
+    print("\n⚠️  Skipping GPU test (CUDA not detected)")
+    print("\nTo enable GPU acceleration, please:")
+    print("  1. Install PyTorch with CUDA support")
+    print("  2. Ensure NVIDIA drivers are installed")
+    print("  3. Check CUDA environment configuration")
 
 print("\n" + "=" * 80)
-print("性能测试完成！")
+print("Performance Testing Complete!")
 print("=" * 80)
 
-print("\n提示:")
-print("  - 如果加速比低于预期，尝试增大批处理大小")
-print("  - 显存不足时可以减小批处理大小")
-print("  - 混合精度训练可节省约50%显存")
-print("  - 实际训练速度还受数据加载影响")
-
+print("\nTips:")
+print("  - If speedup is lower than expected, try increasing batch size")
+print("  - Reduce batch size if memory is insufficient")
+print("  - Mixed precision training can save about 50% memory")
+print("  - Actual training speed is also affected by data loading")

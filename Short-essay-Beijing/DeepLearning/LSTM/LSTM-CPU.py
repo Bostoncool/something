@@ -1,17 +1,17 @@
 """
-北京PM2.5浓度预测 - LSTM + Attention模型
-使用长短期记忆网络(LSTM)和注意力机制进行时间序列预测
+Beijing PM2.5 Concentration Prediction - LSTM + Attention Model
+Using Long Short-Term Memory Network (LSTM) and Attention Mechanism for time series prediction
 
-特点:
-- LSTM网络捕捉时间序列长期依赖
-- Attention机制提供特征重要性分析
-- 多序列长度对比（7/14/30天）
-- 网格搜索超参数优化
-- 完整的训练、评估和可视化流程
+Features:
+- LSTM network captures long-term dependencies in time series
+- Attention mechanism provides feature importance analysis
+- Multiple sequence length comparison (7/14/30 days)
+- Grid search for hyperparameter optimization
+- Complete training, evaluation and visualization workflow
 
-数据来源:
-- 污染数据: Benchmark数据集 (PM2.5, PM10, SO2, NO2, CO, O3)
-- 气象数据: ERA5再分析数据
+Data Sources:
+- Pollution data: Benchmark dataset (PM2.5, PM10, SO2, NO2, CO, O3)
+- Meteorological data: ERA5 reanalysis data
 """
 
 import os
@@ -29,77 +29,77 @@ from itertools import product
 
 warnings.filterwarnings('ignore')
 
-# PyTorch导入
+# PyTorch imports
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 
-# 获取CPU核心数
+# Get CPU core count
 CPU_COUNT = multiprocessing.cpu_count()
 MAX_WORKERS = max(4, CPU_COUNT - 1)
 
-# 尝试导入tqdm进度条
+# Try to import tqdm progress bar
 try:
     from tqdm import tqdm
     TQDM_AVAILABLE = True
 except ImportError:
     TQDM_AVAILABLE = False
-    print("提示: tqdm未安装，进度显示将使用简化版本。")
+    print("Note: tqdm not installed, progress display will use simplified version.")
 
-# 机器学习库
+# Machine learning libraries
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
 
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+# Set English fonts
+plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'sans-serif']
 plt.rcParams['axes.unicode_minus'] = False
 plt.rcParams['figure.dpi'] = 100
 
-# 设置随机种子
+# Set random seed
 np.random.seed(42)
 torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
 
-# 设置设备
+# Set device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 print("=" * 80)
-print("北京PM2.5浓度预测 - LSTM + Attention模型")
+print("Beijing PM2.5 Concentration Prediction - LSTM + Attention Model")
 print("=" * 80)
-print(f"使用设备: {device}")
+print(f"Using device: {device}")
 if torch.cuda.is_available():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-# ============================== 第1部分: 配置和路径设置 ==============================
-print("\n配置参数...")
+# ============================== Part 1: Configuration and Path Setup ==============================
+print("\nConfiguring parameters...")
 
-# 数据路径
+# Data paths
 pollution_all_path = r'C:\Users\IU\Desktop\Datebase Origin\Benchmark\all(AQI+PM2.5+PM10)'
 pollution_extra_path = r'C:\Users\IU\Desktop\Datebase Origin\Benchmark\extra(SO2+NO2+CO+O3)'
 era5_path = r'C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-CSV'
 
-# 输出路径
+# Output path
 output_dir = Path('./output')
 output_dir.mkdir(exist_ok=True)
 
-# 模型保存路径
+# Model save path
 model_dir = Path('./models')
 model_dir.mkdir(exist_ok=True)
 
-# 日期范围
+# Date range
 start_date = datetime(2015, 1, 1)
 end_date = datetime(2024, 12, 31)
 
-# 北京地理范围
+# Beijing geographic range
 beijing_lats = np.arange(39.0, 41.25, 0.25)
 beijing_lons = np.arange(115.0, 117.25, 0.25)
 
-# 污染物列表
+# Pollutant list
 pollutants = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3']
 
-# ERA5变量
+# ERA5 variables
 era5_vars = [
     'd2m', 't2m', 'u10', 'v10', 'u100', 'v100',
     'blh', 'sp', 'tcwv',
@@ -109,27 +109,27 @@ era5_vars = [
     'mn2t', 'sd', 'lsm'
 ]
 
-# LSTM特定配置
-SEQUENCE_LENGTHS = [7, 14, 30]  # 多个序列长度进行对比
+# LSTM specific configuration
+SEQUENCE_LENGTHS = [7, 14, 30]  # Multiple sequence lengths for comparison
 BATCH_SIZE = 32
 EPOCHS = 100
 EARLY_STOP_PATIENCE = 20
 
-print(f"数据时间范围: {start_date.date()} 至 {end_date.date()}")
-print(f"目标变量: PM2.5浓度")
-print(f"序列长度: {SEQUENCE_LENGTHS} 天")
-print(f"输出目录: {output_dir}")
-print(f"模型保存目录: {model_dir}")
-print(f"CPU核心数: {CPU_COUNT}, 并行工作线程: {MAX_WORKERS}")
+print(f"Data time range: {start_date.date()} to {end_date.date()}")
+print(f"Target variable: PM2.5 concentration")
+print(f"Sequence lengths: {SEQUENCE_LENGTHS} days")
+print(f"Output directory: {output_dir}")
+print(f"Model save directory: {model_dir}")
+print(f"CPU cores: {CPU_COUNT}, parallel workers: {MAX_WORKERS}")
 
-# ============================== 第2部分: 数据加载函数（复用） ==============================
+# ============================== Part 2: Data Loading Functions (Reused) ==============================
 def daterange(start, end):
-    """生成日期序列"""
+    """Generate date sequence"""
     for n in range(int((end - start).days) + 1):
         yield start + timedelta(n)
 
 def find_file(base_path, date_str, prefix):
-    """查找指定日期的文件"""
+    """Find file for specified date"""
     filename = f"{prefix}_{date_str}.csv"
     for root, _, files in os.walk(base_path):
         if filename in files:
@@ -137,7 +137,7 @@ def find_file(base_path, date_str, prefix):
     return None
 
 def read_pollution_day(date):
-    """读取单日污染数据"""
+    """Read single day pollution data"""
     date_str = date.strftime('%Y%m%d')
     all_file = find_file(pollution_all_path, date_str, 'beijing_all')
     extra_file = find_file(pollution_extra_path, date_str, 'beijing_extra')
@@ -168,9 +168,9 @@ def read_pollution_day(date):
         return None
 
 def read_all_pollution():
-    """并行读取所有污染数据"""
-    print("\n正在加载污染数据...")
-    print(f"使用 {MAX_WORKERS} 个并行工作线程")
+    """Read all pollution data in parallel"""
+    print("\nLoading pollution data...")
+    print(f"Using {MAX_WORKERS} parallel workers")
     dates = list(daterange(start_date, end_date))
     pollution_dfs = []
     
@@ -179,7 +179,7 @@ def read_all_pollution():
         
         if TQDM_AVAILABLE:
             for future in tqdm(as_completed(futures), total=len(futures), 
-                             desc="加载污染数据", unit="天"):
+                             desc="Loading pollution data", unit="day"):
                 result = future.result()
                 if result is not None:
                     pollution_dfs.append(result)
@@ -189,20 +189,20 @@ def read_all_pollution():
                 if result is not None:
                     pollution_dfs.append(result)
                 if i % 500 == 0 or i == len(futures):
-                    print(f"  已处理 {i}/{len(futures)} 天 ({i/len(futures)*100:.1f}%)")
+                    print(f"  Processed {i}/{len(futures)} days ({i/len(futures)*100:.1f}%)")
     
     if pollution_dfs:
-        print(f"  成功读取 {len(pollution_dfs)}/{len(dates)} 天的数据")
-        print("  正在合并数据...")
+        print(f"  Successfully read {len(pollution_dfs)}/{len(dates)} days of data")
+        print("  Merging data...")
         df_poll_all = pd.concat(pollution_dfs)
         df_poll_all.ffill(inplace=True)
         df_poll_all.fillna(df_poll_all.mean(), inplace=True)
-        print(f"污染数据加载完成，形状: {df_poll_all.shape}")
+        print(f"Pollution data loading complete, shape: {df_poll_all.shape}")
         return df_poll_all
     return pd.DataFrame()
 
 def read_era5_month(year, month):
-    """读取单月ERA5数据"""
+    """Read single month ERA5 data"""
     month_str = f"{year}{month:02d}"
     all_files = glob.glob(os.path.join(era5_path, "**", f"*{month_str}*.csv"), recursive=True)
     
@@ -266,15 +266,15 @@ def read_era5_month(year, month):
             continue
     
     if monthly_data is not None and not monthly_data.empty:
-        print(f"  成功读取: {year}-{month:02d}, 日数: {len(monthly_data)}, 变量数: {len(loaded_vars)}")
+        print(f"  Successfully read: {year}-{month:02d}, days: {len(monthly_data)}, variables: {len(loaded_vars)}")
         return monthly_data
     else:
         return None
 
 def read_all_era5():
-    """并行读取所有ERA5数据"""
-    print("\n正在加载气象数据...")
-    print(f"使用 {MAX_WORKERS} 个并行工作线程")
+    """Read all ERA5 data in parallel"""
+    print("\nLoading meteorological data...")
+    print(f"Using {MAX_WORKERS} parallel workers")
     
     era5_dfs = []
     years = range(2015, 2025)
@@ -283,7 +283,7 @@ def read_all_era5():
     month_tasks = [(year, month) for year in years for month in months 
                    if not (year == 2024 and month > 12)]
     total_months = len(month_tasks)
-    print(f"尝试加载 {total_months} 个月的数据...")
+    print(f"Attempting to load {total_months} months of data...")
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(read_era5_month, year, month): (year, month) 
@@ -292,7 +292,7 @@ def read_all_era5():
         successful_reads = 0
         if TQDM_AVAILABLE:
             for future in tqdm(as_completed(futures), total=len(futures), 
-                             desc="加载气象数据", unit="月"):
+                             desc="Loading meteorological data", unit="month"):
                 result = future.result()
                 if result is not None and not result.empty:
                     era5_dfs.append(result)
@@ -304,40 +304,40 @@ def read_all_era5():
                     era5_dfs.append(result)
                     successful_reads += 1
                 if i % 20 == 0 or i == len(futures):
-                    print(f"  进度: {i}/{len(futures)} 个月 (成功: {successful_reads}, {i/len(futures)*100:.1f}%)")
+                    print(f"  Progress: {i}/{len(futures)} months (success: {successful_reads}, {i/len(futures)*100:.1f}%)")
         
-        print(f"  总计成功读取: {successful_reads}/{len(futures)} 个月")
+        print(f"  Total successfully read: {successful_reads}/{len(futures)} months")
     
     if era5_dfs:
-        print("\n正在合并气象数据...")
+        print("\nMerging meteorological data...")
         df_era5_all = pd.concat(era5_dfs, axis=0)
         df_era5_all = df_era5_all[~df_era5_all.index.duplicated(keep='first')]
         df_era5_all.sort_index(inplace=True)
         
-        print(f"合并后形状: {df_era5_all.shape}")
-        print(f"时间范围: {df_era5_all.index.min()} 至 {df_era5_all.index.max()}")
+        print(f"Merged shape: {df_era5_all.shape}")
+        print(f"Time range: {df_era5_all.index.min()} to {df_era5_all.index.max()}")
         
-        print("  处理缺失值...")
+        print("  Handling missing values...")
         initial_na = df_era5_all.isna().sum().sum()
         df_era5_all.ffill(inplace=True)
         df_era5_all.bfill(inplace=True)
         df_era5_all.fillna(df_era5_all.mean(), inplace=True)
         final_na = df_era5_all.isna().sum().sum()
         
-        print(f"缺失值处理: {initial_na} -> {final_na}")
-        print(f"气象数据加载完成，形状: {df_era5_all.shape}")
+        print(f"Missing value handling: {initial_na} -> {final_na}")
+        print(f"Meteorological data loading complete, shape: {df_era5_all.shape}")
         
         return df_era5_all
     else:
-        print("\n❌ 错误: 没有成功加载任何气象数据文件！")
+        print("\n❌ Error: Failed to load any meteorological data files!")
         return pd.DataFrame()
 
-# ============================== 第3部分: 特征工程（复用） ==============================
+# ============================== Part 3: Feature Engineering (Reused) ==============================
 def create_features(df):
-    """创建额外特征"""
+    """Create additional features"""
     df_copy = df.copy()
     
-    # 风速特征
+    # Wind speed features
     if 'u10' in df_copy and 'v10' in df_copy:
         df_copy['wind_speed_10m'] = np.sqrt(df_copy['u10']**2 + df_copy['v10']**2)
         df_copy['wind_dir_10m'] = np.arctan2(df_copy['v10'], df_copy['u10']) * 180 / np.pi
@@ -348,7 +348,7 @@ def create_features(df):
         df_copy['wind_dir_100m'] = np.arctan2(df_copy['v100'], df_copy['u100']) * 180 / np.pi
         df_copy['wind_dir_100m'] = (df_copy['wind_dir_100m'] + 360) % 360
     
-    # 时间特征
+    # Time features
     df_copy['year'] = df_copy.index.year
     df_copy['month'] = df_copy.index.month
     df_copy['day'] = df_copy.index.day
@@ -356,19 +356,19 @@ def create_features(df):
     df_copy['day_of_week'] = df_copy.index.dayofweek
     df_copy['week_of_year'] = df_copy.index.isocalendar().week
     
-    # 季节特征
+    # Season feature
     df_copy['season'] = df_copy['month'].apply(
         lambda x: 1 if x in [12, 1, 2] else 2 if x in [3, 4, 5] else 3 if x in [6, 7, 8] else 4
     )
     
-    # 供暖季
+    # Heating season
     df_copy['is_heating_season'] = ((df_copy['month'] >= 11) | (df_copy['month'] <= 3)).astype(int)
     
-    # 温度相关
+    # Temperature related
     if 't2m' in df_copy and 'd2m' in df_copy:
         df_copy['temp_dewpoint_diff'] = df_copy['t2m'] - df_copy['d2m']
     
-    # 滞后特征
+    # Lag features
     if 'PM2.5' in df_copy:
         df_copy['PM2.5_lag1'] = df_copy['PM2.5'].shift(1)
         df_copy['PM2.5_lag3'] = df_copy['PM2.5'].shift(3)
@@ -377,7 +377,7 @@ def create_features(df):
         df_copy['PM2.5_ma7'] = df_copy['PM2.5'].rolling(window=7, min_periods=1).mean()
         df_copy['PM2.5_ma30'] = df_copy['PM2.5'].rolling(window=30, min_periods=1).mean()
     
-    # 相对湿度
+    # Relative humidity
     if 't2m' in df_copy and 'd2m' in df_copy:
         df_copy['relative_humidity'] = 100 * np.exp((17.625 * (df_copy['d2m'] - 273.15)) / 
                                                       (243.04 + (df_copy['d2m'] - 273.15))) / \
@@ -385,7 +385,7 @@ def create_features(df):
                                                (243.04 + (df_copy['t2m'] - 273.15)))
         df_copy['relative_humidity'] = df_copy['relative_humidity'].clip(0, 100)
     
-    # 风向分类
+    # Wind direction category
     if 'wind_dir_10m' in df_copy:
         df_copy['wind_dir_category'] = pd.cut(df_copy['wind_dir_10m'], 
                                                 bins=[0, 45, 90, 135, 180, 225, 270, 315, 360],
@@ -394,20 +394,20 @@ def create_features(df):
     
     return df_copy
 
-# ============================== 第4部分: 序列数据准备 ==============================
+# ============================== Part 4: Sequence Data Preparation ==============================
 def create_sequences(X, y, lookback):
     """
-    将时间序列数据转换为LSTM输入格式
+    Convert time series data to LSTM input format
     
-    参数:
-        X: 特征数据 (DataFrame)
-        y: 目标数据 (Series)
-        lookback: 序列长度（回望天数）
+    Args:
+        X: Feature data (DataFrame)
+        y: Target data (Series)
+        lookback: Sequence length (lookback days)
     
-    返回:
-        X_seq: 3D数组 [samples, lookback, features]
-        y_seq: 1D数组 [samples]
-        indices: 对应的日期索引
+    Returns:
+        X_seq: 3D array [samples, lookback, features]
+        y_seq: 1D array [samples]
+        indices: Corresponding date indices
     """
     X_seq, y_seq, indices = [], [], []
     
@@ -420,15 +420,15 @@ def create_sequences(X, y, lookback):
 
 def prepare_data_for_lstm(X, y, lookback, train_ratio=0.7, val_ratio=0.15):
     """
-    为LSTM准备数据集
+    Prepare dataset for LSTM
     
-    返回:
-        字典包含训练集、验证集、测试集的DataLoader和索引
+    Returns:
+        Dictionary containing DataLoaders and indices for train, val, test sets
     """
-    # 创建序列
+    # Create sequences
     X_seq, y_seq, indices = create_sequences(X, y, lookback)
     
-    # 按时间顺序划分
+    # Split by time order
     n_samples = len(X_seq)
     train_size = int(n_samples * train_ratio)
     val_size = int(n_samples * val_ratio)
@@ -445,11 +445,11 @@ def prepare_data_for_lstm(X, y, lookback, train_ratio=0.7, val_ratio=0.15):
     idx_val = indices[train_size:train_size + val_size]
     idx_test = indices[train_size + val_size:]
     
-    # 标准化
+    # Standardization
     scaler_X = StandardScaler()
     scaler_y = StandardScaler()
     
-    # 重塑为2D进行标准化
+    # Reshape to 2D for standardization
     X_train_2d = X_train.reshape(-1, X_train.shape[-1])
     X_train_scaled = scaler_X.fit_transform(X_train_2d).reshape(X_train.shape)
     
@@ -463,7 +463,7 @@ def prepare_data_for_lstm(X, y, lookback, train_ratio=0.7, val_ratio=0.15):
     y_val_scaled = scaler_y.transform(y_val.reshape(-1, 1)).flatten()
     y_test_scaled = scaler_y.transform(y_test.reshape(-1, 1)).flatten()
     
-    # 转换为张量
+    # Convert to tensors
     X_train_tensor = torch.FloatTensor(X_train_scaled)
     y_train_tensor = torch.FloatTensor(y_train_scaled)
     
@@ -473,7 +473,7 @@ def prepare_data_for_lstm(X, y, lookback, train_ratio=0.7, val_ratio=0.15):
     X_test_tensor = torch.FloatTensor(X_test_scaled)
     y_test_tensor = torch.FloatTensor(y_test_scaled)
     
-    # 创建DataLoader
+    # Create DataLoaders
     train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
     val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
     test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
@@ -495,9 +495,9 @@ def prepare_data_for_lstm(X, y, lookback, train_ratio=0.7, val_ratio=0.15):
         'y_test': y_test
     }
 
-# ============================== 第5部分: LSTM + Attention 模型定义 ==============================
+# ============================== Part 5: LSTM + Attention Model Definition ==============================
 class Attention(nn.Module):
-    """注意力机制层"""
+    """Attention mechanism layer"""
     def __init__(self, hidden_size):
         super(Attention, self).__init__()
         self.attention = nn.Linear(hidden_size, 1)
@@ -507,14 +507,14 @@ class Attention(nn.Module):
         attention_weights = torch.softmax(self.attention(lstm_output), dim=1)
         # attention_weights: [batch, seq_len, 1]
         
-        # 加权求和
+        # Weighted sum
         context = torch.sum(attention_weights * lstm_output, dim=1)
         # context: [batch, hidden_size]
         
         return context, attention_weights
 
 class LSTMAttentionModel(nn.Module):
-    """LSTM + Attention模型"""
+    """LSTM + Attention model"""
     def __init__(self, input_size, hidden_size, num_layers, dropout=0.2):
         super(LSTMAttentionModel, self).__init__()
         
@@ -533,7 +533,7 @@ class LSTMAttentionModel(nn.Module):
         self.fc = nn.Linear(hidden_size, 1)
         self.dropout = nn.Dropout(dropout)
         
-        # 存储注意力权重用于分析
+        # Store attention weights for analysis
         self.last_attention_weights = None
         
     def forward(self, x):
@@ -544,7 +544,7 @@ class LSTMAttentionModel(nn.Module):
         context, attention_weights = self.attention(lstm_out)
         # context: [batch, hidden_size]
         
-        # 保存注意力权重
+        # Save attention weights
         self.last_attention_weights = attention_weights.detach()
         
         out = self.dropout(context)
@@ -553,13 +553,13 @@ class LSTMAttentionModel(nn.Module):
         
         return out.squeeze()
 
-# ============================== 第6部分: 训练和评估函数 ==============================
+# ============================== Part 6: Training and Evaluation Functions ==============================
 def train_model(model, train_loader, val_loader, epochs, learning_rate, patience=20, verbose=True):
     """
-    训练LSTM模型
+    Train LSTM model
     
-    返回:
-        训练历史（损失曲线）和最佳模型状态
+    Returns:
+        Training history (loss curves) and best model state
     """
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -571,7 +571,7 @@ def train_model(model, train_loader, val_loader, epochs, learning_rate, patience
     best_model_state = None
     
     for epoch in range(epochs):
-        # 训练阶段
+        # Training phase
         model.train()
         train_loss = 0
         for X_batch, y_batch in train_loader:
@@ -588,7 +588,7 @@ def train_model(model, train_loader, val_loader, epochs, learning_rate, patience
         train_loss /= len(train_loader.dataset)
         train_losses.append(train_loss)
         
-        # 验证阶段
+        # Validation phase
         model.eval()
         val_loss = 0
         with torch.no_grad():
@@ -601,7 +601,7 @@ def train_model(model, train_loader, val_loader, epochs, learning_rate, patience
         val_loss /= len(val_loader.dataset)
         val_losses.append(val_loss)
         
-        # 早停检查
+        # Early stopping check
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
@@ -614,10 +614,10 @@ def train_model(model, train_loader, val_loader, epochs, learning_rate, patience
         
         if patience_counter >= patience:
             if verbose:
-                print(f"  早停于Epoch {epoch+1}")
+                print(f"  Early stopping at Epoch {epoch+1}")
             break
     
-    # 恢复最佳模型
+    # Restore best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
     
@@ -629,7 +629,7 @@ def train_model(model, train_loader, val_loader, epochs, learning_rate, patience
     }
 
 def evaluate_model(model, data_loader, scaler_y, y_true):
-    """评估模型性能"""
+    """Evaluate model performance"""
     model.eval()
     predictions = []
     
@@ -641,10 +641,10 @@ def evaluate_model(model, data_loader, scaler_y, y_true):
     
     predictions = np.concatenate(predictions)
     
-    # 反标准化
+    # Denormalize
     predictions = scaler_y.inverse_transform(predictions.reshape(-1, 1)).flatten()
     
-    # 计算指标
+    # Calculate metrics
     r2 = r2_score(y_true, predictions)
     rmse = np.sqrt(mean_squared_error(y_true, predictions))
     mae = mean_absolute_error(y_true, predictions)
@@ -660,10 +660,10 @@ def evaluate_model(model, data_loader, scaler_y, y_true):
 
 def extract_attention_importance(model, data_loader, feature_names):
     """
-    提取注意力权重作为特征重要性
+    Extract attention weights as feature importance
     
-    返回:
-        特征重要性DataFrame
+    Returns:
+        Feature importance DataFrame
     """
     model.eval()
     all_attention_weights = []
@@ -673,84 +673,84 @@ def extract_attention_importance(model, data_loader, feature_names):
             X_batch = X_batch.to(device)
             _ = model(X_batch)
             
-            # 获取注意力权重 [batch, seq_len, 1]
+            # Get attention weights [batch, seq_len, 1]
             attn_weights = model.last_attention_weights.cpu().numpy()
             all_attention_weights.append(attn_weights)
     
-    # 合并所有批次
+    # Merge all batches
     all_attention_weights = np.concatenate(all_attention_weights, axis=0)
-    # 形状: [total_samples, seq_len, 1]
+    # Shape: [total_samples, seq_len, 1]
     
-    # 对时间步求平均，得到每个样本的特征重要性
-    # 这里我们计算所有样本的平均注意力权重
+    # Average over time steps to get feature importance for each sample
+    # Here we calculate average attention weights for all samples
     avg_attention = all_attention_weights.mean(axis=0).squeeze()  # [seq_len]
     
-    # 由于LSTM看的是整个序列，我们为每个特征分配相等的注意力权重
-    # 更准确的方法是使用特征级注意力，但这里简化处理
+    # Since LSTM looks at entire sequence, assign equal attention weight to each feature
+    # More accurate method is feature-level attention, but simplified here
     feature_importance = np.ones(len(feature_names)) * avg_attention.mean()
     
-    # 创建DataFrame
+    # Create DataFrame
     importance_df = pd.DataFrame({
         'Feature': feature_names,
-        'Importance': feature_importance / feature_importance.sum() * 100  # 归一化为百分比
+        'Importance': feature_importance / feature_importance.sum() * 100  # Normalize to percentage
     })
     
     importance_df = importance_df.sort_values('Importance', ascending=False).reset_index(drop=True)
     
     return importance_df
 
-# ============================== 第7部分: 数据加载和预处理 ==============================
+# ============================== Part 7: Data Loading and Preprocessing ==============================
 print("\n" + "=" * 80)
-print("第1步: 数据加载和预处理")
+print("Step 1: Data Loading and Preprocessing")
 print("=" * 80)
 
 df_pollution = read_all_pollution()
 df_era5 = read_all_era5()
 
-print("\n数据加载检查:")
-print(f"  污染数据形状: {df_pollution.shape}")
-print(f"  气象数据形状: {df_era5.shape}")
+print("\nData loading check:")
+print(f"  Pollution data shape: {df_pollution.shape}")
+print(f"  Meteorological data shape: {df_era5.shape}")
 
 if df_pollution.empty or df_era5.empty:
-    print("\n⚠️ 错误: 数据加载失败！")
+    print("\n⚠️ Error: Data loading failed!")
     import sys
     sys.exit(1)
 
-# 确保索引是datetime类型
+# Ensure index is datetime type
 df_pollution.index = pd.to_datetime(df_pollution.index)
 df_era5.index = pd.to_datetime(df_era5.index)
 
-print(f"  污染数据时间范围: {df_pollution.index.min()} 至 {df_pollution.index.max()}")
-print(f"  气象数据时间范围: {df_era5.index.min()} 至 {df_era5.index.max()}")
+print(f"  Pollution data time range: {df_pollution.index.min()} to {df_pollution.index.max()}")
+print(f"  Meteorological data time range: {df_era5.index.min()} to {df_era5.index.max()}")
 
-# 合并数据
-print("\n正在合并数据...")
+# Merge data
+print("\nMerging data...")
 df_combined = df_pollution.join(df_era5, how='inner')
 
 if df_combined.empty:
-    print("\n❌ 错误: 数据合并后为空！")
+    print("\n❌ Error: Data is empty after merging!")
     import sys
     sys.exit(1)
 
-# 创建特征
-print("\n正在创建特征...")
+# Create features
+print("\nCreating features...")
 df_combined = create_features(df_combined)
 
-# 清理数据
-print("\n正在清理数据...")
+# Clean data
+print("\nCleaning data...")
 df_combined.replace([np.inf, -np.inf], np.nan, inplace=True)
 initial_rows = len(df_combined)
 df_combined.dropna(inplace=True)
 final_rows = len(df_combined)
-print(f"删除了 {initial_rows - final_rows} 行包含缺失值的数据")
+print(f"Removed {initial_rows - final_rows} rows containing missing values")
 
-print(f"\n合并后数据形状: {df_combined.shape}")
-print(f"时间范围: {df_combined.index.min().date()} 至 {df_combined.index.max().date()}")
-print(f"样本数: {len(df_combined)}")
+print(f"\nMerged data shape: {df_combined.shape}")
+print(f"Time range: {df_combined.index.min().date()} to {df_combined.index.max().date()}")
+print(f"Number of samples: {len(df_combined)}")
 
-# ============================== 第8部分: 特征选择 ==============================
+# ============================== Part 8: Feature Selection ==============================
 print("\n" + "=" * 80)
-print("第2步: 特征选择")
+print("Step 2: Feature Selection")
 print("=" * 80)
 
 target = 'PM2.5'
@@ -759,41 +759,41 @@ exclude_cols = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3', 'year']
 numeric_features = [col for col in df_combined.select_dtypes(include=[np.number]).columns 
                     if col not in exclude_cols]
 
-print(f"\n选择的特征数量: {len(numeric_features)}")
-print(f"目标变量: {target}")
+print(f"\nNumber of selected features: {len(numeric_features)}")
+print(f"Target variable: {target}")
 
 X = df_combined[numeric_features].copy()
 y = df_combined[target].copy()
 
-print(f"\n特征矩阵形状: {X.shape}")
-print(f"目标变量形状: {y.shape}")
+print(f"\nFeature matrix shape: {X.shape}")
+print(f"Target variable shape: {y.shape}")
 
-print(f"\nPM2.5统计信息:")
-print(f"  均值: {y.mean():.2f} μg/m³")
-print(f"  标准差: {y.std():.2f} μg/m³")
-print(f"  范围: [{y.min():.2f}, {y.max():.2f}] μg/m³")
+print(f"\nPM2.5 Statistics:")
+print(f"  Mean: {y.mean():.2f} μg/m³")
+print(f"  Std Dev: {y.std():.2f} μg/m³")
+print(f"  Range: [{y.min():.2f}, {y.max():.2f}] μg/m³")
 
-# ============================== 第9部分: 为多个序列长度准备数据 ==============================
+# ============================== Part 9: Prepare Data for Multiple Sequence Lengths ==============================
 print("\n" + "=" * 80)
-print("第3步: 为多个序列长度准备数据")
+print("Step 3: Preparing Data for Multiple Sequence Lengths")
 print("=" * 80)
 
 datasets = {}
 for lookback in SEQUENCE_LENGTHS:
-    print(f"\n准备序列长度={lookback}天的数据...")
+    print(f"\nPreparing data for sequence length={lookback} days...")
     data_dict = prepare_data_for_lstm(X, y, lookback)
     datasets[lookback] = data_dict
     
-    print(f"  训练集: {len(data_dict['train_idx'])} 样本")
-    print(f"  验证集: {len(data_dict['val_idx'])} 样本")
-    print(f"  测试集: {len(data_dict['test_idx'])} 样本")
+    print(f"  Training set: {len(data_dict['train_idx'])} samples")
+    print(f"  Validation set: {len(data_dict['val_idx'])} samples")
+    print(f"  Test set: {len(data_dict['test_idx'])} samples")
 
-# ============================== 第10部分: 训练基础模型 ==============================
+# ============================== Part 10: Training Basic Models ==============================
 print("\n" + "=" * 80)
-print("第4步: 训练基础LSTM模型")
+print("Step 4: Training Basic LSTM Models")
 print("=" * 80)
 
-# 基础参数
+# Basic parameters
 basic_params = {
     'hidden_size': 64,
     'num_layers': 2,
@@ -801,7 +801,7 @@ basic_params = {
     'learning_rate': 0.001
 }
 
-print(f"\n基础模型参数: {basic_params}")
+print(f"\nBasic model parameters: {basic_params}")
 
 basic_models = {}
 basic_histories = {}
@@ -809,7 +809,7 @@ basic_results = []
 
 for lookback in SEQUENCE_LENGTHS:
     print(f"\n{'='*60}")
-    print(f"训练序列长度={lookback}天的基础模型")
+    print(f"Training basic model for sequence length={lookback} days")
     print(f"{'='*60}")
     
     data = datasets[lookback]
@@ -822,7 +822,7 @@ for lookback in SEQUENCE_LENGTHS:
         dropout=basic_params['dropout']
     ).to(device)
     
-    print(f"模型参数量: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     history = train_model(
         model=model,
@@ -837,8 +837,8 @@ for lookback in SEQUENCE_LENGTHS:
     basic_models[lookback] = model
     basic_histories[lookback] = history
     
-    # 评估
-    print(f"\n评估序列长度={lookback}天的基础模型:")
+    # Evaluation
+    print(f"\nEvaluating basic model for sequence length={lookback} days:")
     
     train_eval = evaluate_model(model, data['train_loader'], data['scaler_y'], data['y_train'])
     val_eval = evaluate_model(model, data['val_loader'], data['scaler_y'], data['y_val'])
@@ -874,17 +874,17 @@ for lookback in SEQUENCE_LENGTHS:
         'MAPE': test_eval['MAPE']
     })
     
-    print(f"  训练集 - R²: {train_eval['R²']:.4f}, RMSE: {train_eval['RMSE']:.2f}")
-    print(f"  验证集 - R²: {val_eval['R²']:.4f}, RMSE: {val_eval['RMSE']:.2f}")
-    print(f"  测试集 - R²: {test_eval['R²']:.4f}, RMSE: {test_eval['RMSE']:.2f}")
+    print(f"  Training set - R²: {train_eval['R²']:.4f}, RMSE: {train_eval['RMSE']:.2f}")
+    print(f"  Validation set - R²: {val_eval['R²']:.4f}, RMSE: {val_eval['RMSE']:.2f}")
+    print(f"  Test set - R²: {test_eval['R²']:.4f}, RMSE: {test_eval['RMSE']:.2f}")
 
 basic_results_df = pd.DataFrame(basic_results)
-print("\n基础模型性能汇总:")
+print("\nBasic model performance summary:")
 print(basic_results_df.to_string(index=False))
 
-# ============================== 第11部分: 网格搜索超参数优化 ==============================
+# ============================== Part 11: Grid Search Hyperparameter Optimization ==============================
 print("\n" + "=" * 80)
-print("第5步: 网格搜索超参数优化")
+print("Step 5: Grid Search Hyperparameter Optimization")
 print("=" * 80)
 
 param_grid = {
@@ -895,8 +895,8 @@ param_grid = {
 }
 
 total_combinations = int(np.prod([len(v) for v in param_grid.values()]))
-print(f"参数网格: {param_grid}")
-print(f"总共 {total_combinations} 种参数组合")
+print(f"Parameter grid: {param_grid}")
+print(f"Total {total_combinations} parameter combinations")
 
 best_params_per_seq = {}
 optimized_models = {}
@@ -905,7 +905,7 @@ optimized_results = []
 
 for lookback in SEQUENCE_LENGTHS:
     print(f"\n{'='*60}")
-    print(f"优化序列长度={lookback}天的模型")
+    print(f"Optimizing model for sequence length={lookback} days")
     print(f"{'='*60}")
     
     data = datasets[lookback]
@@ -918,10 +918,10 @@ for lookback in SEQUENCE_LENGTHS:
     param_combos = list(product(*param_grid.values()))
     
     if TQDM_AVAILABLE:
-        iterator = tqdm(param_combos, desc=f"网格搜索(Seq{lookback})", unit="组合")
+        iterator = tqdm(param_combos, desc=f"Grid search (Seq{lookback})", unit="combo")
     else:
         iterator = param_combos
-        print(f"开始网格搜索...")
+        print(f"Starting grid search...")
     
     for i, (hidden_size, num_layers, dropout, lr) in enumerate(iterator):
         model = LSTMAttentionModel(
@@ -931,14 +931,14 @@ for lookback in SEQUENCE_LENGTHS:
             dropout=dropout
         ).to(device)
         
-        # 训练（使用较少的epoch和patience以加快搜索）
+        # Train (use fewer epochs and patience to speed up search)
         history = train_model(
             model=model,
             train_loader=data['train_loader'],
             val_loader=data['val_loader'],
-            epochs=50,  # 减少epoch
+            epochs=50,  # Reduce epochs
             learning_rate=lr,
-            patience=10,  # 减少patience
+            patience=10,  # Reduce patience
             verbose=False
         )
         
@@ -955,17 +955,17 @@ for lookback in SEQUENCE_LENGTHS:
             best_model_state = model.state_dict().copy()
         
         if not TQDM_AVAILABLE and (i + 1) % 10 == 0:
-            print(f"  已测试 {i+1}/{total_combinations} 组合，当前最佳RMSE: {best_val_rmse:.4f}")
+            print(f"  Tested {i+1}/{total_combinations} combinations, current best RMSE: {best_val_rmse:.4f}")
     
     best_params_per_seq[lookback] = best_params
     
-    print(f"\n序列长度={lookback}天的最佳参数:")
+    print(f"\nBest parameters for sequence length={lookback} days:")
     for key, value in best_params.items():
         print(f"  {key}: {value}")
-    print(f"  最佳验证RMSE: {best_val_rmse:.4f}")
+    print(f"  Best validation RMSE: {best_val_rmse:.4f}")
     
-    # 使用最佳参数重新训练完整模型
-    print(f"\n使用最佳参数重新训练...")
+    # Retrain complete model with best parameters
+    print(f"\nRetraining with best parameters...")
     model_opt = LSTMAttentionModel(
         input_size=input_size,
         hidden_size=best_params['hidden_size'],
@@ -986,8 +986,8 @@ for lookback in SEQUENCE_LENGTHS:
     optimized_models[lookback] = model_opt
     optimized_histories[lookback] = history_opt
     
-    # 评估优化模型
-    print(f"\n评估序列长度={lookback}天的优化模型:")
+    # Evaluate optimized model
+    print(f"\nEvaluating optimized model for sequence length={lookback} days:")
     
     train_eval = evaluate_model(model_opt, data['train_loader'], data['scaler_y'], data['y_train'])
     val_eval = evaluate_model(model_opt, data['val_loader'], data['scaler_y'], data['y_val'])
@@ -1023,43 +1023,43 @@ for lookback in SEQUENCE_LENGTHS:
         'MAPE': test_eval['MAPE']
     })
     
-    print(f"  训练集 - R²: {train_eval['R²']:.4f}, RMSE: {train_eval['RMSE']:.2f}")
-    print(f"  验证集 - R²: {val_eval['R²']:.4f}, RMSE: {val_eval['RMSE']:.2f}")
-    print(f"  测试集 - R²: {test_eval['R²']:.4f}, RMSE: {test_eval['RMSE']:.2f}")
+    print(f"  Training set - R²: {train_eval['R²']:.4f}, RMSE: {train_eval['RMSE']:.2f}")
+    print(f"  Validation set - R²: {val_eval['R²']:.4f}, RMSE: {val_eval['RMSE']:.2f}")
+    print(f"  Test set - R²: {test_eval['R²']:.4f}, RMSE: {test_eval['RMSE']:.2f}")
 
 optimized_results_df = pd.DataFrame(optimized_results)
-print("\n优化模型性能汇总:")
+print("\nOptimized model performance summary:")
 print(optimized_results_df.to_string(index=False))
 
-# ============================== 第12部分: 模型比较 ==============================
+# ============================== Part 12: Model Comparison ==============================
 print("\n" + "=" * 80)
-print("第6步: 模型性能比较")
+print("Step 6: Model Performance Comparison")
 print("=" * 80)
 
 all_results = pd.concat([basic_results_df, optimized_results_df])
-print("\n所有模型性能对比:")
+print("\nAll models performance comparison:")
 print(all_results.to_string(index=False))
 
-# 测试集性能排名
+# Test set performance ranking
 test_results = all_results[all_results['Dataset'] == 'Test'].sort_values('R²', ascending=False)
-print("\n测试集性能排名:")
+print("\nTest set performance ranking:")
 print(test_results.to_string(index=False))
 
-# 找出最佳模型
+# Find best model
 best_model_info = test_results.iloc[0]
-print(f"\n最佳模型: {best_model_info['Model']}")
-print(f"  序列长度: {best_model_info['Sequence_Length']}天")
+print(f"\nBest model: {best_model_info['Model']}")
+print(f"  Sequence length: {best_model_info['Sequence_Length']} days")
 print(f"  R² Score: {best_model_info['R²']:.4f}")
 print(f"  RMSE: {best_model_info['RMSE']:.2f} μg/m³")
 print(f"  MAE: {best_model_info['MAE']:.2f} μg/m³")
 print(f"  MAPE: {best_model_info['MAPE']:.2f}%")
 
-# ============================== 第13部分: Attention特征重要性分析 ==============================
+# ============================== Part 13: Attention Feature Importance Analysis ==============================
 print("\n" + "=" * 80)
-print("第7步: Attention特征重要性分析")
+print("Step 7: Attention Feature Importance Analysis")
 print("=" * 80)
 
-# 使用最佳模型提取特征重要性
+# Use best model to extract feature importance
 best_seq_length = int(best_model_info['Sequence_Length'])
 best_model = optimized_models[best_seq_length]
 best_data = datasets[best_seq_length]
@@ -1070,56 +1070,56 @@ feature_importance = extract_attention_importance(
     feature_names=numeric_features
 )
 
-print(f"\nTop 20 重要特征 (基于Attention权重):")
+print(f"\nTop 20 important features (based on Attention weights):")
 print(feature_importance.head(20).to_string(index=False))
 
-# ============================== 第14部分: 可视化 ==============================
+# ============================== Part 14: Visualization ==============================
 print("\n" + "=" * 80)
-print("第8步: 生成可视化图表")
+print("Step 8: Generating Visualization Charts")
 print("=" * 80)
 
-# 14.1 训练曲线
+# 14.1 Training curves
 fig, axes = plt.subplots(2, 3, figsize=(20, 12))
 
 for idx, lookback in enumerate(SEQUENCE_LENGTHS):
-    # 基础模型
+    # Basic model
     row = 0
     col = idx
     ax = axes[row, col]
     
     history = basic_histories[lookback]
-    ax.plot(history['train_losses'], label='训练集', linewidth=2)
-    ax.plot(history['val_losses'], label='验证集', linewidth=2)
+    ax.plot(history['train_losses'], label='Training Set', linewidth=2)
+    ax.plot(history['val_losses'], label='Validation Set', linewidth=2)
     ax.axvline(x=history['best_epoch'], color='r', linestyle='--', 
-               label=f'最佳Epoch({history["best_epoch"]})', linewidth=1.5)
+               label=f'Best Epoch({history["best_epoch"]})', linewidth=1.5)
     ax.set_xlabel('Epoch', fontsize=11)
     ax.set_ylabel('Loss (MSE)', fontsize=11)
-    ax.set_title(f'基础模型 - Seq{lookback}天', fontsize=12, fontweight='bold')
+    ax.set_title(f'Basic Model - Seq{lookback} days', fontsize=12, fontweight='bold')
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
     
-    # 优化模型
+    # Optimized model
     row = 1
     ax = axes[row, col]
     
     history = optimized_histories[lookback]
-    ax.plot(history['train_losses'], label='训练集', linewidth=2)
-    ax.plot(history['val_losses'], label='验证集', linewidth=2)
+    ax.plot(history['train_losses'], label='Training Set', linewidth=2)
+    ax.plot(history['val_losses'], label='Validation Set', linewidth=2)
     ax.axvline(x=history['best_epoch'], color='r', linestyle='--',
-               label=f'最佳Epoch({history["best_epoch"]})', linewidth=1.5)
+               label=f'Best Epoch({history["best_epoch"]})', linewidth=1.5)
     ax.set_xlabel('Epoch', fontsize=11)
     ax.set_ylabel('Loss (MSE)', fontsize=11)
-    ax.set_title(f'优化模型 - Seq{lookback}天', fontsize=12, fontweight='bold')
+    ax.set_title(f'Optimized Model - Seq{lookback} days', fontsize=12, fontweight='bold')
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.savefig(output_dir / 'training_curves.png', dpi=300, bbox_inches='tight')
-print("保存: training_curves.png")
+print("Saved: training_curves.png")
 plt.close()
 
-# 14.2 预测vs实际值散点图
-n_models = len(SEQUENCE_LENGTHS) * 2  # 基础 + 优化
+# 14.2 Prediction vs actual scatter plots
+n_models = len(SEQUENCE_LENGTHS) * 2  # Basic + Optimized
 n_datasets = 3  # train, val, test
 fig, axes = plt.subplots(n_models, n_datasets, figsize=(18, n_models * 5))
 
@@ -1127,7 +1127,7 @@ plot_row = 0
 for lookback in SEQUENCE_LENGTHS:
     data = datasets[lookback]
     
-    # 基础模型
+    # Basic model
     model = basic_models[lookback]
     for col_idx, (loader_name, y_true) in enumerate([
         ('train_loader', data['y_train']),
@@ -1142,11 +1142,11 @@ for lookback in SEQUENCE_LENGTHS:
         
         min_val = min(y_true.min(), y_pred.min())
         max_val = max(y_true.max(), y_pred.max())
-        ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='理想预测线')
+        ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Ideal Prediction')
         
         dataset_name = ['Train', 'Val', 'Test'][col_idx]
-        ax.set_xlabel('实际PM2.5浓度 (μg/m³)', fontsize=10)
-        ax.set_ylabel('预测PM2.5浓度 (μg/m³)', fontsize=10)
+        ax.set_xlabel('Actual PM2.5 Concentration (μg/m³)', fontsize=10)
+        ax.set_ylabel('Predicted PM2.5 Concentration (μg/m³)', fontsize=10)
         ax.set_title(f'Basic_Seq{lookback} - {dataset_name}\nR²={eval_result["R²"]:.4f}, RMSE={eval_result["RMSE"]:.2f}', 
                      fontsize=10, fontweight='bold')
         ax.legend(fontsize=8)
@@ -1154,7 +1154,7 @@ for lookback in SEQUENCE_LENGTHS:
     
     plot_row += 1
     
-    # 优化模型
+    # Optimized model
     model = optimized_models[lookback]
     for col_idx, (loader_name, y_true) in enumerate([
         ('train_loader', data['y_train']),
@@ -1169,11 +1169,11 @@ for lookback in SEQUENCE_LENGTHS:
         
         min_val = min(y_true.min(), y_pred.min())
         max_val = max(y_true.max(), y_pred.max())
-        ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='理想预测线')
+        ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Ideal Prediction')
         
         dataset_name = ['Train', 'Val', 'Test'][col_idx]
-        ax.set_xlabel('实际PM2.5浓度 (μg/m³)', fontsize=10)
-        ax.set_ylabel('预测PM2.5浓度 (μg/m³)', fontsize=10)
+        ax.set_xlabel('Actual PM2.5 Concentration (μg/m³)', fontsize=10)
+        ax.set_ylabel('Predicted PM2.5 Concentration (μg/m³)', fontsize=10)
         ax.set_title(f'Optimized_Seq{lookback} - {dataset_name}\nR²={eval_result["R²"]:.4f}, RMSE={eval_result["RMSE"]:.2f}', 
                      fontsize=10, fontweight='bold')
         ax.legend(fontsize=8)
@@ -1183,10 +1183,10 @@ for lookback in SEQUENCE_LENGTHS:
 
 plt.tight_layout()
 plt.savefig(output_dir / 'prediction_scatter.png', dpi=300, bbox_inches='tight')
-print("保存: prediction_scatter.png")
+print("Saved: prediction_scatter.png")
 plt.close()
 
-# 14.3 时间序列预测对比（最佳模型）
+# 14.3 Time series prediction comparison (best model)
 best_seq_length = int(best_model_info['Sequence_Length'])
 best_data = datasets[best_seq_length]
 
@@ -1205,11 +1205,11 @@ for idx, lookback in enumerate(SEQUENCE_LENGTHS):
     time_idx = pd.DatetimeIndex(data['test_idx'])[plot_idx]
     
     ax = axes[idx]
-    ax.plot(time_idx, y_true[plot_idx], 'k-', label='实际值', linewidth=2, alpha=0.8)
-    ax.plot(time_idx, y_pred[plot_idx], 'r--', label='LSTM预测', linewidth=1.5, alpha=0.7)
-    ax.set_xlabel('日期', fontsize=12)
-    ax.set_ylabel('PM2.5浓度 (μg/m³)', fontsize=12)
-    ax.set_title(f'LSTM Seq{lookback}天 - 时间序列预测对比（测试集最后{plot_range}天）\nR²={eval_result["R²"]:.4f}, RMSE={eval_result["RMSE"]:.2f}', 
+    ax.plot(time_idx, y_true[plot_idx], 'k-', label='Actual', linewidth=2, alpha=0.8)
+    ax.plot(time_idx, y_pred[plot_idx], 'r--', label='LSTM Prediction', linewidth=1.5, alpha=0.7)
+    ax.set_xlabel('Date', fontsize=12)
+    ax.set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
+    ax.set_title(f'LSTM Seq{lookback} days - Time Series Prediction Comparison (Last {plot_range} days of Test Set)\nR²={eval_result["R²"]:.4f}, RMSE={eval_result["RMSE"]:.2f}', 
                  fontsize=13, fontweight='bold')
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
@@ -1217,17 +1217,17 @@ for idx, lookback in enumerate(SEQUENCE_LENGTHS):
 
 plt.tight_layout()
 plt.savefig(output_dir / 'timeseries_comparison.png', dpi=300, bbox_inches='tight')
-print("保存: timeseries_comparison.png")
+print("Saved: timeseries_comparison.png")
 plt.close()
 
-# 14.4 残差分析
+# 14.4 Residual analysis
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
 plot_row = 0
 for lookback in SEQUENCE_LENGTHS:
     data = datasets[lookback]
     
-    # 基础模型
+    # Basic model
     model = basic_models[lookback]
     eval_result = evaluate_model(model, data['test_loader'], data['scaler_y'], data['y_test'])
     residuals = data['y_test'] - eval_result['predictions']
@@ -1235,9 +1235,9 @@ for lookback in SEQUENCE_LENGTHS:
     ax = axes[plot_row, 0] if plot_row == 0 else axes[plot_row, 0]
     ax.scatter(eval_result['predictions'], residuals, alpha=0.5, s=20, edgecolors='black', linewidth=0.3)
     ax.axhline(y=0, color='r', linestyle='--', linewidth=2)
-    ax.set_xlabel('预测值 (μg/m³)', fontsize=11)
-    ax.set_ylabel('残差 (μg/m³)', fontsize=11)
-    ax.set_title(f'Basic_Seq{lookback} - Test\n残差均值={residuals.mean():.2f}, 标准差={residuals.std():.2f}', 
+    ax.set_xlabel('Predicted Value (μg/m³)', fontsize=11)
+    ax.set_ylabel('Residual (μg/m³)', fontsize=11)
+    ax.set_title(f'Basic_Seq{lookback} - Test\nMean Residual={residuals.mean():.2f}, Std={residuals.std():.2f}', 
                  fontsize=11, fontweight='bold')
     ax.grid(True, alpha=0.3)
     
@@ -1247,7 +1247,7 @@ plot_row = 0
 for lookback in SEQUENCE_LENGTHS:
     data = datasets[lookback]
     
-    # 优化模型
+    # Optimized model
     model = optimized_models[lookback]
     eval_result = evaluate_model(model, data['test_loader'], data['scaler_y'], data['y_test'])
     residuals = data['y_test'] - eval_result['predictions']
@@ -1256,13 +1256,13 @@ for lookback in SEQUENCE_LENGTHS:
     ax = axes[1, col]
     ax.scatter(eval_result['predictions'], residuals, alpha=0.5, s=20, edgecolors='black', linewidth=0.3)
     ax.axhline(y=0, color='r', linestyle='--', linewidth=2)
-    ax.set_xlabel('预测值 (μg/m³)', fontsize=11)
-    ax.set_ylabel('残差 (μg/m³)', fontsize=11)
-    ax.set_title(f'Optimized_Seq{lookback} - Test\n残差均值={residuals.mean():.2f}, 标准差={residuals.std():.2f}', 
+    ax.set_xlabel('Predicted Value (μg/m³)', fontsize=11)
+    ax.set_ylabel('Residual (μg/m³)', fontsize=11)
+    ax.set_title(f'Optimized_Seq{lookback} - Test\nMean Residual={residuals.mean():.2f}, Std={residuals.std():.2f}', 
                  fontsize=11, fontweight='bold')
     ax.grid(True, alpha=0.3)
 
-# 基础模型残差
+# Basic model residuals
 for idx, lookback in enumerate(SEQUENCE_LENGTHS):
     data = datasets[lookback]
     model = basic_models[lookback]
@@ -1272,18 +1272,18 @@ for idx, lookback in enumerate(SEQUENCE_LENGTHS):
     ax = axes[0, idx]
     ax.scatter(eval_result['predictions'], residuals, alpha=0.5, s=20, edgecolors='black', linewidth=0.3)
     ax.axhline(y=0, color='r', linestyle='--', linewidth=2)
-    ax.set_xlabel('预测值 (μg/m³)', fontsize=11)
-    ax.set_ylabel('残差 (μg/m³)', fontsize=11)
-    ax.set_title(f'Basic_Seq{lookback} - Test\n残差均值={residuals.mean():.2f}, 标准差={residuals.std():.2f}', 
+    ax.set_xlabel('Predicted Value (μg/m³)', fontsize=11)
+    ax.set_ylabel('Residual (μg/m³)', fontsize=11)
+    ax.set_title(f'Basic_Seq{lookback} - Test\nMean Residual={residuals.mean():.2f}, Std={residuals.std():.2f}', 
                  fontsize=11, fontweight='bold')
     ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.savefig(output_dir / 'residuals_analysis.png', dpi=300, bbox_inches='tight')
-print("保存: residuals_analysis.png")
+print("Saved: residuals_analysis.png")
 plt.close()
 
-# 14.5 特征重要性图
+# 14.5 Feature importance plot
 fig, ax = plt.subplots(1, 1, figsize=(12, 10))
 
 top_n = 20
@@ -1292,17 +1292,17 @@ top_features = feature_importance.head(top_n)
 ax.barh(range(top_n), top_features['Importance'], color='steelblue')
 ax.set_yticks(range(top_n))
 ax.set_yticklabels(top_features['Feature'], fontsize=10)
-ax.set_xlabel('重要性 (%)', fontsize=12)
-ax.set_title(f'Top {top_n} 重要特征 (基于Attention权重)', fontsize=13, fontweight='bold')
+ax.set_xlabel('Importance (%)', fontsize=12)
+ax.set_title(f'Top {top_n} Important Features (Based on Attention Weights)', fontsize=13, fontweight='bold')
 ax.grid(True, alpha=0.3, axis='x')
 ax.invert_yaxis()
 
 plt.tight_layout()
 plt.savefig(output_dir / 'feature_importance.png', dpi=300, bbox_inches='tight')
-print("保存: feature_importance.png")
+print("Saved: feature_importance.png")
 plt.close()
 
-# 14.6 模型性能对比柱状图
+# 14.6 Model performance comparison bar charts
 fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
 test_results_sorted = test_results.copy()
@@ -1319,13 +1319,13 @@ for i, metric in enumerate(metrics):
     axes[i].set_ylabel(metric, fontsize=12)
     
     if metric == 'R²':
-        axes[i].set_title(f'{metric} 对比\n(越大越好)', fontsize=12, fontweight='bold')
+        axes[i].set_title(f'{metric} Comparison\n(Higher is Better)', fontsize=12, fontweight='bold')
     else:
-        axes[i].set_title(f'{metric} 对比\n(越小越好)', fontsize=12, fontweight='bold')
+        axes[i].set_title(f'{metric} Comparison\n(Lower is Better)', fontsize=12, fontweight='bold')
     
     axes[i].grid(True, alpha=0.3, axis='y')
     
-    # 显示数值
+    # Display values
     for j, v in enumerate(test_results_sorted[metric]):
         if metric == 'MAPE':
             axes[i].text(j, v, f'{v:.1f}%', ha='center', va='bottom', 
@@ -1336,64 +1336,64 @@ for i, metric in enumerate(metrics):
 
 plt.tight_layout()
 plt.savefig(output_dir / 'model_comparison.png', dpi=300, bbox_inches='tight')
-print("保存: model_comparison.png")
+print("Saved: model_comparison.png")
 plt.close()
 
-# 14.7 误差分布直方图
+# 14.7 Error distribution histograms
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
 for idx, lookback in enumerate(SEQUENCE_LENGTHS):
     data = datasets[lookback]
     
-    # 基础模型
+    # Basic model
     model = basic_models[lookback]
     eval_result = evaluate_model(model, data['test_loader'], data['scaler_y'], data['y_test'])
     errors = data['y_test'] - eval_result['predictions']
     
     ax = axes[0, idx]
     ax.hist(errors, bins=50, color='blue', alpha=0.7, edgecolor='black')
-    ax.axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='零误差')
-    ax.set_xlabel('预测误差 (μg/m³)', fontsize=11)
-    ax.set_ylabel('频数', fontsize=11)
-    ax.set_title(f'Basic_Seq{lookback} - 误差分布\n均值={errors.mean():.2f}, 标准差={errors.std():.2f}', 
+    ax.axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='Zero Error')
+    ax.set_xlabel('Prediction Error (μg/m³)', fontsize=11)
+    ax.set_ylabel('Frequency', fontsize=11)
+    ax.set_title(f'Basic_Seq{lookback} - Error Distribution\nMean={errors.mean():.2f}, Std={errors.std():.2f}', 
                  fontsize=11, fontweight='bold')
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3, axis='y')
     
-    # 优化模型
+    # Optimized model
     model = optimized_models[lookback]
     eval_result = evaluate_model(model, data['test_loader'], data['scaler_y'], data['y_test'])
     errors = data['y_test'] - eval_result['predictions']
     
     ax = axes[1, idx]
     ax.hist(errors, bins=50, color='green', alpha=0.7, edgecolor='black')
-    ax.axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='零误差')
-    ax.set_xlabel('预测误差 (μg/m³)', fontsize=11)
-    ax.set_ylabel('频数', fontsize=11)
-    ax.set_title(f'Optimized_Seq{lookback} - 误差分布\n均值={errors.mean():.2f}, 标准差={errors.std():.2f}', 
+    ax.axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='Zero Error')
+    ax.set_xlabel('Prediction Error (μg/m³)', fontsize=11)
+    ax.set_ylabel('Frequency', fontsize=11)
+    ax.set_title(f'Optimized_Seq{lookback} - Error Distribution\nMean={errors.mean():.2f}, Std={errors.std():.2f}', 
                  fontsize=11, fontweight='bold')
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout()
 plt.savefig(output_dir / 'error_distribution.png', dpi=300, bbox_inches='tight')
-print("保存: error_distribution.png")
+print("Saved: error_distribution.png")
 plt.close()
 
-# ============================== 第15部分: 保存结果 ==============================
+# ============================== Part 15: Save Results ==============================
 print("\n" + "=" * 80)
-print("第9步: 保存结果")
+print("Step 9: Saving Results")
 print("=" * 80)
 
-# 保存模型性能
+# Save model performance
 all_results.to_csv(output_dir / 'model_performance.csv', index=False, encoding='utf-8-sig')
-print("保存: model_performance.csv")
+print("Saved: model_performance.csv")
 
-# 保存特征重要性
+# Save feature importance
 feature_importance.to_csv(output_dir / 'feature_importance.csv', index=False, encoding='utf-8-sig')
-print("保存: feature_importance.csv")
+print("Saved: feature_importance.csv")
 
-# 保存最佳参数
+# Save best parameters
 best_params_list = []
 for lookback, params in best_params_per_seq.items():
     params_copy = params.copy()
@@ -1402,9 +1402,9 @@ for lookback, params in best_params_per_seq.items():
 
 best_params_df = pd.DataFrame(best_params_list)
 best_params_df.to_csv(output_dir / 'best_parameters.csv', index=False, encoding='utf-8-sig')
-print("保存: best_parameters.csv")
+print("Saved: best_parameters.csv")
 
-# 保存预测结果（最佳模型）
+# Save predictions (best model)
 best_seq_length = int(best_model_info['Sequence_Length'])
 best_data = datasets[best_seq_length]
 best_model = optimized_models[best_seq_length]
@@ -1418,56 +1418,55 @@ predictions_df = pd.DataFrame({
     'Error': best_data['y_test'] - test_eval['predictions']
 })
 predictions_df.to_csv(output_dir / 'predictions.csv', index=False, encoding='utf-8-sig')
-print("保存: predictions.csv")
+print("Saved: predictions.csv")
 
-# 保存模型
+# Save models
 for lookback in SEQUENCE_LENGTHS:
     model_path = model_dir / f'lstm_optimized_seq{lookback}.pth'
     torch.save(optimized_models[lookback].state_dict(), model_path)
-    print(f"保存: lstm_optimized_seq{lookback}.pth")
+    print(f"Saved: lstm_optimized_seq{lookback}.pth")
 
-# ============================== 第16部分: 总结报告 ==============================
+# ============================== Part 16: Summary Report ==============================
 print("\n" + "=" * 80)
-print("分析完成！")
+print("Analysis Complete!")
 print("=" * 80)
 
-print("\n生成的文件:")
-print("\nCSV文件:")
-print("  - model_performance.csv       模型性能对比")
-print("  - feature_importance.csv      特征重要性（Attention权重）")
-print("  - best_parameters.csv         各序列长度的最佳参数")
-print("  - predictions.csv             预测结果（最佳模型）")
+print("\nGenerated files:")
+print("\nCSV files:")
+print("  - model_performance.csv       Model performance comparison")
+print("  - feature_importance.csv      Feature importance (Attention weights)")
+print("  - best_parameters.csv         Best parameters for each sequence length")
+print("  - predictions.csv             Prediction results (best model)")
 
-print("\n图表文件:")
-print("  - training_curves.png         训练过程曲线")
-print("  - prediction_scatter.png      预测vs实际散点图")
-print("  - timeseries_comparison.png   时间序列对比")
-print("  - residuals_analysis.png      残差分析")
-print("  - feature_importance.png      Attention特征重要性图")
-print("  - model_comparison.png        模型性能对比")
-print("  - error_distribution.png      误差分布")
+print("\nChart files:")
+print("  - training_curves.png         Training process curves")
+print("  - prediction_scatter.png      Prediction vs actual scatter plots")
+print("  - timeseries_comparison.png   Time series comparison")
+print("  - residuals_analysis.png      Residual analysis")
+print("  - feature_importance.png      Attention feature importance plot")
+print("  - model_comparison.png        Model performance comparison")
+print("  - error_distribution.png      Error distribution")
 
-print("\n模型文件:")
+print("\nModel files:")
 for lookback in SEQUENCE_LENGTHS:
-    print(f"  - lstm_optimized_seq{lookback}.pth      LSTM模型（Seq{lookback}天）")
+    print(f"  - lstm_optimized_seq{lookback}.pth      LSTM model (Seq{lookback} days)")
 
-print(f"\n最佳模型: {best_model_info['Model']}")
-print(f"  序列长度: {best_model_info['Sequence_Length']}天")
+print(f"\nBest model: {best_model_info['Model']}")
+print(f"  Sequence length: {best_model_info['Sequence_Length']} days")
 print(f"  R² Score: {best_model_info['R²']:.4f}")
 print(f"  RMSE: {best_model_info['RMSE']:.2f} μg/m³")
 print(f"  MAE: {best_model_info['MAE']:.2f} μg/m³")
 print(f"  MAPE: {best_model_info['MAPE']:.2f}%")
 
-print("\nTop 5 最重要特征 (基于Attention权重):")
+print("\nTop 5 most important features (based on Attention weights):")
 for i, row in feature_importance.head(5).iterrows():
     print(f"  {row['Feature']}: {row['Importance']:.2f}%")
 
-print("\n序列长度对比:")
+print("\nSequence length comparison:")
 for lookback in SEQUENCE_LENGTHS:
     seq_results = test_results[test_results['Sequence_Length'] == lookback].iloc[0]
-    print(f"  Seq{lookback}天: R²={seq_results['R²']:.4f}, RMSE={seq_results['RMSE']:.2f}")
+    print(f"  Seq{lookback} days: R²={seq_results['R²']:.4f}, RMSE={seq_results['RMSE']:.2f}")
 
 print("\n" + "=" * 80)
-print("LSTM + Attention PM2.5浓度预测完成！")
+print("LSTM + Attention PM2.5 Concentration Prediction Complete!")
 print("=" * 80)
-

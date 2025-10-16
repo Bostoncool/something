@@ -1,5 +1,5 @@
 # =======================
-# 环境、路径、并行读取工具
+# Environment, Paths, Parallel Reading Tools
 # =======================
 import os
 import re
@@ -20,32 +20,32 @@ from sklearn.decomposition import PCA
 
 warnings.filterwarnings("ignore")
 
-# ---- 路径（请按需修改）----
+# ---- Paths (please modify as needed) ----
 ROOT_POLL_ALL  = r"C:\Users\IU\Desktop\Datebase Origin\Benchmark\all(AQI+PM2.5+PM10)"
 ROOT_POLL_EXTRA= r"C:\Users\IU\Desktop\Datebase Origin\Benchmark\extra(SO2+NO2+CO+O3)"
 ROOT_ERA5      = r"C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-CSV"
 
-# 日期范围
+# Date range
 DATE_START = "2015-01-01"
 DATE_END   = "2024-12-31"
 
-# ERA5 北京范围（按你给的经纬度）
-LON_MIN, LON_MAX = 115.25, 117.50  # 经度
-LAT_MIN, LAT_MAX = 39.43, 41.05    # 纬度
+# ERA5 Beijing range (based on your provided latitude/longitude)
+LON_MIN, LON_MAX = 115.25, 117.50  # Longitude
+LAT_MIN, LAT_MAX = 39.43, 41.05    # Latitude
 
-# Matplotlib/中文/期刊风格
+# Matplotlib/font/journal style
 mpl.rcParams["font.sans-serif"] = ["SimHei", "Noto Sans CJK SC", "Arial"]
 mpl.rcParams["axes.unicode_minus"] = False
 mpl.rcParams["figure.dpi"] = 140
 mpl.rcParams["savefig.dpi"] = 140
 mpl.rcParams["font.size"] = 11
 sns.set_context("talk")
-# Nature风格倾向：留白、简洁、网格弱化
+# Nature style: white space, simplicity, weakened grid
 sns.set_style("white")
-NATURE_CMAP = sns.color_palette("rocket", as_cmap=True)  # 简洁高对比但不过饱和
+NATURE_CMAP = sns.color_palette("rocket", as_cmap=True)  # Simple high contrast but not oversaturated
 
 def _try_read_csv(path, **kwargs):
-    """解决Unicode中英编码兼容的健壮读取器：优先utf-8，其次gbk，再尝试latin1。"""
+    """Robust CSV reader for Unicode encoding compatibility: prioritizes utf-8, then gbk, then latin1."""
     encodings = ["utf-8", "utf-8-sig", "gbk", "gb2312", "latin1"]
     last_err = None
     for enc in encodings:
@@ -56,14 +56,14 @@ def _try_read_csv(path, **kwargs):
     raise last_err
 
 def list_files_by_regex(folder, pattern=r".*\.csv$"):
-    """列出目录下匹配正则的CSV文件（递归搜索子目录）。"""
+    """List CSV files matching regex in directory (recursively search subdirectories)."""
     folder = Path(folder)
     if not folder.exists():
         return []
     return sorted([str(p) for p in folder.rglob("*.csv") if re.match(pattern, p.name)])
 
 def read_csv_parallel(file_list, parse_dates=None, usecols=None, dtype=None):
-    """并行读取一批CSV，自动忽略损坏文件。"""
+    """Read a batch of CSV files in parallel, automatically ignoring corrupted files."""
     dfs = []
     if not file_list:
         return dfs
@@ -77,20 +77,20 @@ def read_csv_parallel(file_list, parse_dates=None, usecols=None, dtype=None):
                 if df is not None and len(df) > 0:
                     dfs.append(df)
             except Exception:
-                # 某些坏文件直接跳过
+                # Skip some corrupted files
                 pass
     return dfs
 
 def robust_numeric(df):
-    """将可转为数值的列转为float，其余保持原状。"""
+    """Convert columns that can be converted to numeric to float, keep others as is."""
     for c in df.columns:
         if df[c].dtype == object:
-            # 尝试转数值
+            # Try to convert to numeric
             df[c] = pd.to_numeric(df[c], errors="ignore")
     return df
 
 def clip_outliers(df, cols, z=4.0):
-    """按Z分数裁剪极值/异常，提升稳定性。"""
+    """Clip outliers/extremes by Z-score to improve stability."""
     for c in cols:
         if c in df.columns:
             series = pd.to_numeric(df[c], errors="coerce")
@@ -103,31 +103,31 @@ def clip_outliers(df, cols, z=4.0):
     return df
 
 def assert_single_date_index(df, date_col="date"):
-    """确保日期为DatetimeIndex（日尺度），并去重聚合。"""
+    """Ensure date is DatetimeIndex (daily scale), and deduplicate/aggregate."""
     if date_col in df.columns:
         df[date_col] = pd.to_datetime(df[date_col])
         df = df.set_index(date_col)
     if not isinstance(df.index, pd.DatetimeIndex):
-        # 兜底：尝试从可能的列名中识别
+        # Fallback: try to identify from possible column names
         for cand in ["time", "Time", "date", "Date", "日期"]:
             if cand in df.columns:
                 df[cand] = pd.to_datetime(df[cand])
                 df = df.set_index(cand)
                 break
     df = df.sort_index()
-    # 统一到逐日
+    # Unify to daily
     df = df.groupby(pd.Grouper(freq="1D")).mean(numeric_only=True)
     return df.loc[DATE_START:DATE_END]
 # =======================
-# 读取与清洗：污染数据
+# Read and Clean: Pollution Data
 # =======================
-# 文件名样式：
-#   beijing_all_YYYYMMDD.csv  （含 PM2.5 / PM10 / 也可能混入AQI）
-#   beijing_extra_YYYYMMDD.csv（含 SO2 / NO2 / CO / O3）
-# 切记：排除任何 AQI 相关字段
-AIM_POLL_COLS = ["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"]  # 只保留这6类
+# File name pattern:
+#   beijing_all_YYYYMMDD.csv  (contains PM2.5 / PM10 / may also include AQI)
+#   beijing_extra_YYYYMMDD.csv (contains SO2 / NO2 / CO / O3)
+# Remember: exclude any AQI related fields
+AIM_POLL_COLS = ["PM2.5", "PM10", "SO2", "NO2", "CO", "O3"]  # Only keep these 6 types
 
-# 列出文件
+# List files
 files_all   = list_files_by_regex(ROOT_POLL_ALL,   r"^beijing_all_\d{8}\.csv$")
 files_extra = list_files_by_regex(ROOT_POLL_EXTRA, r"^beijing_extra_\d{8}\.csv$")
 

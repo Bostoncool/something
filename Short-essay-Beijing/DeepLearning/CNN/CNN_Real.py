@@ -12,21 +12,21 @@ import torch.backends.cudnn as cudnn
 from torch.amp import autocast, GradScaler
 import torch.nn.functional as F
 
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # 用黑体显示中文
-plt.rcParams['axes.unicode_minus'] = False  # 正常显示负号
+# Set English fonts
+plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'sans-serif']
+plt.rcParams['axes.unicode_minus'] = False
 
 
 def setup_cudnn():
-    """设置cuDNN以优化性能"""
+    """Configure cuDNN for performance optimization"""
     cudnn.enabled = True
     cudnn.benchmark = True
-    print("\ncuDNN配置信息:")
-    print(f"cuDNN是否可用: {cudnn.is_available()}")
-    print(f"cuDNN版本: {cudnn.version()}")
-    print(f"benchmark模式: {cudnn.benchmark}")
+    print("\ncuDNN Configuration:")
+    print(f"cuDNN available: {cudnn.is_available()}")
+    print(f"cuDNN version: {cudnn.version()}")
+    print(f"Benchmark mode: {cudnn.benchmark}")
 
-# 自定义数据集类
+# Custom dataset class
 class TifDataset(Dataset):
     def __init__(self, image_paths, labels, transform=None):
         self.image_paths = image_paths
@@ -37,9 +37,9 @@ class TifDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        # 读取TIF图像
+        # Read TIF image
         image = Image.open(self.image_paths[idx])
-        # print(f"图像模式: {image.mode}, 图像大小: {image.size}")  # 添加调试信息
+        # print(f"Image mode: {image.mode}, Image size: {image.size}")  # Debug info
         label = self.labels[idx]
 
         if self.transform:
@@ -47,16 +47,16 @@ class TifDataset(Dataset):
 
         return image, label
 
-# 定义改进的CNN模型
+# Define improved CNN model
 class CNNRegressor(nn.Module):
     def __init__(self, dropout_rate=0.5):
         super(CNNRegressor, self).__init__()
         
-        # 使用改进的卷积层架构
+        # Use improved convolutional layer architecture
         self.conv_layers = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32, momentum=0.9),
-            nn.SiLU(inplace=True),  # 替换ReLU为SiLU(Swish)激活函数
+            nn.SiLU(inplace=True),  # Replace ReLU with SiLU (Swish) activation
             nn.MaxPool2d(2),
             
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
@@ -69,16 +69,16 @@ class CNNRegressor(nn.Module):
             nn.SiLU(inplace=True),
             nn.MaxPool2d(2),
             
-            nn.Conv2d(128, 256, kernel_size=3, padding=1),  # 增加一层
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),  # Add one layer
             nn.BatchNorm2d(256, momentum=0.9),
             nn.SiLU(inplace=True),
             nn.MaxPool2d(2),
         )
         
-        # 计算卷积后的特征图大小
-        self.feature_size = 256 * 8 * 8  # 128x128 -> 8x8 经过4次下采样
+        # Calculate feature map size after convolution
+        self.feature_size = 256 * 8 * 8  # 128x128 -> 8x8 after 4 downsampling operations
         
-        # 优化的全连接层
+        # Optimized fully connected layers
         self.fc_layers = nn.Sequential(
             nn.Linear(self.feature_size, 512),
             nn.BatchNorm1d(512, momentum=0.9),
@@ -88,16 +88,16 @@ class CNNRegressor(nn.Module):
             nn.Linear(512, 128),
             nn.BatchNorm1d(128, momentum=0.9),
             nn.SiLU(inplace=True),
-            nn.Dropout(dropout_rate * 0.8),  # 逐渐减少dropout
+            nn.Dropout(dropout_rate * 0.8),  # Gradually reduce dropout
             
             nn.Linear(128, 1)
         )
         
-        # 权重初始化
+        # Weight initialization
         self._initialize_weights()
     
     def _initialize_weights(self):
-        # 使用Kaiming初始化来优化SiLU激活函数的权重
+        # Use Kaiming initialization for SiLU activation function weights
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -113,103 +113,103 @@ class CNNRegressor(nn.Module):
         x = self.fc_layers(x)
         return x
 
-# 数据加载和预处理函数
+# Data loading and preprocessing function
 def load_data(data_dir):
     image_paths = []
     labels = []
     
-    # 遍历数据目录获取图像路径和标签
+    # Traverse data directory to get image paths and labels
     for filename in os.listdir(data_dir):
         if filename.endswith('.tif'):
             image_paths.append(os.path.join(data_dir, filename))
             
-            # 提取文件名中的example部分
+            # Extract example part from filename
             example = filename.split('_')[3]
             
-            # 根据长度判断标签类型
+            # Determine label type based on length
             if len(example) == 4:
-                # 可能是年份
+                # Probably year
                 label = float(example)
             elif len(example) == 6:
-                # 可能是月份
+                # Probably month
                 label = float(example)
             elif len(example) == 8:
-                # 可能是日期
+                # Probably date
                 label = float(example)
             else:
                 raise ValueError(f"Unexpected format in filename: {filename}")
             
             labels.append(label)
     
-    # 将标签转换为numpy数组并进行标准化
+    # Convert labels to numpy array and normalize
     labels = np.array(labels)
     labels = (labels - np.mean(labels)) / np.std(labels)
     
     return image_paths, labels.tolist()
 
-# 训练函数
+# Training function
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs, device):
     train_losses = []
     val_losses = []
     best_val_loss = float('inf')
     
-    # 初始化混合精度训练的scaler
+    # Initialize scaler for mixed precision training
     scaler = GradScaler('cuda')
     
-    # 确保模型在训练模式
+    # Ensure model is in training mode
     model.train()
-    print("\n确认模型训练模式:", model.training)
+    print("\nConfirm model training mode:", model.training)
     
-    # 打印CUDA信息
+    # Print CUDA information
     if torch.cuda.is_available():
-        print(f"CUDA版本: {torch.version.cuda}")
-        print(f"当前设备: {torch.cuda.get_device_name(0)}")
-        print(f"显存使用: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
-        print(f"显存缓存: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"Current device: {torch.cuda.get_device_name(0)}")
+        print(f"Memory usage: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
+        print(f"Memory cached: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
     
     torch.cuda.synchronize()
     
-    # 学习率预热
+    # Learning rate warmup
     warmup_epochs = 5
     
     for epoch in range(num_epochs):
         epoch_start_time = time.time()
         
-        # 训练阶段
+        # Training phase
         model.train()
         running_loss = 0.0
         batch_times = []
         
-        # 预热GPU
+        # Warmup GPU
         if epoch == 0:
-            print("预热GPU...")
+            print("Warming up GPU...")
             warmup_tensor = torch.randn(32, 1, 128, 128).to(device)
             with torch.no_grad():
                 for _ in range(10):
                     model(warmup_tensor)
             torch.cuda.synchronize()
         
-        # 学习率预热
+        # Learning rate warmup
         if epoch < warmup_epochs:
-            # 线性预热
+            # Linear warmup
             warmup_factor = (epoch + 1) / warmup_epochs
             for param_group in optimizer.param_groups:
                 param_group['lr'] = param_group['initial_lr'] * warmup_factor
-            print(f"学习率预热: {optimizer.param_groups[0]['lr']:.6f}")
+            print(f"Learning rate warmup: {optimizer.param_groups[0]['lr']:.6f}")
         
         for batch_idx, (images, labels) in enumerate(train_loader):
             batch_start_time = time.time()
             
-            # 将数据移动到GPU
+            # Move data to GPU
             images = images.to(device, non_blocking=True)
             labels = labels.float().to(device, non_blocking=True)
             
-            # 使用混合精度训练
+            # Use mixed precision training
             with autocast('cuda'):
                 outputs = model(images)
                 loss = criterion(outputs.squeeze(), labels)
             
-            # 使用scaler进行反向传播
+            # Backward pass using scaler
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -217,10 +217,10 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             scaler.step(optimizer)
             scaler.update()
             
-            # 记录损失
+            # Record loss
             running_loss += loss.item()
             
-            # 计算批次时间
+            # Calculate batch time
             torch.cuda.synchronize()
             batch_time = time.time() - batch_start_time
             batch_times.append(batch_time)
@@ -231,15 +231,15 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
                       f'Batch Time: {batch_time:.3f}s '
                       f'GPU Memory: {torch.cuda.memory_allocated(0) / 1024**2:.2f}MB')
             
-            # 定期清理缓存
+            # Regular cache cleanup
             if batch_idx % 30 == 0:
                 torch.cuda.empty_cache()
         
-        # 计算训练集平均损失
+        # Calculate average training loss
         epoch_train_loss = running_loss / len(train_loader)
         train_losses.append(epoch_train_loss)
         
-        # 验证阶段
+        # Validation phase
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -253,11 +253,11 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         epoch_val_loss = val_loss / len(val_loader)
         val_losses.append(epoch_val_loss)
         
-        # 更新学习率（预热期后）
+        # Update learning rate (after warmup period)
         if epoch >= warmup_epochs:
             scheduler.step(epoch_val_loss)
         
-        # 保存最佳模型
+        # Save best model
         if epoch_val_loss < best_val_loss:
             best_val_loss = epoch_val_loss
             torch.save({
@@ -267,49 +267,49 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
                 'scheduler_state_dict': scheduler.state_dict(),
                 'val_loss': best_val_loss,
             }, 'best_model.pth')
-            print(f"已保存新的最佳模型，验证损失: {best_val_loss:.4f}")
+            print(f"Saved new best model, validation loss: {best_val_loss:.4f}")
         
-        # 打印epoch统计信息
+        # Print epoch statistics
         epoch_time = time.time() - epoch_start_time
         avg_batch_time = sum(batch_times) / len(batch_times)
         
-        print(f'\nEpoch {epoch+1} 统计:')
-        print(f'训练损失: {epoch_train_loss:.4f}')
-        print(f'验证损失: {epoch_val_loss:.4f}')
-        print(f'总耗时: {epoch_time:.2f}s')
-        print(f'平均批次时间: {avg_batch_time:.3f}s')
-        print(f'当前学习率: {optimizer.param_groups[0]["lr"]:.6f}')
-        print(f'GPU显存使用: {torch.cuda.memory_allocated(0) / 1024**2:.2f}MB')
-        print(f'GPU显存缓存: {torch.cuda.memory_reserved(0) / 1024**2:.2f}MB')
+        print(f'\nEpoch {epoch+1} Statistics:')
+        print(f'Training loss: {epoch_train_loss:.4f}')
+        print(f'Validation loss: {epoch_val_loss:.4f}')
+        print(f'Total time: {epoch_time:.2f}s')
+        print(f'Average batch time: {avg_batch_time:.3f}s')
+        print(f'Current learning rate: {optimizer.param_groups[0]["lr"]:.6f}')
+        print(f'GPU memory usage: {torch.cuda.memory_allocated(0) / 1024**2:.2f}MB')
+        print(f'GPU memory cached: {torch.cuda.memory_reserved(0) / 1024**2:.2f}MB')
         
-        # 清理GPU缓存
+        # Clean GPU cache
         if epoch % 5 == 0:
             torch.cuda.empty_cache()
     
     return train_losses, val_losses
 
 def main():
-    # 设置随机种子
+    # Set random seed
     torch.manual_seed(42)
     np.random.seed(42)
     
-    # 设置cuDNN
+    # Setup cuDNN
     setup_cudnn()
     
-    # 检查CUDA是否可用
-    print("CUDA是否可用:", torch.cuda.is_available())
+    # Check if CUDA is available
+    print("CUDA available:", torch.cuda.is_available())
     if torch.cuda.is_available():
-        print("当前CUDA设备:", torch.cuda.get_device_name(0))
-        print("CUDA设备数量:", torch.cuda.device_count())
+        print("Current CUDA device:", torch.cuda.get_device_name(0))
+        print("CUDA device count:", torch.cuda.device_count())
     
     if not torch.cuda.is_available():
-        raise RuntimeError("需要CUDA支持才能运行此程序！请确保您的GPU已正确配置。")
+        raise RuntimeError("CUDA support is required to run this program! Please ensure your GPU is properly configured.")
     
-    # 设置设备
+    # Set device
     device = torch.device('cuda')
-    print("使用的设备:", device)
+    print("Using device:", device)
     
-    # 增强的数据预处理
+    # Enhanced data preprocessing
     transform = transforms.Compose([
         transforms.Resize((128, 128)),
         transforms.Grayscale(num_output_channels=1),
@@ -322,7 +322,7 @@ def main():
         transforms.Normalize(mean=[0.5], std=[0.5])
     ])
     
-    # 验证集使用更简单的转换
+    # Validation set uses simpler transformations
     val_transform = transforms.Compose([
         transforms.Resize((128, 128)),
         transforms.Grayscale(num_output_channels=1),
@@ -330,37 +330,37 @@ def main():
         transforms.Normalize(mean=[0.5], std=[0.5])
     ])
     
-    # 加载数据
+    # Load data
     data_dir = r"F:\2000"
-    print("正在加载数据从:", data_dir)
+    print("Loading data from:", data_dir)
     image_paths, labels = load_data(data_dir)
-    print("找到的图像数量:", len(image_paths))
-    print("标签值范围:", min(labels), "到", max(labels))
+    print("Number of images found:", len(image_paths))
+    print("Label value range:", min(labels), "to", max(labels))
     
     if len(image_paths) == 0:
-        raise RuntimeError("没有找到任何.tif文件！请检查数据目录路径是否正确。")
+        raise RuntimeError("No .tif files found! Please check if the data directory path is correct.")
     
-    # 划分训练集和验证集
+    # Split training and validation sets
     train_paths, val_paths, train_labels, val_labels = train_test_split(
         image_paths, labels, test_size=0.2, random_state=42
     )
-    print("训练集大小:", len(train_paths))
-    print("验证集大小:", len(val_paths))
+    print("Training set size:", len(train_paths))
+    print("Validation set size:", len(val_paths))
     
-    # 创建数据加载器
+    # Create data loaders
     train_dataset = TifDataset(train_paths, train_labels, transform=transform)
     val_dataset = TifDataset(val_paths, val_labels, transform=val_transform)
     
-    # 修改数据加载器配置 - 使用更优的配置
+    # Modify data loader configuration - use better configuration
     train_loader = DataLoader(
         train_dataset,
         batch_size=16,
         shuffle=True,
         num_workers=7, 
         pin_memory=True,
-        prefetch_factor=3, # 预取因子
+        prefetch_factor=3, # Prefetch factor
         persistent_workers=True,
-        drop_last=True  # 丢弃最后不完整的批次
+        drop_last=True  # Drop last incomplete batch
     )
     val_loader = DataLoader(
         val_dataset,
@@ -372,81 +372,81 @@ def main():
         persistent_workers=True
     )
     
-    print(f"\n数据加载器配置:")
-    print(f"训练集大小: {len(train_dataset)}")
-    print(f"验证集大小: {len(val_dataset)}")
-    print(f"训练批次数: {len(train_loader)}")
-    print(f"验证批次数: {len(val_loader)}")
-    print(f"批次大小: 16")
+    print(f"\nData loader configuration:")
+    print(f"Training set size: {len(train_dataset)}")
+    print(f"Validation set size: {len(val_dataset)}")
+    print(f"Training batches: {len(train_loader)}")
+    print(f"Validation batches: {len(val_loader)}")
+    print(f"Batch size: 16")
     
     try:
-        # 测试数据加载器
-        print("\n测试数据加载:")
+        # Test data loader
+        print("\nTesting data loading:")
         test_batch = next(iter(train_loader))
-        print(f"测试批次形状: {test_batch[0].shape}")
-        print(f"测试标签形状: {test_batch[1].shape}")
+        print(f"Test batch shape: {test_batch[0].shape}")
+        print(f"Test label shape: {test_batch[1].shape}")
         
-        # 初始化改进的模型
+        # Initialize improved model
         model = CNNRegressor(dropout_rate=0.5).to(device)
-        print("\n模型结构:")
+        print("\nModel structure:")
         print(model)
         
-        # 计算模型参数量
+        # Calculate model parameters
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"\n模型总参数量: {total_params:,}")
-        print(f"可训练参数量: {trainable_params:,}")
+        print(f"\nTotal model parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
         
-        # 使用改进的损失函数 - Huber损失结合MSE
+        # Use improved loss function - Huber loss combined with MSE
         criterion = nn.HuberLoss(delta=0.1)
         
-        # 使用AdamW优化器 - 更好的权重衰减处理
+        # Use AdamW optimizer - better weight decay handling
         optimizer = torch.optim.AdamW(
             model.parameters(), 
-            lr=0.01,  # 降低初始学习率
-            weight_decay=1e-3,  # 增加权重衰减
-            betas=(0.9, 0.999),  # 使用AdamW的默认参数
-            eps=1e-8  # 增加epsilon以防止除零
+            lr=0.01,  # Lower initial learning rate
+            weight_decay=1e-3,  # Increase weight decay
+            betas=(0.9, 0.999),  # Use AdamW default parameters
+            eps=1e-8  # Increase epsilon to prevent division by zero
         )
         
-        # 保存初始学习率以用于预热
+        # Save initial learning rate for warmup
         for param_group in optimizer.param_groups:
             param_group['initial_lr'] = param_group['lr']
         
-        # 改进的学习率调度器
+        # Improved learning rate scheduler
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='min', factor=0.5, patience=8, 
             min_lr=1e-6, verbose=True
         )
         
-        # 训练模型
-        num_epochs = 5  # 增加训练轮数
-        print("\n开始训练...")
+        # Train model
+        num_epochs = 5  # Increase training epochs
+        print("\nStarting training...")
         train_losses, val_losses = train_model(
             model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs, device
         )
         
-        # 绘制损失曲线
+        # Plot loss curves
         plt.figure(figsize=(12, 6))
-        plt.plot(train_losses, label='训练损失')
-        plt.plot(val_losses, label='验证损失')
-        plt.xlabel('轮次')
-        plt.ylabel('损失')
-        plt.title('训练和验证损失曲线')
+        plt.plot(train_losses, label='Training Loss')
+        plt.plot(val_losses, label='Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('Training and Validation Loss Curves')
         plt.legend()
         plt.grid(True)
         plt.savefig('training_loss.png')
         plt.show()
         
-        # 加载最佳模型进行测试
-        print("\n加载最佳模型进行测试...")
+        # Load best model for testing
+        print("\nLoading best model for testing...")
         checkpoint = torch.load('best_model.pth')
         model.load_state_dict(checkpoint['model_state_dict'])
         best_epoch = checkpoint['epoch']
         best_loss = checkpoint['val_loss']
-        print(f"最佳模型来自第 {best_epoch+1} 轮, 验证损失: {best_loss:.4f}")
+        print(f"Best model from epoch {best_epoch+1}, validation loss: {best_loss:.4f}")
         
-        # 在验证集上进行最终评估
+        # Final evaluation on validation set
         model.eval()
         val_loss = 0.0
         predictions = []
@@ -460,29 +460,29 @@ def main():
                 loss = criterion(outputs.squeeze(), labels)
                 val_loss += loss.item()
                 
-                # 收集预测和真实值
+                # Collect predictions and true values
                 predictions.extend(outputs.squeeze().cpu().numpy())
                 true_values.extend(labels.cpu().numpy())
         
         final_val_loss = val_loss / len(val_loader)
-        print(f"最终验证损失: {final_val_loss:.4f}")
+        print(f"Final validation loss: {final_val_loss:.4f}")
         
-        # 绘制预测vs真实值散点图
+        # Plot prediction vs true value scatter plot
         plt.figure(figsize=(10, 8))
         plt.scatter(true_values, predictions, alpha=0.5)
         plt.plot([min(true_values), max(true_values)], [min(true_values), max(true_values)], 'r--')
-        plt.xlabel('真实值')
-        plt.ylabel('预测值')
-        plt.title('预测值vs真实值')
+        plt.xlabel('True Value')
+        plt.ylabel('Predicted Value')
+        plt.title('Predicted vs True Values')
         plt.grid(True)
         plt.savefig('predictions.png')
         plt.show()
         
     except Exception as e:
-        print(f"\n训练过程中出现错误:")
-        print(f"错误类型: {type(e).__name__}")
-        print(f"错误信息: {str(e)}")
+        print(f"\nError occurred during training:")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
         raise
 
 if __name__ == '__main__':
-    main() 
+    main()

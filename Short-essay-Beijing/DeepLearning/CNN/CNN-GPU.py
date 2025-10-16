@@ -1,21 +1,21 @@
 """
-北京PM2.5浓度预测 - 2D CNN模型 (GPU加速版本)
-使用2D卷积神经网络进行时间序列预测
+Beijing PM2.5 Concentration Prediction - 2D CNN Model (GPU Accelerated Version)
+Using 2D Convolutional Neural Network for time series prediction
 
-特点:
-- 2D CNN架构，将时间窗口和特征作为二维图像处理
-- GPU加速训练，支持混合精度训练（AMP）
-- 动态批次大小调整，根据GPU显存自动优化
-- 使用30天历史数据预测当天PM2.5浓度
-- 支持超参数优化（贝叶斯优化）
-- 梯度×输入方法分析特征重要性
-- 完整的模型评估和可视化
+Features:
+- 2D CNN architecture, treating time window and features as 2D images
+- GPU accelerated training with mixed precision training (AMP)
+- Dynamic batch size adjustment based on GPU memory
+- Uses 30 days of historical data to predict current day PM2.5 concentration
+- Supports hyperparameter optimization (Bayesian optimization)
+- Gradient×Input method for feature importance analysis
+- Complete model evaluation and visualization
 
-数据来源:
-- 污染数据: Benchmark数据集 (PM2.5, PM10, SO2, NO2, CO, O3)
-- 气象数据: ERA5再分析数据
+Data Sources:
+- Pollution data: Benchmark dataset (PM2.5, PM10, SO2, NO2, CO, O3)
+- Meteorological data: ERA5 reanalysis data
 
-注意: 此版本需要GPU支持。如需使用CPU，请运行CNN-CPU.py
+Note: This version requires GPU support. For CPU version, please run CNN-CPU.py
 """
 
 import os
@@ -33,132 +33,132 @@ import time
 
 warnings.filterwarnings('ignore')
 
-# PyTorch相关
+# PyTorch related
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.cuda.amp import autocast, GradScaler
 
-# 获取CPU核心数
+# Get CPU core count
 CPU_COUNT = multiprocessing.cpu_count()
 MAX_WORKERS = max(4, CPU_COUNT - 1)
 
-# 尝试导入tqdm进度条
+# Try to import tqdm progress bar
 try:
     from tqdm import tqdm
     TQDM_AVAILABLE = True
 except ImportError:
     TQDM_AVAILABLE = False
-    print("提示: tqdm未安装，进度显示将使用简化版本。")
-    print("      可使用 'pip install tqdm' 安装以获得更好的进度条显示。")
+    print("Note: tqdm not installed, progress display will use simplified version.")
+    print("      Use 'pip install tqdm' to get better progress bar display.")
 
-# 机器学习库
+# Machine learning libraries
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
 
-# 贝叶斯优化 (可选)
+# Bayesian optimization (optional)
 try:
     from bayes_opt import BayesianOptimization
     BAYESIAN_OPT_AVAILABLE = True
 except ImportError:
-    print("提示: bayesian-optimization未安装，将使用网格搜索。")
-    print("      可使用 'pip install bayesian-optimization' 安装以启用贝叶斯优化。")
+    print("Note: bayesian-optimization not installed, will use grid search.")
+    print("      Use 'pip install bayesian-optimization' to enable Bayesian optimization.")
     BAYESIAN_OPT_AVAILABLE = False
 
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+# Set English fonts
+plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'sans-serif']
 plt.rcParams['axes.unicode_minus'] = False
 plt.rcParams['figure.dpi'] = 100
 
-# 设置随机种子
+# Set random seed
 np.random.seed(42)
 torch.manual_seed(42)
 
 print("=" * 80)
-print("北京PM2.5浓度预测 - 2D CNN模型 (GPU加速版本)")
+print("Beijing PM2.5 Concentration Prediction - 2D CNN Model (GPU Accelerated Version)")
 print("=" * 80)
 
-# ============================== 第1部分: GPU检测和配置 ==============================
-print("\n检测GPU环境...")
+# ============================== Part 1: GPU Detection and Configuration ==============================
+print("\nDetecting GPU environment...")
 
-# 检测GPU
+# Detect GPU
 if not torch.cuda.is_available():
     print("\n" + "=" * 80)
-    print("❌ 错误: 未检测到可用的GPU！")
+    print("❌ Error: No available GPU detected!")
     print("=" * 80)
-    print("\n此版本需要GPU支持才能运行。")
-    print("\n可能的原因:")
-    print("  1. 系统中没有NVIDIA GPU")
-    print("  2. CUDA未正确安装")
-    print("  3. PyTorch未安装GPU版本")
-    print("\n解决方案:")
-    print("  - 如需使用CPU运行，请使用: CNN-CPU.py")
-    print("  - 如需安装CUDA和PyTorch GPU版本，请访问: https://pytorch.org/")
+    print("\nThis version requires GPU support to run.")
+    print("\nPossible reasons:")
+    print("  1. No NVIDIA GPU in system")
+    print("  2. CUDA not properly installed")
+    print("  3. PyTorch GPU version not installed")
+    print("\nSolutions:")
+    print("  - To run on CPU, please use: CNN-CPU.py")
+    print("  - To install CUDA and PyTorch GPU version, visit: https://pytorch.org/")
     print("=" * 80)
     import sys
     sys.exit(1)
 
-# 启用CUDA
+# Enable CUDA
 DEVICE = torch.device('cuda')
 torch.cuda.manual_seed(42)
 torch.cuda.manual_seed_all(42)
 
-# 启用确定性算法（可能会略微降低性能，但结果可复现）
+# Enable deterministic algorithms (may slightly reduce performance, but results are reproducible)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-# 获取GPU信息
+# Get GPU information
 gpu_name = torch.cuda.get_device_name(0)
 gpu_props = torch.cuda.get_device_properties(0)
 total_memory_gb = gpu_props.total_memory / 1e9
 compute_capability = f"{gpu_props.major}.{gpu_props.minor}"
 
-print(f"\n✓ GPU检测成功！")
-print(f"  设备名称: {gpu_name}")
-print(f"  显存容量: {total_memory_gb:.2f} GB")
-print(f"  计算能力: {compute_capability}")
-print(f"  CUDA版本: {torch.version.cuda}")
-print(f"  PyTorch版本: {torch.__version__}")
+print(f"\n✓ GPU detection successful!")
+print(f"  Device name: {gpu_name}")
+print(f"  Memory capacity: {total_memory_gb:.2f} GB")
+print(f"  Compute capability: {compute_capability}")
+print(f"  CUDA version: {torch.version.cuda}")
+print(f"  PyTorch version: {torch.__version__}")
 
-# ============================== GPU显存管理函数 ==============================
+# ============================== GPU Memory Management Functions ==============================
 def print_gpu_memory(prefix=""):
-    """打印GPU显存使用情况"""
+    """Print GPU memory usage"""
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated(0) / 1e9
         reserved = torch.cuda.memory_reserved(0) / 1e9
         total = torch.cuda.get_device_properties(0).total_memory / 1e9
-        print(f"{prefix}GPU显存: 已分配={allocated:.2f}GB, 已保留={reserved:.2f}GB, 总容量={total:.2f}GB, 使用率={allocated/total*100:.1f}%")
+        print(f"{prefix}GPU Memory: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB, total={total:.2f}GB, usage={allocated/total*100:.1f}%")
 
 def clear_gpu_memory():
-    """清理GPU缓存"""
+    """Clean GPU cache"""
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-# ============================== 动态批次大小调整 ==============================
+# ============================== Dynamic Batch Size Adjustment ==============================
 def get_optimal_batch_size(model_class, window_size, num_features, 
                            sample_data_shape, device, min_batch=16, max_batch=256):
     """
-    根据GPU显存自动确定最优批次大小
+    Automatically determine optimal batch size based on GPU memory
     
     Args:
-        model_class: 模型类
-        window_size: 时间窗口大小
-        num_features: 特征数量
-        sample_data_shape: 样本数据形状
-        device: 计算设备
-        min_batch: 最小批次大小
-        max_batch: 最大批次大小
+        model_class: Model class
+        window_size: Time window size
+        num_features: Number of features
+        sample_data_shape: Sample data shape
+        device: Computing device
+        min_batch: Minimum batch size
+        max_batch: Maximum batch size
     
     Returns:
-        optimal_batch_size: 最优批次大小
+        optimal_batch_size: Optimal batch size
     """
-    print("\n正在测试最优批次大小...")
+    print("\nTesting optimal batch size...")
     clear_gpu_memory()
     
-    # 创建测试模型
+    # Create test model
     test_model = model_class(
         window_size=window_size,
         num_features=num_features,
@@ -168,7 +168,7 @@ def get_optimal_batch_size(model_class, window_size, num_features,
         dropout_rate=0.3
     ).to(device)
     
-    # 创建测试数据
+    # Create test data
     test_X = torch.randn(1, window_size, num_features).to(device)
     
     optimal_batch = min_batch
@@ -178,98 +178,98 @@ def get_optimal_batch_size(model_class, window_size, num_features,
         try:
             clear_gpu_memory()
             
-            # 测试当前批次大小
+            # Test current batch size
             batch_X = test_X.repeat(current_batch, 1, 1)
             
-            # 前向传播
+            # Forward pass
             with autocast():
                 _ = test_model(batch_X)
             
-            # 如果成功，更新最优批次
+            # If successful, update optimal batch
             optimal_batch = current_batch
-            print(f"  批次大小 {current_batch}: ✓ 通过")
+            print(f"  Batch size {current_batch}: ✓ Passed")
             
-            # 增加批次大小
+            # Increase batch size
             current_batch *= 2
             
         except RuntimeError as e:
             if "out of memory" in str(e):
-                print(f"  批次大小 {current_batch}: ✗ 显存不足")
+                print(f"  Batch size {current_batch}: ✗ Out of memory")
                 break
             else:
                 raise e
     
-    # 使用80%的最大可用批次作为安全值
+    # Use 80% of maximum available batch as safe value
     optimal_batch = int(optimal_batch * 0.8)
     optimal_batch = max(min_batch, optimal_batch)
     
-    # 清理测试模型
+    # Clean up test model
     del test_model, test_X
     if 'batch_X' in locals():
         del batch_X
     clear_gpu_memory()
     
-    print(f"\n推荐批次大小: {optimal_batch}")
+    print(f"\nRecommended batch size: {optimal_batch}")
     return optimal_batch
 
-# ============================== 第2部分: 配置和路径设置 ==============================
-print("\n配置参数...")
+# ============================== Part 2: Configuration and Path Setup ==============================
+print("\nConfiguring parameters...")
 
-# 数据路径
+# Data paths
 pollution_all_path = r'C:\Users\IU\Desktop\Datebase Origin\Benchmark\all(AQI+PM2.5+PM10)'
 pollution_extra_path = r'C:\Users\IU\Desktop\Datebase Origin\Benchmark\extra(SO2+NO2+CO+O3)'
 era5_path = r'C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-CSV'
 
-# 输出路径
+# Output path
 output_dir = Path('./output')
 output_dir.mkdir(exist_ok=True)
 
-# 模型保存路径
+# Model save path
 model_dir = Path('./models')
 model_dir.mkdir(exist_ok=True)
 
-# 日期范围
+# Date range
 start_date = datetime(2015, 1, 1)
 end_date = datetime(2024, 12, 31)
 
-# 北京地理范围
+# Beijing geographic range
 beijing_lats = np.arange(39.0, 41.25, 0.25)
 beijing_lons = np.arange(115.0, 117.25, 0.25)
 
-# 污染物列表
+# Pollutant list
 pollutants = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3']
 
-# ERA5变量
+# ERA5 variables
 era5_vars = [
-    'd2m', 't2m', 'u10', 'v10', 'u100', 'v100',  # 温度、风速
-    'blh', 'sp', 'tcwv',  # 边界层高度、气压、水汽
-    'tp', 'avg_tprate',  # 降水
-    'tisr', 'str',  # 辐射
-    'cvh', 'cvl',  # 云覆盖
-    'mn2t', 'sd', 'lsm'  # 其他
+    'd2m', 't2m', 'u10', 'v10', 'u100', 'v100',  # Temperature, wind speed
+    'blh', 'sp', 'tcwv',  # Boundary layer height, pressure, water vapor
+    'tp', 'avg_tprate',  # Precipitation
+    'tisr', 'str',  # Radiation
+    'cvh', 'cvl',  # Cloud cover
+    'mn2t', 'sd', 'lsm'  # Others
 ]
 
-# CNN特定参数
-WINDOW_SIZE = 30  # 使用过去30天数据
-BATCH_SIZE = None  # 将自动确定
+# CNN specific parameters
+WINDOW_SIZE = 30  # Use past 30 days data
+BATCH_SIZE = None  # Will be automatically determined
 
-print(f"\n数据时间范围: {start_date.date()} 至 {end_date.date()}")
-print(f"目标变量: PM2.5浓度")
-print(f"时间窗口大小: {WINDOW_SIZE}天")
-print(f"设备: {DEVICE}")
-print(f"混合精度训练: 已启用 (AMP)")
-print(f"输出目录: {output_dir}")
-print(f"模型保存目录: {model_dir}")
-print(f"CPU核心数: {CPU_COUNT}, 数据加载线程: 4")
+print(f"\nData time range: {start_date.date()} to {end_date.date()}")
+print(f"Target variable: PM2.5 concentration")
+print(f"Time window size: {WINDOW_SIZE} days")
+print(f"Device: {DEVICE}")
+print(f"Mixed precision training: Enabled (AMP)")
+print(f"Output directory: {output_dir}")
+print(f"Model save directory: {model_dir}")
+print(f"CPU cores: {CPU_COUNT}, data loading threads: 4")
 
-# ============================== 第3部分: 数据加载函数 ==============================
+# ============================== Part 3: Data Loading Functions ==============================
 def daterange(start, end):
-    """生成日期序列"""
+    """Generate date sequence"""
     for n in range(int((end - start).days) + 1):
         yield start + timedelta(n)
 
 def find_file(base_path, date_str, prefix):
-    """查找指定日期的文件"""
+    """Find file for specified date"""
     filename = f"{prefix}_{date_str}.csv"
     for root, _, files in os.walk(base_path):
         if filename in files:
@@ -277,7 +277,7 @@ def find_file(base_path, date_str, prefix):
     return None
 
 def read_pollution_day(date):
-    """读取单日污染数据"""
+    """Read single day pollution data"""
     date_str = date.strftime('%Y%m%d')
     all_file = find_file(pollution_all_path, date_str, 'beijing_all')
     extra_file = find_file(pollution_extra_path, date_str, 'beijing_extra')
@@ -289,31 +289,31 @@ def read_pollution_day(date):
         df_all = pd.read_csv(all_file, encoding='utf-8', on_bad_lines='skip')
         df_extra = pd.read_csv(extra_file, encoding='utf-8', on_bad_lines='skip')
         
-        # 过滤掉24小时平均和AQI
+        # Filter out 24-hour average and AQI
         df_all = df_all[~df_all['type'].str.contains('_24h|AQI', na=False)]
         df_extra = df_extra[~df_extra['type'].str.contains('_24h', na=False)]
         
-        # 合并
+        # Merge
         df_poll = pd.concat([df_all, df_extra], ignore_index=True)
         
-        # 转换为长格式
+        # Convert to long format
         df_poll = df_poll.melt(id_vars=['date', 'hour', 'type'], 
                                 var_name='station', value_name='value')
         df_poll['value'] = pd.to_numeric(df_poll['value'], errors='coerce')
         
-        # 删除负值和异常值
+        # Remove negative values and outliers
         df_poll = df_poll[df_poll['value'] >= 0]
         
-        # 按日期和类型聚合（所有站点平均）
+        # Aggregate by date and type (average all stations)
         df_daily = df_poll.groupby(['date', 'type'])['value'].mean().reset_index()
         
-        # 转换为宽格式
+        # Convert to wide format
         df_daily = df_daily.pivot(index='date', columns='type', values='value')
         
-        # 将索引转换为datetime格式
+        # Convert index to datetime format
         df_daily.index = pd.to_datetime(df_daily.index, format='%Y%m%d', errors='coerce')
         
-        # 只保留需要的污染物
+        # Keep only required pollutants
         df_daily = df_daily[[col for col in pollutants if col in df_daily.columns]]
         
         return df_daily
@@ -321,9 +321,9 @@ def read_pollution_day(date):
         return None
 
 def read_all_pollution():
-    """并行读取所有污染数据"""
-    print("\n正在加载污染数据...")
-    print(f"使用 {MAX_WORKERS} 个并行工作线程")
+    """Read all pollution data in parallel"""
+    print("\nLoading pollution data...")
+    print(f"Using {MAX_WORKERS} parallel workers")
     dates = list(daterange(start_date, end_date))
     pollution_dfs = []
     
@@ -332,7 +332,7 @@ def read_all_pollution():
         
         if TQDM_AVAILABLE:
             for future in tqdm(as_completed(futures), total=len(futures), 
-                             desc="加载污染数据", unit="天"):
+                             desc="Loading pollution data", unit="day"):
                 result = future.result()
                 if result is not None:
                     pollution_dfs.append(result)
@@ -342,20 +342,20 @@ def read_all_pollution():
                 if result is not None:
                     pollution_dfs.append(result)
                 if i % 500 == 0 or i == len(futures):
-                    print(f"  已处理 {i}/{len(futures)} 天 ({i/len(futures)*100:.1f}%)")
+                    print(f"  Processed {i}/{len(futures)} days ({i/len(futures)*100:.1f}%)")
     
     if pollution_dfs:
-        print(f"  成功读取 {len(pollution_dfs)}/{len(dates)} 天的数据")
-        print("  正在合并数据...")
+        print(f"  Successfully read {len(pollution_dfs)}/{len(dates)} days of data")
+        print("  Merging data...")
         df_poll_all = pd.concat(pollution_dfs)
         df_poll_all.ffill(inplace=True)
         df_poll_all.fillna(df_poll_all.mean(), inplace=True)
-        print(f"污染数据加载完成，形状: {df_poll_all.shape}")
+        print(f"Pollution data loading complete, shape: {df_poll_all.shape}")
         return df_poll_all
     return pd.DataFrame()
 
 def read_era5_month(year, month):
-    """读取单月ERA5数据"""
+    """Read single month ERA5 data"""
     month_str = f"{year}{month:02d}"
     all_files = glob.glob(os.path.join(era5_path, "**", f"*{month_str}*.csv"), recursive=True)
     
@@ -419,22 +419,22 @@ def read_era5_month(year, month):
             continue
     
     if monthly_data is not None and not monthly_data.empty:
-        print(f"  成功读取: {year}-{month:02d}, 日数: {len(monthly_data)}, 变量数: {len(loaded_vars)}")
+        print(f"  Successfully read: {year}-{month:02d}, days: {len(monthly_data)}, variables: {len(loaded_vars)}")
         return monthly_data
     else:
         return None
 
 def read_all_era5():
-    """并行读取所有ERA5数据"""
-    print("\n正在加载气象数据...")
-    print(f"使用 {MAX_WORKERS} 个并行工作线程")
-    print(f"气象数据目录: {era5_path}")
+    """Read all ERA5 data in parallel"""
+    print("\nLoading meteorological data...")
+    print(f"Using {MAX_WORKERS} parallel workers")
+    print(f"Meteorological data directory: {era5_path}")
     
     if os.path.exists(era5_path):
         all_csv = glob.glob(os.path.join(era5_path, "**", "*.csv"), recursive=True)
-        print(f"找到 {len(all_csv)} 个CSV文件")
+        print(f"Found {len(all_csv)} CSV files")
         if all_csv:
-            print(f"示例文件: {[os.path.basename(f) for f in all_csv[:5]]}")
+            print(f"Sample files: {[os.path.basename(f) for f in all_csv[:5]]}")
     
     era5_dfs = []
     years = range(2015, 2025)
@@ -443,7 +443,7 @@ def read_all_era5():
     month_tasks = [(year, month) for year in years for month in months 
                    if not (year == 2024 and month > 12)]
     total_months = len(month_tasks)
-    print(f"尝试加载 {total_months} 个月的数据...")
+    print(f"Attempting to load {total_months} months of data...")
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(read_era5_month, year, month): (year, month) 
@@ -452,7 +452,7 @@ def read_all_era5():
         successful_reads = 0
         if TQDM_AVAILABLE:
             for future in tqdm(as_completed(futures), total=len(futures), 
-                             desc="加载气象数据", unit="月"):
+                             desc="Loading meteorological data", unit="month"):
                 result = future.result()
                 if result is not None and not result.empty:
                     era5_dfs.append(result)
@@ -464,42 +464,42 @@ def read_all_era5():
                     era5_dfs.append(result)
                     successful_reads += 1
                 if i % 20 == 0 or i == len(futures):
-                    print(f"  进度: {i}/{len(futures)} 个月 (成功: {successful_reads}, {i/len(futures)*100:.1f}%)")
+                    print(f"  Progress: {i}/{len(futures)} months (success: {successful_reads}, {i/len(futures)*100:.1f}%)")
         
-        print(f"  总计成功读取: {successful_reads}/{len(futures)} 个月")
+        print(f"  Total successfully read: {successful_reads}/{len(futures)} months")
     
     if era5_dfs:
-        print("\n正在合并气象数据...")
+        print("\nMerging meteorological data...")
         df_era5_all = pd.concat(era5_dfs, axis=0)
-        print("  去重处理...")
+        print("  Removing duplicates...")
         df_era5_all = df_era5_all[~df_era5_all.index.duplicated(keep='first')]
-        print("  排序处理...")
+        print("  Sorting...")
         df_era5_all.sort_index(inplace=True)
         
-        print(f"合并后形状: {df_era5_all.shape}")
-        print(f"时间范围: {df_era5_all.index.min()} 至 {df_era5_all.index.max()}")
+        print(f"Merged shape: {df_era5_all.shape}")
+        print(f"Time range: {df_era5_all.index.min()} to {df_era5_all.index.max()}")
         
-        print("  处理缺失值...")
+        print("  Handling missing values...")
         initial_na = df_era5_all.isna().sum().sum()
         df_era5_all.ffill(inplace=True)
         df_era5_all.bfill(inplace=True)
         df_era5_all.fillna(df_era5_all.mean(), inplace=True)
         final_na = df_era5_all.isna().sum().sum()
         
-        print(f"缺失值处理: {initial_na} -> {final_na}")
-        print(f"气象数据加载完成，形状: {df_era5_all.shape}")
+        print(f"Missing value handling: {initial_na} -> {final_na}")
+        print(f"Meteorological data loading complete, shape: {df_era5_all.shape}")
         
         return df_era5_all
     else:
-        print("\n❌ 错误: 没有成功加载任何气象数据文件！")
+        print("\n❌ Error: Failed to load any meteorological data files!")
         return pd.DataFrame()
 
-# ============================== 第4部分: 特征工程 ==============================
+# ============================== Part 4: Feature Engineering ==============================
 def create_features(df):
-    """创建额外特征"""
+    """Create additional features"""
     df_copy = df.copy()
     
-    # 1. 风速特征
+    # 1. Wind speed features
     if 'u10' in df_copy and 'v10' in df_copy:
         df_copy['wind_speed_10m'] = np.sqrt(df_copy['u10']**2 + df_copy['v10']**2)
         df_copy['wind_dir_10m'] = np.arctan2(df_copy['v10'], df_copy['u10']) * 180 / np.pi
@@ -510,7 +510,7 @@ def create_features(df):
         df_copy['wind_dir_100m'] = np.arctan2(df_copy['v100'], df_copy['u100']) * 180 / np.pi
         df_copy['wind_dir_100m'] = (df_copy['wind_dir_100m'] + 360) % 360
     
-    # 2. 时间特征
+    # 2. Time features
     df_copy['year'] = df_copy.index.year
     df_copy['month'] = df_copy.index.month
     df_copy['day'] = df_copy.index.day
@@ -518,19 +518,19 @@ def create_features(df):
     df_copy['day_of_week'] = df_copy.index.dayofweek
     df_copy['week_of_year'] = df_copy.index.isocalendar().week
     
-    # 季节特征
+    # Season feature
     df_copy['season'] = df_copy['month'].apply(
         lambda x: 1 if x in [12, 1, 2] else 2 if x in [3, 4, 5] else 3 if x in [6, 7, 8] else 4
     )
     
-    # 是否供暖季
+    # Heating season indicator
     df_copy['is_heating_season'] = ((df_copy['month'] >= 11) | (df_copy['month'] <= 3)).astype(int)
     
-    # 3. 温度相关特征
+    # 3. Temperature related features
     if 't2m' in df_copy and 'd2m' in df_copy:
         df_copy['temp_dewpoint_diff'] = df_copy['t2m'] - df_copy['d2m']
     
-    # 4. 滞后特征
+    # 4. Lag features
     if 'PM2.5' in df_copy:
         df_copy['PM2.5_lag1'] = df_copy['PM2.5'].shift(1)
         df_copy['PM2.5_lag3'] = df_copy['PM2.5'].shift(3)
@@ -540,7 +540,7 @@ def create_features(df):
         df_copy['PM2.5_ma7'] = df_copy['PM2.5'].rolling(window=7, min_periods=1).mean()
         df_copy['PM2.5_ma30'] = df_copy['PM2.5'].rolling(window=30, min_periods=1).mean()
     
-    # 5. 相对湿度估算
+    # 5. Relative humidity estimation
     if 't2m' in df_copy and 'd2m' in df_copy:
         df_copy['relative_humidity'] = 100 * np.exp((17.625 * (df_copy['d2m'] - 273.15)) / 
                                                       (243.04 + (df_copy['d2m'] - 273.15))) / \
@@ -548,7 +548,7 @@ def create_features(df):
                                                (243.04 + (df_copy['t2m'] - 273.15)))
         df_copy['relative_humidity'] = df_copy['relative_humidity'].clip(0, 100)
     
-    # 6. 风向分类
+    # 6. Wind direction category
     if 'wind_dir_10m' in df_copy:
         df_copy['wind_dir_category'] = pd.cut(df_copy['wind_dir_10m'], 
                                                 bins=[0, 45, 90, 135, 180, 225, 270, 315, 360],
@@ -557,114 +557,114 @@ def create_features(df):
     
     return df_copy
 
-# ============================== 第5部分: 数据加载和预处理 ==============================
+# ============================== Part 5: Data Loading and Preprocessing ==============================
 print("\n" + "=" * 80)
-print("第1步: 数据加载和预处理")
+print("Step 1: Data Loading and Preprocessing")
 print("=" * 80)
 
 df_pollution = read_all_pollution()
 df_era5 = read_all_era5()
 
-# 检查数据加载情况
-print("\n数据加载检查:")
-print(f"  污染数据形状: {df_pollution.shape}")
-print(f"  气象数据形状: {df_era5.shape}")
+# Check data loading
+print("\nData loading check:")
+print(f"  Pollution data shape: {df_pollution.shape}")
+print(f"  Meteorological data shape: {df_era5.shape}")
 
 if df_pollution.empty:
-    print("\n⚠️ 警告: 污染数据为空！请检查数据路径和文件。")
+    print("\n⚠️ Warning: Pollution data is empty! Please check data path and files.")
     import sys
     sys.exit(1)
 
 if df_era5.empty:
-    print("\n⚠️ 警告: 气象数据为空！请检查数据路径和文件。")
+    print("\n⚠️ Warning: Meteorological data is empty! Please check data path and files.")
     import sys
     sys.exit(1)
 
-# 确保索引是datetime类型
+# Ensure index is datetime type
 df_pollution.index = pd.to_datetime(df_pollution.index)
 df_era5.index = pd.to_datetime(df_era5.index)
 
-print(f"  污染数据时间范围: {df_pollution.index.min()} 至 {df_pollution.index.max()}")
-print(f"  气象数据时间范围: {df_era5.index.min()} 至 {df_era5.index.max()}")
+print(f"  Pollution data time range: {df_pollution.index.min()} to {df_pollution.index.max()}")
+print(f"  Meteorological data time range: {df_era5.index.min()} to {df_era5.index.max()}")
 
-# 合并数据
-print("\n正在合并数据...")
+# Merge data
+print("\nMerging data...")
 df_combined = df_pollution.join(df_era5, how='inner')
 
 if df_combined.empty:
-    print("\n❌ 错误: 数据合并后为空！")
+    print("\n❌ Error: Data is empty after merging!")
     import sys
     sys.exit(1)
 
-# 创建特征
-print("\n正在创建特征...")
+# Create features
+print("\nCreating features...")
 df_combined = create_features(df_combined)
 
-# 清理数据
-print("\n正在清理数据...")
+# Clean data
+print("\nCleaning data...")
 df_combined.replace([np.inf, -np.inf], np.nan, inplace=True)
 initial_rows = len(df_combined)
 df_combined.dropna(inplace=True)
 final_rows = len(df_combined)
-print(f"删除了 {initial_rows - final_rows} 行包含缺失值的数据")
+print(f"Removed {initial_rows - final_rows} rows containing missing values")
 
-print(f"\n合并后数据形状: {df_combined.shape}")
-print(f"时间范围: {df_combined.index.min().date()} 至 {df_combined.index.max().date()}")
-print(f"样本数: {len(df_combined)}")
-print(f"特征数: {df_combined.shape[1]}")
+print(f"\nMerged data shape: {df_combined.shape}")
+print(f"Time range: {df_combined.index.min().date()} to {df_combined.index.max().date()}")
+print(f"Number of samples: {len(df_combined)}")
+print(f"Number of features: {df_combined.shape[1]}")
 
-print(f"\n特征列表（前20个）:")
+print(f"\nFeature list (first 20):")
 for i, col in enumerate(df_combined.columns[:20], 1):
     print(f"  {i}. {col}")
 if len(df_combined.columns) > 20:
-    print(f"  ... 还有 {len(df_combined.columns) - 20} 个特征")
+    print(f"  ... and {len(df_combined.columns) - 20} more features")
 
-# ============================== 第6部分: CNN数据准备 ==============================
+# ============================== Part 6: CNN Data Preparation ==============================
 print("\n" + "=" * 80)
-print("第2步: CNN数据准备（滑动窗口）")
+print("Step 2: CNN Data Preparation (Sliding Window)")
 print("=" * 80)
 
-# 定义目标变量
+# Define target variable
 target = 'PM2.5'
 
-# 排除的列
+# Excluded columns
 exclude_cols = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3', 'year']
 
-# 选择数值型特征
+# Select numeric features
 numeric_features = [col for col in df_combined.select_dtypes(include=[np.number]).columns 
                     if col not in exclude_cols]
 
-print(f"\n选择的特征数量: {len(numeric_features)}")
-print(f"目标变量: {target}")
+print(f"\nNumber of selected features: {len(numeric_features)}")
+print(f"Target variable: {target}")
 
-# 准备数据
+# Prepare data
 X_raw = df_combined[numeric_features].values
 y_raw = df_combined[target].values
 
-print(f"\n原始数据形状:")
+print(f"\nRaw data shape:")
 print(f"  X: {X_raw.shape}")
 print(f"  y: {y_raw.shape}")
 
-# 标准化特征
+# Standardize features
 scaler_X = StandardScaler()
 scaler_y = StandardScaler()
 
 X_scaled = scaler_X.fit_transform(X_raw)
 y_scaled = scaler_y.fit_transform(y_raw.reshape(-1, 1)).flatten()
 
-print(f"\n标准化后数据形状:")
+print(f"\nStandardized data shape:")
 print(f"  X: {X_scaled.shape}")
 print(f"  y: {y_scaled.shape}")
 
-# 创建滑动窗口数据集
+# Create sliding window dataset
 def create_sliding_windows(X, y, window_size):
     """
-    创建滑动窗口数据集
+    Create sliding window dataset
     
     Args:
-        X: 特征数据 [samples, features]
-        y: 目标数据 [samples]
-        window_size: 窗口大小
+        X: Feature data [samples, features]
+        y: Target data [samples]
+        window_size: Window size
     
     Returns:
         X_windows: [num_windows, window_size, features]
@@ -679,38 +679,38 @@ def create_sliding_windows(X, y, window_size):
     
     for i in range(num_windows):
         X_windows[i] = X[i:i+window_size]
-        y_windows[i] = y[i+window_size-1]  # 预测窗口最后一天的PM2.5
+        y_windows[i] = y[i+window_size-1]  # Predict PM2.5 for last day of window
     
     return X_windows, y_windows
 
-print(f"\n创建 {WINDOW_SIZE} 天滑动窗口...")
+print(f"\nCreating {WINDOW_SIZE} day sliding windows...")
 X_windows, y_windows = create_sliding_windows(X_scaled, y_scaled, WINDOW_SIZE)
 
-print(f"滑动窗口数据形状:")
-print(f"  X_windows: {X_windows.shape}  # [样本数, 时间步, 特征数]")
+print(f"Sliding window data shape:")
+print(f"  X_windows: {X_windows.shape}  # [num_samples, time_steps, num_features]")
 print(f"  y_windows: {y_windows.shape}")
 
-# 保存特征名称和日期索引（用于后续分析）
+# Save feature names and date index (for subsequent analysis)
 feature_names = numeric_features
 date_index = df_combined.index[WINDOW_SIZE-1:]
 
-print(f"\nPM2.5统计信息:")
-print(f"  均值: {y_raw.mean():.2f} μg/m³")
-print(f"  标准差: {y_raw.std():.2f} μg/m³")
-print(f"  最小值: {y_raw.min():.2f} μg/m³")
-print(f"  最大值: {y_raw.max():.2f} μg/m³")
-print(f"  中位数: {np.median(y_raw):.2f} μg/m³")
+print(f"\nPM2.5 Statistics:")
+print(f"  Mean: {y_raw.mean():.2f} μg/m³")
+print(f"  Std Dev: {y_raw.std():.2f} μg/m³")
+print(f"  Min: {y_raw.min():.2f} μg/m³")
+print(f"  Max: {y_raw.max():.2f} μg/m³")
+print(f"  Median: {np.median(y_raw):.2f} μg/m³")
 
-# ============================== 第7部分: 2D CNN模型定义 ==============================
+# ============================== Part 7: 2D CNN Model Definition ==============================
 print("\n" + "=" * 80)
-print("第3步: 定义2D CNN模型")
+print("Step 3: Defining 2D CNN Model")
 print("=" * 80)
 
 class PM25CNN2D(nn.Module):
     """
-    2D CNN模型用于PM2.5预测（GPU优化版本）
-    输入: [batch, 1, window_size, num_features] 
-    输出: [batch] (单个PM2.5值)
+    2D CNN model for PM2.5 prediction (GPU optimized version)
+    Input: [batch, 1, window_size, num_features] 
+    Output: [batch] (single PM2.5 value)
     """
     def __init__(self, window_size, num_features, num_conv_layers=3, 
                  base_filters=32, kernel_size=3, dropout_rate=0.3):
@@ -719,7 +719,7 @@ class PM25CNN2D(nn.Module):
         self.window_size = window_size
         self.num_features = num_features
         
-        # 卷积层
+        # Convolutional layers
         conv_layers = []
         in_channels = 1
         
@@ -735,10 +735,10 @@ class PM25CNN2D(nn.Module):
         
         self.conv_layers = nn.Sequential(*conv_layers)
         
-        # 计算卷积后的特征图大小
+        # Calculate feature map size after convolution
         self.feature_size = self._get_conv_output_size()
         
-        # 全连接层
+        # Fully connected layers
         self.fc_layers = nn.Sequential(
             nn.Linear(self.feature_size, 256),
             nn.BatchNorm1d(256),
@@ -753,18 +753,18 @@ class PM25CNN2D(nn.Module):
             nn.Linear(64, 1)
         )
         
-        # 权重初始化
+        # Weight initialization
         self._initialize_weights()
     
     def _get_conv_output_size(self):
-        """计算卷积层输出的特征尺寸"""
+        """Calculate feature size after convolutional layers"""
         with torch.no_grad():
             dummy_input = torch.zeros(1, 1, self.window_size, self.num_features)
             dummy_output = self.conv_layers(dummy_input)
             return int(np.prod(dummy_output.shape[1:]))
     
     def _initialize_weights(self):
-        """初始化权重"""
+        """Initialize weights"""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -779,40 +779,40 @@ class PM25CNN2D(nn.Module):
     
     def forward(self, x):
         # x: [batch, window_size, num_features]
-        # 添加通道维度
+        # Add channel dimension
         x = x.unsqueeze(1)  # [batch, 1, window_size, num_features]
         
-        # 卷积层
+        # Convolutional layers
         x = self.conv_layers(x)
         
-        # 展平
+        # Flatten
         x = x.view(x.size(0), -1)
         
-        # 全连接层
+        # Fully connected layers
         x = self.fc_layers(x)
         
         return x.squeeze()
 
 num_features = X_windows.shape[2]
-print(f"\n模型输入维度:")
-print(f"  窗口大小: {WINDOW_SIZE}")
-print(f"  特征数: {num_features}")
+print(f"\nModel input dimensions:")
+print(f"  Window size: {WINDOW_SIZE}")
+print(f"  Number of features: {num_features}")
 
-# 确定最优批次大小
+# Determine optimal batch size
 if BATCH_SIZE is None:
     BATCH_SIZE = get_optimal_batch_size(
         PM25CNN2D, WINDOW_SIZE, num_features, 
         X_windows.shape, DEVICE
     )
-print(f"\n最终批次大小: {BATCH_SIZE}")
+print(f"\nFinal batch size: {BATCH_SIZE}")
 
-# ============================== 第8部分: PyTorch数据集和数据加载器 ==============================
+# ============================== Part 8: PyTorch Dataset and DataLoader ==============================
 print("\n" + "=" * 80)
-print("第4步: 创建PyTorch数据集")
+print("Step 4: Creating PyTorch Dataset")
 print("=" * 80)
 
 class TimeSeriesDataset(Dataset):
-    """时间序列数据集"""
+    """Time series dataset"""
     def __init__(self, X, y):
         self.X = torch.FloatTensor(X)
         self.y = torch.FloatTensor(y)
@@ -823,7 +823,7 @@ class TimeSeriesDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-# 按时间顺序划分：训练集70%，验证集15%，测试集15%
+# Split by time order: 70% training, 15% validation, 15% test
 n_samples = len(X_windows)
 train_size = int(n_samples * 0.70)
 val_size = int(n_samples * 0.15)
@@ -836,21 +836,21 @@ y_train = y_windows[:train_size]
 y_val = y_windows[train_size:train_size + val_size]
 y_test = y_windows[train_size + val_size:]
 
-print(f"\n训练集: {len(X_train)} 样本 ({len(X_train)/n_samples*100:.1f}%)")
-print(f"  时间范围: {date_index[0].date()} 至 {date_index[train_size-1].date()}")
+print(f"\nTraining set: {len(X_train)} samples ({len(X_train)/n_samples*100:.1f}%)")
+print(f"  Time range: {date_index[0].date()} to {date_index[train_size-1].date()}")
 
-print(f"\n验证集: {len(X_val)} 样本 ({len(X_val)/n_samples*100:.1f}%)")
-print(f"  时间范围: {date_index[train_size].date()} 至 {date_index[train_size+val_size-1].date()}")
+print(f"\nValidation set: {len(X_val)} samples ({len(X_val)/n_samples*100:.1f}%)")
+print(f"  Time range: {date_index[train_size].date()} to {date_index[train_size+val_size-1].date()}")
 
-print(f"\n测试集: {len(X_test)} 样本 ({len(X_test)/n_samples*100:.1f}%)")
-print(f"  时间范围: {date_index[train_size+val_size].date()} 至 {date_index[-1].date()}")
+print(f"\nTest set: {len(X_test)} samples ({len(X_test)/n_samples*100:.1f}%)")
+print(f"  Time range: {date_index[train_size+val_size].date()} to {date_index[-1].date()}")
 
-# 创建数据集和数据加载器（GPU优化配置）
+# Create datasets and data loaders (GPU optimized configuration)
 train_dataset = TimeSeriesDataset(X_train, y_train)
 val_dataset = TimeSeriesDataset(X_val, y_val)
 test_dataset = TimeSeriesDataset(X_test, y_test)
 
-# 启用pin_memory和多进程加载
+# Enable pin_memory and multi-process loading
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
                           num_workers=4, pin_memory=True, persistent_workers=True)
 val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, 
@@ -858,16 +858,16 @@ val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
 test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, 
                          num_workers=4, pin_memory=True, persistent_workers=True)
 
-print(f"\n数据加载器创建完成:")
-print(f"  训练批次数: {len(train_loader)}")
-print(f"  验证批次数: {len(val_loader)}")
-print(f"  测试批次数: {len(test_loader)}")
-print(f"  多进程加载: 4 workers")
-print(f"  Pin Memory: 已启用")
+print(f"\nData loaders created:")
+print(f"  Training batches: {len(train_loader)}")
+print(f"  Validation batches: {len(val_loader)}")
+print(f"  Test batches: {len(test_loader)}")
+print(f"  Multi-process loading: 4 workers")
+print(f"  Pin Memory: Enabled")
 
-# ============================== 第9部分: 训练和评估函数（AMP优化） ==============================
+# ============================== Part 9: Training and Evaluation Functions (AMP Optimized) ==============================
 def train_epoch(model, dataloader, criterion, optimizer, device, scaler):
-    """训练一个epoch（混合精度训练）"""
+    """Train one epoch (mixed precision training)"""
     model.train()
     total_loss = 0
     
@@ -875,14 +875,14 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler):
         X_batch = X_batch.to(device, non_blocking=True)
         y_batch = y_batch.to(device, non_blocking=True)
         
-        optimizer.zero_grad(set_to_none=True)  # 更高效的梯度清零
+        optimizer.zero_grad(set_to_none=True)  # More efficient gradient clearing
         
-        # 混合精度训练
+        # Mixed precision training
         with autocast():
             y_pred = model(X_batch)
             loss = criterion(y_pred, y_batch)
         
-        # 缩放损失并反向传播
+        # Scale loss and backpropagate
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
@@ -892,7 +892,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scaler):
     return total_loss / len(dataloader.dataset)
 
 def validate(model, dataloader, criterion, device):
-    """验证模型（混合精度）"""
+    """Validate model (mixed precision)"""
     model.eval()
     total_loss = 0
     predictions = []
@@ -919,7 +919,7 @@ def validate(model, dataloader, criterion, device):
 
 def train_model(model, train_loader, val_loader, criterion, optimizer, scaler,
                 num_epochs, device, patience=20, verbose=True):
-    """训练模型（带早停和混合精度）"""
+    """Train model (with early stopping and mixed precision)"""
     train_losses = []
     val_losses = []
     best_val_loss = float('inf')
@@ -927,8 +927,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scaler,
     best_model_state = None
     best_epoch = 0
     
-    print(f"\n开始训练 {num_epochs} 个epochs...")
-    print_gpu_memory("训练前 ")
+    print(f"\nStarting training for {num_epochs} epochs...")
+    print_gpu_memory("Before training ")
     
     start_time = time.time()
     
@@ -948,7 +948,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scaler,
             if (epoch + 1) % 30 == 0:
                 print_gpu_memory("  ")
         
-        # 早停检查
+        # Early stopping check
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_model_state = model.state_dict().copy()
@@ -958,27 +958,27 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scaler,
             patience_counter += 1
         
         if patience_counter >= patience:
-            print(f"\n早停触发于 epoch {epoch+1}")
+            print(f"\nEarly stopping triggered at epoch {epoch+1}")
             break
     
-    # 恢复最佳模型
+    # Restore best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
     
     total_time = time.time() - start_time
-    print(f"训练完成！最佳模型在 epoch {best_epoch}，验证损失: {best_val_loss:.4f}")
-    print(f"总训练时间: {total_time:.2f}秒 ({total_time/60:.2f}分钟)")
-    print_gpu_memory("训练后 ")
+    print(f"Training complete! Best model at epoch {best_epoch}, validation loss: {best_val_loss:.4f}")
+    print(f"Total training time: {total_time:.2f}s ({total_time/60:.2f} minutes)")
+    print_gpu_memory("After training ")
     
     return train_losses, val_losses, best_epoch
 
 def evaluate_model(y_true, y_pred, dataset_name):
-    """评估模型性能"""
+    """Evaluate model performance"""
     r2 = r2_score(y_true, y_pred)
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     mae = mean_absolute_error(y_true, y_pred)
     
-    # 避免除零错误
+    # Avoid division by zero error
     mask = y_true != 0
     if mask.sum() > 0:
         mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
@@ -993,12 +993,12 @@ def evaluate_model(y_true, y_pred, dataset_name):
         'MAPE': mape
     }
 
-# ============================== 第10部分: 基础模型训练 ==============================
+# ============================== Part 10: Basic Model Training ==============================
 print("\n" + "=" * 80)
-print("第5步: 训练基础CNN模型")
+print("Step 5: Training Basic CNN Model")
 print("=" * 80)
 
-# 基础模型参数
+# Basic model parameters
 basic_params = {
     'num_conv_layers': 3,
     'base_filters': 32,
@@ -1009,14 +1009,14 @@ basic_params = {
     'patience': 20
 }
 
-print("\n基础模型参数:")
+print("\nBasic model parameters:")
 for key, value in basic_params.items():
     print(f"  {key}: {value}")
 
-# 清理GPU缓存
+# Clean GPU cache
 clear_gpu_memory()
 
-# 创建基础模型
+# Create basic model
 model_basic = PM25CNN2D(
     window_size=WINDOW_SIZE,
     num_features=num_features,
@@ -1026,19 +1026,19 @@ model_basic = PM25CNN2D(
     dropout_rate=basic_params['dropout_rate']
 ).to(DEVICE)
 
-# 统计模型参数
+# Count model parameters
 total_params = sum(p.numel() for p in model_basic.parameters())
 trainable_params = sum(p.numel() for p in model_basic.parameters() if p.requires_grad)
-print(f"\n模型参数统计:")
-print(f"  总参数: {total_params:,}")
-print(f"  可训练参数: {trainable_params:,}")
+print(f"\nModel parameter statistics:")
+print(f"  Total parameters: {total_params:,}")
+print(f"  Trainable parameters: {trainable_params:,}")
 
-# 定义损失函数、优化器和混合精度缩放器
+# Define loss function, optimizer and mixed precision scaler
 criterion = nn.MSELoss()
 optimizer_basic = optim.Adam(model_basic.parameters(), lr=basic_params['learning_rate'])
 scaler_basic = GradScaler()
 
-# 训练基础模型
+# Train basic model
 train_losses_basic, val_losses_basic, best_epoch_basic = train_model(
     model_basic, train_loader, val_loader, criterion, optimizer_basic, scaler_basic,
     num_epochs=basic_params['num_epochs'],
@@ -1047,19 +1047,19 @@ train_losses_basic, val_losses_basic, best_epoch_basic = train_model(
     verbose=True
 )
 
-print(f"\n✓ 基础模型训练完成")
-print(f"  最佳epoch: {best_epoch_basic}")
-print(f"  最终训练损失: {train_losses_basic[best_epoch_basic-1]:.4f}")
-print(f"  最终验证损失: {val_losses_basic[best_epoch_basic-1]:.4f}")
+print(f"\n✓ Basic model training complete")
+print(f"  Best epoch: {best_epoch_basic}")
+print(f"  Final training loss: {train_losses_basic[best_epoch_basic-1]:.4f}")
+print(f"  Final validation loss: {val_losses_basic[best_epoch_basic-1]:.4f}")
 
-# 评估基础模型
-print("\n评估基础模型...")
+# Evaluate basic model
+print("\nEvaluating basic model...")
 
 _, y_train_pred_basic_scaled, y_train_actual_scaled = validate(model_basic, train_loader, criterion, DEVICE)
 _, y_val_pred_basic_scaled, y_val_actual_scaled = validate(model_basic, val_loader, criterion, DEVICE)
 _, y_test_pred_basic_scaled, y_test_actual_scaled = validate(model_basic, test_loader, criterion, DEVICE)
 
-# 反标准化
+# Denormalize
 y_train_pred_basic = scaler_y.inverse_transform(y_train_pred_basic_scaled.reshape(-1, 1)).flatten()
 y_train_actual_basic = scaler_y.inverse_transform(y_train_actual_scaled.reshape(-1, 1)).flatten()
 
@@ -1069,37 +1069,37 @@ y_val_actual_basic = scaler_y.inverse_transform(y_val_actual_scaled.reshape(-1, 
 y_test_pred_basic = scaler_y.inverse_transform(y_test_pred_basic_scaled.reshape(-1, 1)).flatten()
 y_test_actual_basic = scaler_y.inverse_transform(y_test_actual_scaled.reshape(-1, 1)).flatten()
 
-# 计算性能指标
+# Calculate performance metrics
 results_basic = []
 results_basic.append(evaluate_model(y_train_actual_basic, y_train_pred_basic, 'Train'))
 results_basic.append(evaluate_model(y_val_actual_basic, y_val_pred_basic, 'Validation'))
 results_basic.append(evaluate_model(y_test_actual_basic, y_test_pred_basic, 'Test'))
 
 results_basic_df = pd.DataFrame(results_basic)
-print("\n基础模型性能:")
+print("\nBasic model performance:")
 print(results_basic_df.to_string(index=False))
 
-# ============================== 第11部分: 超参数优化（GPU优化） ==============================
+# ============================== Part 11: Hyperparameter Optimization (GPU Optimized) ==============================
 print("\n" + "=" * 80)
-print("第6步: 超参数优化")
+print("Step 6: Hyperparameter Optimization")
 print("=" * 80)
 
 if BAYESIAN_OPT_AVAILABLE:
-    print("\n使用贝叶斯优化进行超参数搜索...")
+    print("\nUsing Bayesian optimization for hyperparameter search...")
     
     def cnn_evaluate(num_conv_layers, base_filters, kernel_size, 
                      learning_rate, dropout_rate):
-        """贝叶斯优化的目标函数（GPU优化版）"""
+        """Objective function for Bayesian optimization (GPU optimized version)"""
         try:
-            # 参数转换
+            # Parameter conversion
             num_conv_layers = int(num_conv_layers)
             base_filters = int(base_filters)
             kernel_size = int(kernel_size)
             
-            # 清理GPU缓存
+            # Clean GPU cache
             clear_gpu_memory()
             
-            # 创建模型
+            # Create model
             model_temp = PM25CNN2D(
                 window_size=WINDOW_SIZE,
                 num_features=num_features,
@@ -1109,7 +1109,7 @@ if BAYESIAN_OPT_AVAILABLE:
                 dropout_rate=dropout_rate
             ).to(DEVICE)
             
-            # 训练
+            # Train
             optimizer_temp = optim.Adam(model_temp.parameters(), lr=learning_rate)
             scaler_temp = GradScaler()
             
@@ -1118,25 +1118,25 @@ if BAYESIAN_OPT_AVAILABLE:
                 num_epochs=100, device=DEVICE, patience=15, verbose=False
             )
             
-            # 评估
+            # Evaluate
             val_loss, _, _ = validate(model_temp, val_loader, criterion, DEVICE)
             
-            # 清理
+            # Clean up
             del model_temp, optimizer_temp, scaler_temp
             clear_gpu_memory()
             
-            # 返回负损失（贝叶斯优化是最大化）
+            # Return negative loss (Bayesian optimization maximizes)
             return -val_loss
             
         except RuntimeError as e:
             if "out of memory" in str(e):
-                print(f"  显存不足，跳过此参数组合")
+                print(f"  Out of memory, skipping this parameter combination")
                 clear_gpu_memory()
-                return -999999  # 返回很差的分数
+                return -999999  # Return very poor score
             else:
                 raise e
     
-    # 参数搜索空间
+    # Parameter search space
     pbounds = {
         'num_conv_layers': (2, 4),
         'base_filters': (16, 64),
@@ -1154,20 +1154,20 @@ if BAYESIAN_OPT_AVAILABLE:
     
     optimizer_bo.maximize(init_points=5, n_iter=10)
     
-    # 获取最佳参数
+    # Get best parameters
     best_params = optimizer_bo.max['params']
     best_params['num_conv_layers'] = int(best_params['num_conv_layers'])
     best_params['base_filters'] = int(best_params['base_filters'])
     best_params['kernel_size'] = int(best_params['kernel_size'])
     
-    print(f"\n最佳参数:")
+    print(f"\nBest parameters:")
     for key, value in best_params.items():
         print(f"  {key}: {value}")
-    print(f"  最佳验证损失: {-optimizer_bo.max['target']:.4f}")
+    print(f"  Best validation loss: {-optimizer_bo.max['target']:.4f}")
     
 else:
-    # 网格搜索（简化版，GPU优化）
-    print("\n使用网格搜索进行超参数优化...")
+    # Grid search (simplified version, GPU optimized)
+    print("\nUsing grid search for hyperparameter optimization...")
     
     param_grid = {
         'num_conv_layers': [2, 3],
@@ -1179,17 +1179,17 @@ else:
     
     from itertools import product
     total_combinations = int(np.prod([len(v) for v in param_grid.values()]))
-    print(f"总共 {total_combinations} 种参数组合")
+    print(f"Total {total_combinations} parameter combinations")
     
     best_val_loss_grid = float('inf')
     best_params = {}
     
     for i, combo in enumerate(product(*param_grid.values()), 1):
-        print(f"\n测试组合 {i}/{total_combinations}...")
+        print(f"\nTesting combination {i}/{total_combinations}...")
         params_test = dict(zip(param_grid.keys(), combo))
         
         try:
-            # 清理GPU缓存
+            # Clean GPU cache
             clear_gpu_memory()
             
             model_temp = PM25CNN2D(
@@ -1210,42 +1210,42 @@ else:
             )
             
             val_loss, _, _ = validate(model_temp, val_loader, criterion, DEVICE)
-            print(f"  验证损失: {val_loss:.4f}")
+            print(f"  Validation loss: {val_loss:.4f}")
             
             if val_loss < best_val_loss_grid:
                 best_val_loss_grid = val_loss
                 best_params = params_test.copy()
             
-            # 清理
+            # Clean up
             del model_temp, optimizer_temp, scaler_temp
             clear_gpu_memory()
             
         except RuntimeError as e:
             if "out of memory" in str(e):
-                print(f"  显存不足，跳过此组合")
+                print(f"  Out of memory, skipping this combination")
                 clear_gpu_memory()
                 continue
             else:
                 raise e
     
-    print(f"\n最佳参数:")
+    print(f"\nBest parameters:")
     for key, value in best_params.items():
         print(f"  {key}: {value}")
-    print(f"  最佳验证损失: {best_val_loss_grid:.4f}")
+    print(f"  Best validation loss: {best_val_loss_grid:.4f}")
 
-# ============================== 第12部分: 训练优化模型 ==============================
+# ============================== Part 12: Training Optimized Model ==============================
 print("\n" + "=" * 80)
-print("第7步: 使用最佳参数训练优化模型")
+print("Step 7: Training Optimized Model with Best Parameters")
 print("=" * 80)
 
-print("\n优化模型参数:")
+print("\nOptimized model parameters:")
 for key, value in best_params.items():
     print(f"  {key}: {value}")
 
-# 清理GPU缓存
+# Clean GPU cache
 clear_gpu_memory()
 
-# 创建优化模型
+# Create optimized model
 model_optimized = PM25CNN2D(
     window_size=WINDOW_SIZE,
     num_features=num_features,
@@ -1258,61 +1258,61 @@ model_optimized = PM25CNN2D(
 optimizer_opt = optim.Adam(model_optimized.parameters(), lr=best_params['learning_rate'])
 scaler_opt = GradScaler()
 
-# 训练优化模型
+# Train optimized model
 train_losses_opt, val_losses_opt, best_epoch_opt = train_model(
     model_optimized, train_loader, val_loader, criterion, optimizer_opt, scaler_opt,
     num_epochs=300, device=DEVICE, patience=30, verbose=True
 )
 
-print(f"\n✓ 优化模型训练完成")
-print(f"  最佳epoch: {best_epoch_opt}")
-print(f"  最终训练损失: {train_losses_opt[best_epoch_opt-1]:.4f}")
-print(f"  最终验证损失: {val_losses_opt[best_epoch_opt-1]:.4f}")
+print(f"\n✓ Optimized model training complete")
+print(f"  Best epoch: {best_epoch_opt}")
+print(f"  Final training loss: {train_losses_opt[best_epoch_opt-1]:.4f}")
+print(f"  Final validation loss: {val_losses_opt[best_epoch_opt-1]:.4f}")
 
-# 评估优化模型
-print("\n评估优化模型...")
+# Evaluate optimized model
+print("\nEvaluating optimized model...")
 
 _, y_train_pred_opt_scaled, _ = validate(model_optimized, train_loader, criterion, DEVICE)
 _, y_val_pred_opt_scaled, _ = validate(model_optimized, val_loader, criterion, DEVICE)
 _, y_test_pred_opt_scaled, _ = validate(model_optimized, test_loader, criterion, DEVICE)
 
-# 反标准化
+# Denormalize
 y_train_pred_opt = scaler_y.inverse_transform(y_train_pred_opt_scaled.reshape(-1, 1)).flatten()
 y_val_pred_opt = scaler_y.inverse_transform(y_val_pred_opt_scaled.reshape(-1, 1)).flatten()
 y_test_pred_opt = scaler_y.inverse_transform(y_test_pred_opt_scaled.reshape(-1, 1)).flatten()
 
-# 计算性能指标
+# Calculate performance metrics
 results_opt = []
 results_opt.append(evaluate_model(y_train_actual_basic, y_train_pred_opt, 'Train'))
 results_opt.append(evaluate_model(y_val_actual_basic, y_val_pred_opt, 'Validation'))
 results_opt.append(evaluate_model(y_test_actual_basic, y_test_pred_opt, 'Test'))
 
 results_opt_df = pd.DataFrame(results_opt)
-print("\n优化模型性能:")
+print("\nOptimized model performance:")
 print(results_opt_df.to_string(index=False))
 
-# ============================== 第13部分: 模型比较 ==============================
+# ============================== Part 13: Model Comparison ==============================
 print("\n" + "=" * 80)
-print("第8步: 模型性能比较")
+print("Step 8: Model Performance Comparison")
 print("=" * 80)
 
-# 合并结果
+# Merge results
 results_basic_df['Model'] = 'CNN_Basic'
 results_opt_df['Model'] = 'CNN_Optimized'
 all_results = pd.concat([results_basic_df, results_opt_df])
 
-# 重新排列列顺序
+# Rearrange column order
 all_results = all_results[['Model', 'Dataset', 'R²', 'RMSE', 'MAE', 'MAPE']]
 
-print("\n所有模型性能对比:")
+print("\nAll models performance comparison:")
 print(all_results.to_string(index=False))
 
-# 测试集性能对比
+# Test set performance comparison
 test_results = all_results[all_results['Dataset'] == 'Test'].sort_values('R²', ascending=False)
-print("\n测试集性能排名:")
+print("\nTest set performance ranking:")
 print(test_results.to_string(index=False))
 
-# 性能提升
+# Performance improvement
 basic_test_r2 = results_basic_df[results_basic_df['Dataset'] == 'Test']['R²'].values[0]
 opt_test_r2 = results_opt_df[results_opt_df['Dataset'] == 'Test']['R²'].values[0]
 basic_test_rmse = results_basic_df[results_basic_df['Dataset'] == 'Test']['RMSE'].values[0]
@@ -1328,41 +1328,41 @@ if basic_test_rmse != 0:
 else:
     rmse_improvement = 0
 
-print(f"\n优化效果:")
-print(f"  R²提升: {r2_improvement:.2f}%")
-print(f"  RMSE降低: {rmse_improvement:.2f}%")
+print(f"\nOptimization effect:")
+print(f"  R² improvement: {r2_improvement:.2f}%")
+print(f"  RMSE reduction: {rmse_improvement:.2f}%")
 
-# ============================== 第14部分: 特征重要性分析（GPU优化） ==============================
+# ============================== Part 14: Feature Importance Analysis (GPU Optimized) ==============================
 print("\n" + "=" * 80)
-print("第9步: 特征重要性分析（梯度×输入方法）")
+print("Step 9: Feature Importance Analysis (Gradient×Input Method)")
 print("=" * 80)
 
 def compute_gradient_importance(model, X_samples, device, num_samples=500, batch_size=100):
     """
-    使用梯度×输入方法计算特征重要性（GPU优化，分批处理）
+    Compute feature importance using Gradient×Input method (GPU optimized, batch processing)
     
     Args:
-        model: 训练好的模型
-        X_samples: 样本数据 [num_samples, window_size, num_features]
-        device: 计算设备
-        num_samples: 使用的样本数量
-        batch_size: 分批处理的批次大小
+        model: Trained model
+        X_samples: Sample data [num_samples, window_size, num_features]
+        device: Computing device
+        num_samples: Number of samples to use
+        batch_size: Batch size for batch processing
     
     Returns:
-        feature_importance: [num_features] 每个特征的重要性分数
+        feature_importance: [num_features] importance score for each feature
     """
     model.eval()
     
-    # 随机选择样本
+    # Randomly select samples
     if len(X_samples) > num_samples:
         indices = np.random.choice(len(X_samples), num_samples, replace=False)
         X_samples = X_samples[indices]
     
-    # 分批处理以避免显存溢出
+    # Batch processing to avoid memory overflow
     num_batches = (len(X_samples) + batch_size - 1) // batch_size
     importance_sum = None
     
-    print(f"  分 {num_batches} 批处理...")
+    print(f"  Processing in {num_batches} batches...")
     
     for i in range(num_batches):
         start_idx = i * batch_size
@@ -1372,21 +1372,21 @@ def compute_gradient_importance(model, X_samples, device, num_samples=500, batch
         X_tensor = torch.FloatTensor(X_batch).to(device)
         X_tensor.requires_grad = True
         
-        # 前向传播（使用混合精度）
+        # Forward pass (using mixed precision)
         with autocast():
             outputs = model(X_tensor)
         
-        # 计算梯度
+        # Calculate gradients
         gradients = torch.autograd.grad(
             outputs=outputs.sum(),
             inputs=X_tensor,
             create_graph=False
         )[0]
         
-        # 计算重要性：|梯度 × 输入|
+        # Calculate importance: |gradient × input|
         importance_batch = (gradients * X_tensor).abs()
         
-        # 在时间维度和样本维度上求平均
+        # Average over time and sample dimensions
         importance_batch = importance_batch.mean(dim=[0, 1])  # [num_features]
         
         if importance_sum is None:
@@ -1394,76 +1394,76 @@ def compute_gradient_importance(model, X_samples, device, num_samples=500, batch
         else:
             importance_sum += importance_batch
         
-        # 清理
+        # Clean up
         del X_tensor, outputs, gradients, importance_batch
         
         if (i + 1) % 5 == 0:
             clear_gpu_memory()
     
-    # 平均所有批次
+    # Average all batches
     importance = importance_sum / num_batches
     
     clear_gpu_memory()
     
     return importance.detach().cpu().numpy()
 
-print("\n计算特征重要性...")
+print("\nCalculating feature importance...")
 feature_importance_scores = compute_gradient_importance(
     model_optimized, X_train, DEVICE, num_samples=500, batch_size=100
 )
 
-# 归一化重要性分数
+# Normalize importance scores
 feature_importance_scores_norm = (feature_importance_scores / feature_importance_scores.sum()) * 100
 
-# 创建特征重要性DataFrame
+# Create feature importance DataFrame
 feature_importance = pd.DataFrame({
     'Feature': feature_names,
     'Importance': feature_importance_scores,
     'Importance_Norm': feature_importance_scores_norm
 })
 
-# 排序
+# Sort
 feature_importance = feature_importance.sort_values('Importance', ascending=False)
 
-print(f"\nTop 20 重要特征:")
+print(f"\nTop 20 important features:")
 print(feature_importance.head(20)[['Feature', 'Importance_Norm']].to_string(index=False))
 
-# ============================== 第15部分: 可视化 ==============================
+# ============================== Part 15: Visualization ==============================
 print("\n" + "=" * 80)
-print("第10步: 生成可视化图表")
+print("Step 10: Generating Visualization Charts")
 print("=" * 80)
 
-# 15.1 训练过程曲线
+# 15.1 Training process curves
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
-# 基础模型
-axes[0].plot(train_losses_basic, label='训练损失', linewidth=2)
-axes[0].plot(val_losses_basic, label='验证损失', linewidth=2)
+# Basic model
+axes[0].plot(train_losses_basic, label='Training Loss', linewidth=2)
+axes[0].plot(val_losses_basic, label='Validation Loss', linewidth=2)
 axes[0].axvline(x=best_epoch_basic-1, color='r', linestyle='--', 
-                label=f'最佳epoch({best_epoch_basic})', linewidth=1.5)
+                label=f'Best epoch({best_epoch_basic})', linewidth=1.5)
 axes[0].set_xlabel('Epoch', fontsize=12)
 axes[0].set_ylabel('Loss (MSE)', fontsize=12)
-axes[0].set_title('CNN基础模型 - 训练过程', fontsize=13, fontweight='bold')
+axes[0].set_title('CNN Basic Model - Training Process', fontsize=13, fontweight='bold')
 axes[0].legend(fontsize=10)
 axes[0].grid(True, alpha=0.3)
 
-# 优化模型
-axes[1].plot(train_losses_opt, label='训练损失', linewidth=2)
-axes[1].plot(val_losses_opt, label='验证损失', linewidth=2)
+# Optimized model
+axes[1].plot(train_losses_opt, label='Training Loss', linewidth=2)
+axes[1].plot(val_losses_opt, label='Validation Loss', linewidth=2)
 axes[1].axvline(x=best_epoch_opt-1, color='r', linestyle='--',
-                label=f'最佳epoch({best_epoch_opt})', linewidth=1.5)
+                label=f'Best epoch({best_epoch_opt})', linewidth=1.5)
 axes[1].set_xlabel('Epoch', fontsize=12)
 axes[1].set_ylabel('Loss (MSE)', fontsize=12)
-axes[1].set_title('CNN优化模型 - 训练过程', fontsize=13, fontweight='bold')
+axes[1].set_title('CNN Optimized Model - Training Process', fontsize=13, fontweight='bold')
 axes[1].legend(fontsize=10)
 axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.savefig(output_dir / 'training_curves.png', dpi=300, bbox_inches='tight')
-print("保存: training_curves.png")
+print("Saved: training_curves.png")
 plt.close()
 
-# 15.2 预测vs实际值散点图
+# 15.2 Prediction vs actual scatter plots
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
 models_data = [
@@ -1481,20 +1481,20 @@ for idx, (model_name, y_pred, y_true, dataset) in enumerate(models_data):
     
     ax = axes[row, col]
     
-    # 散点图
+    # Scatter plot
     ax.scatter(y_true, y_pred, alpha=0.5, s=20, edgecolors='black', linewidth=0.3)
     
-    # 理想预测线
+    # Ideal prediction line
     min_val = min(y_true.min(), y_pred.min())
     max_val = max(y_true.max(), y_pred.max())
-    ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='理想预测线')
+    ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Ideal Prediction')
     
-    # 计算指标
+    # Calculate metrics
     r2 = r2_score(y_true, y_pred)
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     
-    ax.set_xlabel('实际PM2.5浓度 (μg/m³)', fontsize=11)
-    ax.set_ylabel('预测PM2.5浓度 (μg/m³)', fontsize=11)
+    ax.set_xlabel('Actual PM2.5 Concentration (μg/m³)', fontsize=11)
+    ax.set_ylabel('Predicted PM2.5 Concentration (μg/m³)', fontsize=11)
     ax.set_title(f'CNN_{model_name} - {dataset}\nR²={r2:.4f}, RMSE={rmse:.2f}', 
                  fontsize=11, fontweight='bold')
     ax.legend(fontsize=9)
@@ -1502,39 +1502,39 @@ for idx, (model_name, y_pred, y_true, dataset) in enumerate(models_data):
 
 plt.tight_layout()
 plt.savefig(output_dir / 'prediction_scatter.png', dpi=300, bbox_inches='tight')
-print("保存: prediction_scatter.png")
+print("Saved: prediction_scatter.png")
 plt.close()
 
-# 15.3 时间序列预测对比
+# 15.3 Time series prediction comparison
 fig, axes = plt.subplots(2, 1, figsize=(18, 10))
 
-# 测试集索引
+# Test set index
 test_date_index = date_index[train_size+val_size:]
 
-# 绘制最后300个点
+# Plot last 300 points
 plot_range = min(300, len(y_test_actual_basic))
 plot_idx = range(len(y_test_actual_basic) - plot_range, len(y_test_actual_basic))
 time_idx = test_date_index[plot_idx]
 
-axes[0].plot(time_idx, y_test_actual_basic[plot_idx], 'k-', label='实际值', 
+axes[0].plot(time_idx, y_test_actual_basic[plot_idx], 'k-', label='Actual', 
              linewidth=2, alpha=0.8)
-axes[0].plot(time_idx, y_test_pred_basic[plot_idx], 'b--', label='基础模型预测', 
+axes[0].plot(time_idx, y_test_pred_basic[plot_idx], 'b--', label='Basic Model Prediction', 
              linewidth=1.5, alpha=0.7)
-axes[0].set_xlabel('日期', fontsize=12)
-axes[0].set_ylabel('PM2.5浓度 (μg/m³)', fontsize=12)
-axes[0].set_title('CNN基础模型 - 时间序列预测对比（测试集最后300天）', 
+axes[0].set_xlabel('Date', fontsize=12)
+axes[0].set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
+axes[0].set_title('CNN Basic Model - Time Series Prediction Comparison (Last 300 Days of Test Set)', 
                   fontsize=13, fontweight='bold')
 axes[0].legend(fontsize=10)
 axes[0].grid(True, alpha=0.3)
 plt.setp(axes[0].xaxis.get_majorticklabels(), rotation=45)
 
-axes[1].plot(time_idx, y_test_actual_basic[plot_idx], 'k-', label='实际值', 
+axes[1].plot(time_idx, y_test_actual_basic[plot_idx], 'k-', label='Actual', 
              linewidth=2, alpha=0.8)
-axes[1].plot(time_idx, y_test_pred_opt[plot_idx], 'g--', label='优化模型预测', 
+axes[1].plot(time_idx, y_test_pred_opt[plot_idx], 'g--', label='Optimized Model Prediction', 
              linewidth=1.5, alpha=0.7)
-axes[1].set_xlabel('日期', fontsize=12)
-axes[1].set_ylabel('PM2.5浓度 (μg/m³)', fontsize=12)
-axes[1].set_title('CNN优化模型 - 时间序列预测对比（测试集最后300天）', 
+axes[1].set_xlabel('Date', fontsize=12)
+axes[1].set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
+axes[1].set_title('CNN Optimized Model - Time Series Prediction Comparison (Last 300 Days of Test Set)', 
                   fontsize=13, fontweight='bold')
 axes[1].legend(fontsize=10)
 axes[1].grid(True, alpha=0.3)
@@ -1542,10 +1542,10 @@ plt.setp(axes[1].xaxis.get_majorticklabels(), rotation=45)
 
 plt.tight_layout()
 plt.savefig(output_dir / 'timeseries_comparison.png', dpi=300, bbox_inches='tight')
-print("保存: timeseries_comparison.png")
+print("Saved: timeseries_comparison.png")
 plt.close()
 
-# 15.4 残差分析
+# 15.4 Residual analysis
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
 for idx, (model_name, y_pred, y_true, dataset) in enumerate(models_data):
@@ -1558,18 +1558,18 @@ for idx, (model_name, y_pred, y_true, dataset) in enumerate(models_data):
     
     ax.scatter(y_pred, residuals, alpha=0.5, s=20, edgecolors='black', linewidth=0.3)
     ax.axhline(y=0, color='r', linestyle='--', linewidth=2)
-    ax.set_xlabel('预测值 (μg/m³)', fontsize=11)
-    ax.set_ylabel('残差 (μg/m³)', fontsize=11)
-    ax.set_title(f'CNN_{model_name} - {dataset}\n残差均值={residuals.mean():.2f}, 标准差={residuals.std():.2f}', 
+    ax.set_xlabel('Predicted Value (μg/m³)', fontsize=11)
+    ax.set_ylabel('Residual (μg/m³)', fontsize=11)
+    ax.set_title(f'CNN_{model_name} - {dataset}\nMean Residual={residuals.mean():.2f}, Std={residuals.std():.2f}', 
                  fontsize=11, fontweight='bold')
     ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.savefig(output_dir / 'residuals_analysis.png', dpi=300, bbox_inches='tight')
-print("保存: residuals_analysis.png")
+print("Saved: residuals_analysis.png")
 plt.close()
 
-# 15.5 特征重要性图
+# 15.5 Feature importance plot
 fig, ax = plt.subplots(1, 1, figsize=(12, 10))
 
 top_n = 20
@@ -1578,17 +1578,17 @@ top_features = feature_importance.head(top_n)
 ax.barh(range(top_n), top_features['Importance_Norm'], color='steelblue')
 ax.set_yticks(range(top_n))
 ax.set_yticklabels(top_features['Feature'], fontsize=10)
-ax.set_xlabel('重要性 (%)', fontsize=12)
-ax.set_title(f'Top {top_n} 重要特征 (梯度×输入方法)', fontsize=13, fontweight='bold')
+ax.set_xlabel('Importance (%)', fontsize=12)
+ax.set_title(f'Top {top_n} Important Features (Gradient×Input Method)', fontsize=13, fontweight='bold')
 ax.grid(True, alpha=0.3, axis='x')
 ax.invert_yaxis()
 
 plt.tight_layout()
 plt.savefig(output_dir / 'feature_importance.png', dpi=300, bbox_inches='tight')
-print("保存: feature_importance.png")
+print("Saved: feature_importance.png")
 plt.close()
 
-# 15.6 模型性能对比柱状图
+# 15.6 Model performance comparison bar charts
 fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
 test_results_plot = all_results[all_results['Dataset'] == 'Test']
@@ -1605,13 +1605,13 @@ for i, metric in enumerate(metrics):
     axes[i].set_ylabel(metric, fontsize=12)
     
     if metric == 'R²':
-        axes[i].set_title(f'{metric} 对比\n(越大越好)', fontsize=12, fontweight='bold')
+        axes[i].set_title(f'{metric} Comparison\n(Higher is Better)', fontsize=12, fontweight='bold')
     else:
-        axes[i].set_title(f'{metric} 对比\n(越小越好)', fontsize=12, fontweight='bold')
+        axes[i].set_title(f'{metric} Comparison\n(Lower is Better)', fontsize=12, fontweight='bold')
     
     axes[i].grid(True, alpha=0.3, axis='y')
     
-    # 显示数值
+    # Display values
     for j, v in enumerate(test_results_plot[metric]):
         if metric == 'MAPE':
             axes[i].text(j, v, f'{v:.1f}%', ha='center', va='bottom', 
@@ -1622,57 +1622,57 @@ for i, metric in enumerate(metrics):
 
 plt.tight_layout()
 plt.savefig(output_dir / 'model_comparison.png', dpi=300, bbox_inches='tight')
-print("保存: model_comparison.png")
+print("Saved: model_comparison.png")
 plt.close()
 
-# 15.7 误差分布直方图
+# 15.7 Error distribution histograms
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
 errors_basic = y_test_actual_basic - y_test_pred_basic
 errors_opt = y_test_actual_basic - y_test_pred_opt
 
 axes[0].hist(errors_basic, bins=50, color='blue', alpha=0.7, edgecolor='black')
-axes[0].axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='零误差')
-axes[0].set_xlabel('预测误差 (μg/m³)', fontsize=12)
-axes[0].set_ylabel('频数', fontsize=12)
-axes[0].set_title(f'基础模型 - 预测误差分布\n均值={errors_basic.mean():.2f}, 标准差={errors_basic.std():.2f}', 
+axes[0].axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='Zero Error')
+axes[0].set_xlabel('Prediction Error (μg/m³)', fontsize=12)
+axes[0].set_ylabel('Frequency', fontsize=12)
+axes[0].set_title(f'Basic Model - Prediction Error Distribution\nMean={errors_basic.mean():.2f}, Std={errors_basic.std():.2f}', 
                   fontsize=13, fontweight='bold')
 axes[0].legend(fontsize=11)
 axes[0].grid(True, alpha=0.3, axis='y')
 
 axes[1].hist(errors_opt, bins=50, color='green', alpha=0.7, edgecolor='black')
-axes[1].axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='零误差')
-axes[1].set_xlabel('预测误差 (μg/m³)', fontsize=12)
-axes[1].set_ylabel('频数', fontsize=12)
-axes[1].set_title(f'优化模型 - 预测误差分布\n均值={errors_opt.mean():.2f}, 标准差={errors_opt.std():.2f}', 
+axes[1].axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='Zero Error')
+axes[1].set_xlabel('Prediction Error (μg/m³)', fontsize=12)
+axes[1].set_ylabel('Frequency', fontsize=12)
+axes[1].set_title(f'Optimized Model - Prediction Error Distribution\nMean={errors_opt.mean():.2f}, Std={errors_opt.std():.2f}', 
                   fontsize=13, fontweight='bold')
 axes[1].legend(fontsize=11)
 axes[1].grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout()
 plt.savefig(output_dir / 'error_distribution.png', dpi=300, bbox_inches='tight')
-print("保存: error_distribution.png")
+print("Saved: error_distribution.png")
 plt.close()
 
-# ============================== 第16部分: 保存结果 ==============================
+# ============================== Part 16: Save Results ==============================
 print("\n" + "=" * 80)
-print("第11步: 保存结果")
+print("Step 11: Saving Results")
 print("=" * 80)
 
-# 保存模型性能
+# Save model performance
 all_results.to_csv(output_dir / 'model_performance.csv', index=False, encoding='utf-8-sig')
-print("保存: model_performance.csv")
+print("Saved: model_performance.csv")
 
-# 保存特征重要性
+# Save feature importance
 feature_importance.to_csv(output_dir / 'feature_importance.csv', index=False, encoding='utf-8-sig')
-print("保存: feature_importance.csv")
+print("Saved: feature_importance.csv")
 
-# 保存最佳参数
+# Save best parameters
 best_params_df = pd.DataFrame([best_params])
 best_params_df.to_csv(output_dir / 'best_parameters.csv', index=False, encoding='utf-8-sig')
-print("保存: best_parameters.csv")
+print("Saved: best_parameters.csv")
 
-# 保存预测结果
+# Save predictions
 predictions_df = pd.DataFrame({
     'Date': test_date_index,
     'Actual': y_test_actual_basic,
@@ -1682,9 +1682,9 @@ predictions_df = pd.DataFrame({
     'Error_Optimized': y_test_actual_basic - y_test_pred_opt
 })
 predictions_df.to_csv(output_dir / 'predictions.csv', index=False, encoding='utf-8-sig')
-print("保存: predictions.csv")
+print("Saved: predictions.csv")
 
-# 保存模型（PyTorch格式）
+# Save model (PyTorch format)
 torch.save({
     'model_state_dict': model_optimized.state_dict(),
     'optimizer_state_dict': optimizer_opt.state_dict(),
@@ -1698,9 +1698,9 @@ torch.save({
     'hyperparameters': best_params,
     'batch_size': BATCH_SIZE
 }, model_dir / 'cnn_optimized_gpu.pth')
-print("保存: cnn_optimized_gpu.pth")
+print("Saved: cnn_optimized_gpu.pth")
 
-# 保存模型架构信息
+# Save model architecture information
 model_info = {
     'window_size': WINDOW_SIZE,
     'num_features': num_features,
@@ -1714,58 +1714,57 @@ model_info = {
 
 with open(model_dir / 'model_info_gpu.pkl', 'wb') as f:
     pickle.dump(model_info, f)
-print("保存: model_info_gpu.pkl")
+print("Saved: model_info_gpu.pkl")
 
-# ============================== 第17部分: 总结报告 ==============================
+# ============================== Part 17: Summary Report ==============================
 print("\n" + "=" * 80)
-print("分析完成！")
+print("Analysis Complete!")
 print("=" * 80)
 
-print("\n生成的文件:")
-print("\nCSV文件:")
-print("  - model_performance.csv       模型性能对比")
-print("  - feature_importance.csv      特征重要性")
-print("  - best_parameters.csv         最佳参数")
-print("  - predictions.csv             预测结果")
+print("\nGenerated files:")
+print("\nCSV files:")
+print("  - model_performance.csv       Model performance comparison")
+print("  - feature_importance.csv      Feature importance")
+print("  - best_parameters.csv         Best parameters")
+print("  - predictions.csv             Prediction results")
 
-print("\n图表文件:")
-print("  - training_curves.png         训练过程曲线")
-print("  - prediction_scatter.png      预测vs实际散点图")
-print("  - timeseries_comparison.png   时间序列对比")
-print("  - residuals_analysis.png      残差分析")
-print("  - feature_importance.png      特征重要性图")
-print("  - model_comparison.png        模型性能对比")
-print("  - error_distribution.png      误差分布")
+print("\nChart files:")
+print("  - training_curves.png         Training process curves")
+print("  - prediction_scatter.png      Prediction vs actual scatter plots")
+print("  - timeseries_comparison.png   Time series comparison")
+print("  - residuals_analysis.png      Residual analysis")
+print("  - feature_importance.png      Feature importance plot")
+print("  - model_comparison.png        Model performance comparison")
+print("  - error_distribution.png      Error distribution")
 
-print("\n模型文件:")
-print("  - cnn_optimized_gpu.pth       CNN模型（GPU版本，含AMP）")
-print("  - model_info_gpu.pkl          模型信息")
+print("\nModel files:")
+print("  - cnn_optimized_gpu.pth       CNN model (GPU version with AMP)")
+print("  - model_info_gpu.pkl          Model information")
 
-# 最佳模型信息
+# Best model information
 best_model = test_results.iloc[0]
-print(f"\n最佳模型: {best_model['Model']}")
+print(f"\nBest model: {best_model['Model']}")
 print(f"  R² Score: {best_model['R²']:.4f}")
 print(f"  RMSE: {best_model['RMSE']:.2f} μg/m³")
 print(f"  MAE: {best_model['MAE']:.2f} μg/m³")
 print(f"  MAPE: {best_model['MAPE']:.2f}%")
 
-print("\nTop 5 最重要特征:")
+print("\nTop 5 most important features:")
 for i, (idx, row) in enumerate(feature_importance.head(5).iterrows(), 1):
     print(f"  {i}. {row['Feature']}: {row['Importance_Norm']:.2f}%")
 
-print(f"\n模型架构:")
-print(f"  时间窗口: {WINDOW_SIZE} 天")
-print(f"  特征数: {num_features}")
-print(f"  批次大小: {BATCH_SIZE}")
-print(f"  总参数: {total_params:,}")
-print(f"  可训练参数: {trainable_params:,}")
+print(f"\nModel architecture:")
+print(f"  Time window: {WINDOW_SIZE} days")
+print(f"  Number of features: {num_features}")
+print(f"  Batch size: {BATCH_SIZE}")
+print(f"  Total parameters: {total_params:,}")
+print(f"  Trainable parameters: {trainable_params:,}")
 
-print(f"\nGPU加速信息:")
-print(f"  设备: {gpu_name}")
-print(f"  混合精度训练: 已启用 (FP16)")
-print_gpu_memory("  最终")
+print(f"\nGPU acceleration information:")
+print(f"  Device: {gpu_name}")
+print(f"  Mixed precision training: Enabled (FP16)")
+print_gpu_memory("  Final ")
 
 print("\n" + "=" * 80)
-print("CNN PM2.5浓度预测完成！(GPU加速版)")
+print("CNN PM2.5 Concentration Prediction Complete! (GPU Accelerated Version)")
 print("=" * 80)
-
