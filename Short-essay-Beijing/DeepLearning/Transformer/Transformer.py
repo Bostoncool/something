@@ -600,8 +600,9 @@ class PositionalEncoding(nn.Module):
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
         
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
+        # 分别处理偶数和奇数位置，避免维度不匹配
+        pe[:, 0::2] = torch.sin(position * div_term[:pe[:, 0::2].shape[1]])
+        pe[:, 1::2] = torch.cos(position * div_term[:pe[:, 1::2].shape[1]])
         
         pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
@@ -681,7 +682,7 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, patience=
     """训练模型"""
     optimizer = optim.Adam(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, 
-                                                       patience=10, verbose=verbose)
+                                                       patience=10)
     criterion = nn.MSELoss()
     
     train_losses = []
