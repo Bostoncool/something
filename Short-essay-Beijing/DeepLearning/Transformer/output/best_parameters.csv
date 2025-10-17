@@ -1,2 +1,2 @@
 ﻿d_model,nhead,num_layers,dim_feedforward,dropout,learning_rate
-152,8,2,654,0.3,0.0001
+144,8,2,654,0.05,0.0001

@@ -1,0 +1,4 @@
+﻿input_size,hidden_size,num_layers,num_filters,kernel_size,dropout,window
+32,111,1,24,3,0.3099025726528951,7
+32,95,2,55,3,0.40428085626465105,14
+32,55,1,55,3,0.2824451812865192,30

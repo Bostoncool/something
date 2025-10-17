@@ -1,70 +1,71 @@
 
-SVR PM2.5浓度预测模型报告
+SVR PM2.5 Concentration Prediction Model Report
 ================================================================================
 
-1. 数据概况
-   - 数据时间范围: 2015-01-01 至 2024-12-31
-   - 总样本数: 3614
-   - 特征数量: 27
-   - 目标变量: PM2.5浓度 (μg/m³)
+1. Data Overview
+   - Data time range: 2015-01-01 to 2024-12-31
+   - Total number of samples: 3614
+   - Number of features: 27
+   - Target variable: PM2.5 Concentration (μg/m³)
 
-2. 数据集划分
-   - 训练集: 2528 样本 (70.0%)
-   - 验证集: 543 样本 (15.0%)
-   - 测试集: 543 样本 (15.0%)
+2. Dataset Split
+   - Training set: 2528 samples (70.0%)
+   - Validation set: 543 samples (15.0%)
+   - Test set: 543 samples (15.0%)
 
-3. PM2.5统计信息
-   - 均值: 48.11 μg/m³
-   - 标准差: 47.49 μg/m³
-   - 最小值: 1.64 μg/m³
-   - 最大值: 439.50 μg/m³
-   - 中位数: 33.23 μg/m³
+3. PM2.5 Statistics
+   - Mean: 48.11 μg/m³
+   - Std Dev: 47.49 μg/m³
+   - Min: 1.64 μg/m³
+   - Max: 439.50 μg/m³
+   - Median: 33.23 μg/m³
 
-4. 模型性能对比
+4. Model Performance Comparison
 
    SVR-RBF:
-   - 测试集RMSE: 43.7326
-   - 测试集MAE: 24.4846
-   - 测试集R²: 0.2544
-   - 最佳参数: {'C': 100, 'epsilon': 0.2, 'gamma': 0.01}
+   - Test RMSE: 36.7758
+   - Test MAE: 22.8998
+   - Test R²: 0.3146
+   - Best Parameters: {'C': 100, 'epsilon': 0.2, 'gamma': 0.01}
 
    SVR-Linear:
-   - 测试集RMSE: 45.4261
-   - 测试集MAE: 25.2448
-   - 测试集R²: 0.1955
-   - 最佳参数: {'C': 100, 'epsilon': 0.2}
+   - Test RMSE: 38.3308
+   - Test MAE: 23.6930
+   - Test R²: 0.2554
+   - Best Parameters: {'C': 100, 'epsilon': 0.2}
 
    SVR-Poly:
-   - 测试集RMSE: 52.1553
-   - 测试集MAE: 29.6073
-   - 测试集R²: -0.0605
-   - 最佳参数: {'C': 0.1, 'epsilon': 0.2, 'gamma': 0.01}
+   - Test RMSE: 38.4415
+   - Test MAE: 24.0374
+   - Test R²: 0.2511
+   - Best Parameters: {'C': 1, 'epsilon': 0.2, 'gamma': 'scale'}
 
-5. 最佳模型
-   - 模型名称: SVR-RBF
-   - 测试集R²: -0.0605
-   - 测试集RMSE: 52.1553
-   - 测试集MAE: 29.6073
+5. Best Model
+   - Model name: SVR-RBF
+   - Test R²: 0.2511
+   - Test RMSE: 38.4415
+   - Test MAE: 24.0374
 
-6. 特征工程
-   - 原始污染物特征: PM2.5, PM10, SO2, NO2, CO, O3
-   - ERA5气象特征: d2m, t2m, u10, v10, u100, v100, blh, avg_tprate, mn2t, sp, tcwv, tp
-   - 衍生特征: 风速、风向、温度转换、相对湿度、时间特征等
+6. Feature Engineering
+   - Original pollutant features: PM2.5, PM10, SO2, NO2, CO, O3
+   - ERA5 meteorological features: d2m, t2m, u10, v10, u100, v100, blh, avg_tprate, mn2t, sp, tcwv, tp
+   - Derived features: Wind speed, wind direction, temperature conversion, relative humidity, time features, etc.
 
-7. 模型说明
-   支持向量回归（SVR）是一种强大的非线性回归方法，通过核函数将特征映射到
-   高维空间，能够有效拟合PM2.5与气象因素之间的复杂非线性关系。本研究对比了
-   RBF、Linear和Poly三种核函数，并通过网格搜索优化超参数。
+7. Model Description
+   Support Vector Regression (SVR) is a powerful nonlinear regression method that maps features to
+   high-dimensional space through kernel functions, effectively fitting complex nonlinear relationships
+   between PM2.5 and meteorological factors. This study compared RBF, Linear and Poly kernel functions,
+   and optimized hyperparameters through grid search.
 
-8. 文件清单
-   - SVR_PM25_Prediction.py: 主程序
-   - svr_model_comparison.csv: 模型对比结果
-   - model_comparison.png: 模型性能对比图
-   - prediction_results.png: 预测结果详细分析图
-   - time_series_prediction.png: 时间序列预测对比图
-   - SVR-RBF_best.pkl: 最佳模型文件
-   - scaler_X.pkl, scaler_y.pkl: 标准化器
-   - feature_names.csv: 特征名称列表
+8. File List
+   - SVR_PM25_Prediction.py: Main program
+   - svr_model_comparison.csv: Model comparison results
+   - model_comparison.png: Model performance comparison chart
+   - prediction_results.png: Detailed prediction result analysis chart
+   - time_series_prediction.png: Time series prediction comparison chart
+   - SVR-RBF_best.pkl: Best model file
+   - scaler_X.pkl, scaler_y.pkl: Scalers
+   - feature_names.csv: Feature name list
 
 ================================================================================
-报告生成时间: 2025-10-09 19:57:34
+Report generation time: 2025-10-17 17:35:33
