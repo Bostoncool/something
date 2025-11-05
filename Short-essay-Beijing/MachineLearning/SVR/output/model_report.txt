@@ -9,8 +9,8 @@ SVR PM2.5 Concentration Prediction Model Report
    - Target variable: PM2.5 Concentration (μg/m³)
 
 2. Dataset Split
-   - Training set: 2528 samples (70.0%)
-   - Validation set: 543 samples (15.0%)
+   - Training set: 2529 samples (70.0%)
+   - Validation set: 542 samples (15.0%)
    - Test set: 543 samples (15.0%)
 
 3. PM2.5 Statistics
@@ -23,28 +23,28 @@ SVR PM2.5 Concentration Prediction Model Report
 4. Model Performance Comparison
 
    SVR-RBF:
-   - Test RMSE: 36.7758
-   - Test MAE: 22.8998
-   - Test R²: 0.3146
-   - Best Parameters: {'C': 100, 'epsilon': 0.2, 'gamma': 0.01}
+   - Test RMSE: 32.7773
+   - Test MAE: 25.7809
+   - Test R²: -0.7320
+   - Best Parameters: {'C': 10, 'epsilon': 0.2, 'gamma': 'scale'}
 
    SVR-Linear:
-   - Test RMSE: 38.3308
-   - Test MAE: 23.6930
-   - Test R²: 0.2554
-   - Best Parameters: {'C': 100, 'epsilon': 0.2}
+   - Test RMSE: 25.8010
+   - Test MAE: 22.0089
+   - Test R²: -0.0732
+   - Best Parameters: {'C': 1, 'epsilon': 0.2}
 
    SVR-Poly:
-   - Test RMSE: 38.4415
-   - Test MAE: 24.0374
-   - Test R²: 0.2511
+   - Test RMSE: 39.8496
+   - Test MAE: 24.0351
+   - Test R²: -1.5601
    - Best Parameters: {'C': 1, 'epsilon': 0.2, 'gamma': 'scale'}
 
 5. Best Model
-   - Model name: SVR-RBF
-   - Test R²: 0.2511
-   - Test RMSE: 38.4415
-   - Test MAE: 24.0374
+   - Model name: SVR-Linear
+   - Test R²: -1.5601
+   - Test RMSE: 39.8496
+   - Test MAE: 24.0351
 
 6. Feature Engineering
    - Original pollutant features: PM2.5, PM10, SO2, NO2, CO, O3
@@ -63,9 +63,9 @@ SVR PM2.5 Concentration Prediction Model Report
    - model_comparison.png: Model performance comparison chart
    - prediction_results.png: Detailed prediction result analysis chart
    - time_series_prediction.png: Time series prediction comparison chart
-   - SVR-RBF_best.pkl: Best model file
+   - SVR-Linear_best.pkl: Best model file
    - scaler_X.pkl, scaler_y.pkl: Scalers
    - feature_names.csv: Feature name list
 
 ================================================================================
-Report generation time: 2025-10-17 17:35:33
+Report generation time: 2025-11-05 10:41:30

@@ -42,8 +42,8 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# Set Chinese font display
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
+# Set font display
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 print("=" * 80)
@@ -499,13 +499,36 @@ print(f"  Min: {y.min():.2f} μg/m³")
 print(f"  Max: {y.max():.2f} μg/m³")
 print(f"  Median: {y.median():.2f} μg/m³")
 
-# Data split (70% training, 15% validation, 15% testing)
-X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.15, random_state=42)
-X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.1765, random_state=42)
+# Data split - Using time series split (70% training, 15% validation, 15% testing)
+print("\nUsing time series split method (split by chronological order, not random split)")
+print("This allows using past data to predict future, which fits the actual scenario of time series prediction")
 
-print(f"\nTraining set size: {X_train.shape[0]} ({X_train.shape[0]/len(X)*100:.1f}%)")
-print(f"Validation set size: {X_val.shape[0]} ({X_val.shape[0]/len(X)*100:.1f}%)")
-print(f"Test set size: {X_test.shape[0]} ({X_test.shape[0]/len(X)*100:.1f}%)")
+# Ensure data is sorted by time
+df_combined_sorted = df_combined.sort_index()
+X = df_combined_sorted[feature_cols]
+y = df_combined_sorted[target]
+
+# Calculate split points
+n_total = len(X)
+n_train = int(n_total * 0.70)
+n_val = int(n_total * 0.15)
+
+# Split by time order
+X_train = X.iloc[:n_train]
+y_train = y.iloc[:n_train]
+
+X_val = X.iloc[n_train:n_train+n_val]
+y_val = y.iloc[n_train:n_train+n_val]
+
+X_test = X.iloc[n_train+n_val:]
+y_test = y.iloc[n_train+n_val:]
+
+print(f"\nTraining Set: {X_train.shape[0]} samples ({X_train.shape[0]/len(X)*100:.1f}%)")
+print(f"  Time Range: {y_train.index.min().date()} to {y_train.index.max().date()}")
+print(f"Validation Set: {X_val.shape[0]} samples ({X_val.shape[0]/len(X)*100:.1f}%)")
+print(f"  Time Range: {y_val.index.min().date()} to {y_val.index.max().date()}")
+print(f"Test Set: {X_test.shape[0]} samples ({X_test.shape[0]/len(X)*100:.1f}%)")
+print(f"  Time Range: {y_test.index.min().date()} to {y_test.index.max().date()}")
 
 # Standardization
 scaler_X = StandardScaler()
@@ -749,25 +772,36 @@ print("  Saved: prediction_results.png")
 # Figure 3: Time series prediction comparison (test set data only)
 fig, ax = plt.subplots(figsize=(16, 6))
 
-# Select first 500 samples from test set for visualization
-n_samples = min(500, len(y_test))
+# Since we now use time-based split, test set is already in chronological order
+# Select a suitable number of samples for visualization (not too many to avoid clutter)
+n_samples = min(365, len(y_test))  # Display up to 1 year of data
 test_indices = y_test.index[:n_samples]
 
+# Plot actual and predicted values
 ax.plot(test_indices, y_test.iloc[:n_samples], 
-        label='Actual Values', color='blue', linewidth=1.5, alpha=0.7)
+        label='Actual Value', color='#1f77b4', linewidth=2, alpha=0.8, marker='o', 
+        markersize=3, markevery=max(1, n_samples//50))
 ax.plot(test_indices, y_test_pred[:n_samples], 
-        label='Predicted Values', color='red', linewidth=1.5, alpha=0.7)
+        label='Predicted Value', color='#ff7f0e', linewidth=2, alpha=0.8, marker='s', 
+        markersize=3, markevery=max(1, n_samples//50))
+
+# Fill area between actual and predicted
 ax.fill_between(test_indices, y_test.iloc[:n_samples], y_test_pred[:n_samples],
-                alpha=0.2, color='gray')
+                alpha=0.15, color='gray', label='Prediction Error Area')
 
-ax.set_xlabel('Date', fontsize=12)
-ax.set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
-ax.set_title(f'PM2.5 Concentration Prediction Time Series Comparison ({best_model_name})', 
+ax.set_xlabel('Date', fontsize=12, fontweight='bold')
+ax.set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12, fontweight='bold')
+ax.set_title(f'PM2.5 Concentration Prediction Time Series Comparison ({best_model_name})\nTest Set: {test_indices[0].date()} to {test_indices[-1].date()}', 
              fontsize=14, fontweight='bold')
-ax.legend(fontsize=10)
-ax.grid(alpha=0.3)
+ax.legend(fontsize=11, loc='best', framealpha=0.9)
+ax.grid(alpha=0.3, linestyle='--', linewidth=0.5)
 
-plt.xticks(rotation=45)
+# Improve date formatting on x-axis
+import matplotlib.dates as mdates
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+ax.xaxis.set_major_locator(mdates.MonthLocator(interval=max(1, n_samples//365//2)))
+plt.xticks(rotation=45, ha='right')
+
 plt.tight_layout()
 plt.savefig(output_dir / 'time_series_prediction.png', dpi=300, bbox_inches='tight')
 plt.close()
