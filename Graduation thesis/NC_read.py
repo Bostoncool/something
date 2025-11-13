@@ -48,4 +48,4 @@ def inspect_nc_file(nc_file_path):
         print(f"错误: {e}")
  
 # 使用示例
-inspect_nc_file(r"G:\2000-2023[PM2.5(NC)]\2000\CHAP_PM2.5_D1K_20000101_V4.nc")
+inspect_nc_file(r"E:\DATA Science\ERA5-Beijing-NC\10m_u_component_of_wind\201501.nc")
