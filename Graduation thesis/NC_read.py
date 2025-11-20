@@ -48,4 +48,8 @@ def inspect_nc_file(nc_file_path):
         print(f"错误: {e}")
  
 # 使用示例
+<<<<<<< HEAD
 inspect_nc_file(r"C:\Users\IU\Desktop\Datebase Origin\ERA5-Beijing-NC\2m_dewpoint_temperature\201501.nc")
+=======
+inspect_nc_file(r"E:\DATA Science\ERA5-Beijing-NC\10m_u_component_of_wind\201501.nc")
+>>>>>>> 584c1f2c67430da02f43637e14553d02aa3e23c8
