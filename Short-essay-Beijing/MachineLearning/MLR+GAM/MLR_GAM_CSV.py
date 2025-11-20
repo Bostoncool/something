@@ -1,11 +1,3 @@
-"""
-Beijing PM2.5 Concentration Prediction - Linear Baseline Model
-Multiple Linear Regression (MLR) and Generalized Additive Model (GAM)
-
-Based on correlation analysis results, select meteorological variables with strong correlation to build baseline model
-Main meteorological variables: temperature (t2m), dew point temperature (d2m), wind speed (u10/v10), humidity (tcwv), precipitation (tp), boundary layer height (blh), etc.
-"""
-
 import os
 import pandas as pd
 import numpy as np

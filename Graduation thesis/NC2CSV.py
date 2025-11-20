@@ -11,66 +11,66 @@ warnings.filterwarnings('ignore')
 class NetCDFToCSVConverter:
     def __init__(self, input_folder, output_folder, num_processes=None):
         """
-        初始化NetCDF转CSV转换器
+        Initialize NetCDF to CSV converter
         
         Args:
-            input_folder: 输入文件夹路径
-            output_folder: 输出文件夹路径
-            num_processes: 进程数，默认为CPU核心数
+            input_folder: Input folder path
+            output_folder: Output folder path
+            num_processes: Number of processes, defaults to CPU core count
         """
         self.input_folder = input_folder
         self.output_folder = output_folder
         self.num_processes = num_processes or mp.cpu_count()
         
-        # 创建输出文件夹
+        # Create output folder
         os.makedirs(self.output_folder, exist_ok=True)
         
     def process_single_file(self, nc_file_path):
         """
-        处理单个NetCDF文件
+        Process a single NetCDF file
         
         Args:
-            nc_file_path: NetCDF文件路径
+            nc_file_path: NetCDF file path
             
         Returns:
-            tuple: (输入文件路径, 输出文件路径, 状态, 错误信息)
+            tuple: (input file path, output file path, status, error message)
         """
         try:
-            # 获取文件名（不含扩展名）
+            # Get filename without extension
             file_name = os.path.splitext(os.path.basename(nc_file_path))[0]
             output_file_path = os.path.join(self.output_folder, f"{file_name}.csv")
             
-            # 读取NetCDF文件
+            # Read NetCDF file
             with nc.Dataset(nc_file_path, 'r') as dataset:
-                # 检查必要的变量是否存在
+                # Check if required variables exist
                 if 'PM2.5' not in dataset.variables:
-                    return nc_file_path, output_file_path, "failed", "缺少PM2.5变量"
+                    return nc_file_path, output_file_path, "failed", "Missing PM2.5 variable"
                 
-                # 获取维度信息
+                # Get dimension information
                 lat_dim = dataset.dimensions['lat']
                 lon_dim = dataset.dimensions['lon']
                 
-                # 获取变量数据
+                # Get variable data
                 lat_data = dataset.variables['lat'][:]
                 lon_data = dataset.variables['lon'][:]
                 pm25_data = dataset.variables['PM2.5'][:]
                 
-                # 获取PM2.5的属性
+                # Get PM2.5 attributes
                 pm25_attrs = dataset.variables['PM2.5'].__dict__
                 fill_value = pm25_attrs.get('_FillValue', 65535)
                 scale_factor = pm25_attrs.get('scale_factor', 0.1)
                 add_offset = pm25_attrs.get('add_offset', 0.0)
                 units = pm25_attrs.get('units', 'µg/m3')
             
-            # 处理缺失值和数据缩放
+            # Handle missing values and data scaling
             pm25_data = pm25_data.astype(np.float32)
             pm25_data[pm25_data == fill_value] = np.nan
             pm25_data = pm25_data * scale_factor + add_offset
             
-            # 创建网格
+            # Create grid
             lon_grid, lat_grid = np.meshgrid(lon_data, lat_data)
             
-            # 展平数据并创建DataFrame
+            # Flatten data and create DataFrame
             df_data = {
                 'latitude': lat_grid.flatten(),
                 'longitude': lon_grid.flatten(),
@@ -79,16 +79,16 @@ class NetCDFToCSVConverter:
             
             df = pd.DataFrame(df_data)
             
-            # 移除缺失值以减小文件大小
+            # Remove missing values to reduce file size
             df = df.dropna(subset=['PM25'])
             
-            # 添加单位信息作为注释
+            # Add unit information as comment
             metadata_comment = f"# Units: PM25 = {units}\n"
             metadata_comment += f"# Data scaled with: value = raw * {scale_factor} + {add_offset}\n"
             metadata_comment += f"# Original dimensions: lat={len(lat_data)}, lon={len(lon_data)}\n"
             metadata_comment += f"# Processed data points: {len(df)}\n"
             
-            # 写入CSV文件
+            # Write CSV file
             with open(output_file_path, 'w', encoding='utf-8') as f:
                 f.write(metadata_comment)
                 df.to_csv(f, index=False)
@@ -100,40 +100,40 @@ class NetCDFToCSVConverter:
     
     def batch_convert(self, file_pattern="*.nc"):
         """
-        批量转换NetCDF文件为CSV格式（递归搜索所有子文件夹）
+        Batch convert NetCDF files to CSV format (recursively search all subfolders)
         
         Args:
-            file_pattern: 文件匹配模式
+            file_pattern: File matching pattern
         """
-        # 检查输入文件夹是否存在
+        # Check if input folder exists
         if not os.path.exists(self.input_folder):
-            print(f"错误：输入文件夹不存在: {self.input_folder}")
-            print("请检查路径是否正确，或者U盘是否已正确连接")
+            print(f"Error: Input folder does not exist: {self.input_folder}")
+            print("Please check if the path is correct, or if the USB drive is properly connected")
             return
         
         print(f"Searching folder: {self.input_folder}")
         
-        # 递归获取所有NetCDF文件（包括子文件夹）
-        # 使用 os.walk 来确保递归搜索
+        # Recursively get all NetCDF files (including subfolders)
+        # Use os.walk to ensure recursive search
         nc_files = []
         for root, dirs, files in os.walk(self.input_folder):
             for file in files:
                 if file.endswith('.nc'):
                     nc_files.append(os.path.join(root, file))
         
-        # 如果没找到文件，尝试列出目录内容进行调试
+        # If no files found, try listing directory contents for debugging
         if not nc_files:
             print(f"No {file_pattern} files found in folder {self.input_folder}")
             print("\nDebug info:")
             print(f"Folder exists: {os.path.exists(self.input_folder)}")
             print(f"Is directory: {os.path.isdir(self.input_folder)}")
             
-            # 尝试列出目录内容
+            # Try listing directory contents
             try:
                 dir_contents = os.listdir(self.input_folder)
-                print(f"Directory contents: {dir_contents[:10]}...")  # 只显示前10个
+                print(f"Directory contents: {dir_contents[:10]}...")  # Only show first 10
                 
-                # 尝试不同的搜索模式
+                # Try different search patterns
                 print("\nTrying different search patterns:")
                 patterns_to_try = ["*.nc", "**/*.nc", "**/*.NC", "*/*.nc"]
                 for pattern in patterns_to_try:
@@ -142,9 +142,9 @@ class NetCDFToCSVConverter:
                     if test_files:
                         print(f"    Example file: {test_files[0]}")
                 
-                # 检查子文件夹内容
+                # Check subfolder contents
                 print("\nChecking subfolder contents:")
-                for subfolder in dir_contents[:3]:  # 只检查前3个子文件夹
+                for subfolder in dir_contents[:3]:  # Only check first 3 subfolders
                     subfolder_path = os.path.join(self.input_folder, subfolder)
                     if os.path.isdir(subfolder_path):
                         try:
@@ -164,7 +164,7 @@ class NetCDFToCSVConverter:
         print(f"Output folder: {self.output_folder}")
         print("-" * 50)
         
-        # 使用多进程处理
+        # Use multiprocessing for processing
         with mp.Pool(processes=self.num_processes) as pool:
             results = list(tqdm(
                 pool.imap(self.process_single_file, nc_files),
@@ -172,7 +172,7 @@ class NetCDFToCSVConverter:
                 desc="Conversion progress"
             ))
         
-        # 统计结果
+        # Count results
         successful = 0
         failed = 0
         
@@ -191,7 +191,7 @@ class NetCDFToCSVConverter:
 
 def test_path_access():
     """
-    测试路径访问功能
+    Test path access functionality
     """
     possible_paths = [
         r"G:\2000-2023[PM2.5(NC)]",
@@ -215,27 +215,27 @@ def test_path_access():
 
 def main():
     """
-    主函数 - 在这里设置输入和输出路径
+    Main function - Set input and output paths here
     """
     # ================================
-    # 在这里设置您的文件夹路径
+    # Set your folder paths here
     # ================================
     
-    # 首先测试路径访问
+    # First test path access
     test_path_access()
     print("\n" + "="*50 + "\n")
     
-    # 输入文件夹路径（包含.nc文件的文件夹）
-    INPUT_FOLDER = r"G:\2000-2023[PM2.5(NC)]"  # 修改为您的输入文件夹路径
+    # Input folder path (folder containing .nc files)
+    INPUT_FOLDER = r"G:\2000-2023[PM2.5(NC)]"  # Modify to your input folder path
     
-    # 输出文件夹路径（将保存.csv文件的文件夹）
-    OUTPUT_FOLDER = r"G:\2000-2023[PM2.5(CSV)]"  # 修改为您的输出文件夹路径
+    # Output folder path (folder where .csv files will be saved)
+    OUTPUT_FOLDER = r"G:\2000-2023[PM2.5(CSV)]"  # Modify to your output folder path
     
-    # 进程数（默认为CPU核心数，可根据需要调整）
-    NUM_PROCESSES = mp.cpu_count()  # 可以设置为具体数字，如 4
+    # Number of processes (defaults to CPU core count, can be adjusted as needed)
+    NUM_PROCESSES = mp.cpu_count()  # Can be set to a specific number, e.g., 4
     
     # ================================
-    # 执行转换
+    # Execute conversion
     # ================================
     
     converter = NetCDFToCSVConverter(
@@ -244,10 +244,10 @@ def main():
         num_processes=NUM_PROCESSES
     )
     
-    # 开始批量转换
+    # Start batch conversion
     converter.batch_convert()
 
 if __name__ == "__main__":
-    # 在Windows上使用多进程时需要这个保护
+    # This protection is needed when using multiprocessing on Windows
     mp.freeze_support()
     main()

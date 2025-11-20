@@ -19,7 +19,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import warnings
 import pickle
 from pathlib import Path
@@ -74,8 +74,8 @@ print("=" * 80)
 print("\nConfiguring parameters...")
 
 # Data paths
-pollution_all_path = r'C:\Users\IU\Desktop\Datebase Origin\Benchmark\all(AQI+PM2.5+PM10)'
-pollution_extra_path = r'C:\Users\IU\Desktop\Datebase Origin\Benchmark\extra(SO2+NO2+CO+O3)'
+pollution_all_path = '/root/autodl-tmp/Benchmark/all(AQI+PM2.5+PM10)'
+pollution_extra_path = '/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)'
 
 # Output path
 output_dir = Path('./output')
@@ -101,18 +101,37 @@ def daterange(start, end):
     for n in range(int((end - start).days) + 1):
         yield start + timedelta(n)
 
-def find_file(base_path, date_str, prefix):
-    """Find file for specified date"""
-    filename = f"{prefix}_{date_str}.csv"
+def build_file_path_dict(base_path, prefix):
+    """
+    预先构建文件路径字典，实现O(1)查找
+    返回字典：{date_str: file_path}
+    """
+    print(f"  正在扫描目录构建文件路径字典: {base_path}")
+    file_dict = {}
+    filename_prefix = f"{prefix}_"
+    
     for root, _, files in os.walk(base_path):
-        if filename in files:
-            return os.path.join(root, filename)
-    return None
+        for filename in files:
+            if filename.startswith(filename_prefix) and filename.endswith('.csv'):
+                # 提取日期字符串 (格式: prefix_YYYYMMDD.csv)
+                date_str = filename[len(filename_prefix):-4]  # 去掉前缀和后缀
+                if len(date_str) == 8 and date_str.isdigit():  # 验证日期格式
+                    full_path = os.path.join(root, filename)
+                    file_dict[date_str] = full_path
+    
+    print(f"  找到 {len(file_dict)} 个文件")
+    return file_dict
 
-def read_pollution_day(date):
-    """Read single day pollution data"""
+def read_pollution_day(args):
+    """
+    读取单日污染数据（多进程版本）
+    args: (date, file_path_dict) 元组
+    """
+    date, file_path_dict = args
     date_str = date.strftime('%Y%m%d')
-    all_file = find_file(pollution_all_path, date_str, 'beijing_all')
+    
+    # 使用字典O(1)查找文件路径
+    all_file = file_path_dict.get(date_str)
     
     if not all_file:
         return None
@@ -151,14 +170,28 @@ def read_pollution_day(date):
         return None
 
 def read_all_pollution():
-    """Read all pollution data in parallel"""
+    """使用多进程并行读取所有污染数据"""
     print("\nLoading pollution data...")
-    print(f"Using {MAX_WORKERS} parallel workers")
+    print(f"使用 {MAX_WORKERS} 个进程并行读取")
+    
+    # 预先构建文件路径字典（O(1)查找）
+    print("正在构建文件路径字典...")
+    file_path_dict = build_file_path_dict(pollution_all_path, 'beijing_all')
+    
+    if not file_path_dict:
+        print("⚠️ 警告: 未找到任何数据文件！")
+        return pd.Series()
+    
     dates = list(daterange(start_date, end_date))
     pollution_series = []
     
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(read_pollution_day, date): date for date in dates}
+    # 准备参数：将日期和文件路径字典打包
+    # 注意：多进程需要传递可序列化的参数
+    task_args = [(date, file_path_dict) for date in dates]
+    
+    # 使用多进程池
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(read_pollution_day, args): args[0] for args in task_args}
         
         if TQDM_AVAILABLE:
             for future in tqdm(as_completed(futures), total=len(futures), 
@@ -172,7 +205,7 @@ def read_all_pollution():
                 if result is not None:
                     pollution_series.append(result)
                 if i % 500 == 0 or i == len(futures):
-                    print(f"  Processed {i}/{len(futures)} days ({i/len(futures)*100:.1f}%)")
+                    print(f"  已处理 {i}/{len(futures)} 天 ({i/len(futures)*100:.1f}%)")
     
     if pollution_series:
         print(f"  Successfully read {len(pollution_series)}/{len(dates)} days of data")

@@ -3,7 +3,7 @@ import os
 # 在某个路径下批量生成指定名称文件夹
 
 def create_folders(base_path):
-    for year in range(2000, 2024):
+    for year in range(1, 11):
         folder_name = str(year)
         folder_path = os.path.join(base_path, folder_name)
         try:
@@ -13,4 +13,4 @@ def create_folders(base_path):
             print(f"Failed to create folder {folder_path}: {e}")
 
 # 使用你想要的路径替换 'your/base/path'
-create_folders('your/base/path')
+create_folders('E:\DATA Science\Result\XGBOOST')

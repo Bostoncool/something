@@ -1,16 +1,3 @@
-"""
-NetCDF 文件结构核查工具
----------------------------------
-用法示例：
-    python inspect_nc_file.py "E:\\DATA Science\\ERA5-Beijing-NC\\2m_dewpoint_temperature\\201501.nc"
-    python inspect_nc_file.py "E:\\DATA Science\\ERA5-Beijing-NC" --recursive --output report.csv
-
-功能：
-1. 读取单个或多个 .nc 文件并输出变量、维度、坐标等信息。
-2. 检查关键字段是否缺失（time、latitude、longitude）以及 ERA5 常用变量。
-3. 生成结构化 CSV 报告（可选）。
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -109,19 +96,19 @@ def inspect_nc_file(
 
     if not file_path.exists():
         result.status = "missing_file"
-        result.notes.append("文件不存在")
+        result.notes.append("File does not exist")
         return result
 
     if not file_path.is_file():
         result.status = "not_a_file"
-        result.notes.append("路径不是文件")
+        result.notes.append("Path is not a file")
         return result
 
     try:
         dataset = xr.open_dataset(file_path, engine=engine)
     except Exception as exc:  # pylint: disable=broad-except
         result.status = "open_failed"
-        result.notes.append(f"无法打开文件: {exc}")
+        result.notes.append(f"Failed to open file: {exc}")
         return result
 
     try:
@@ -140,7 +127,7 @@ def inspect_nc_file(
                 aliases = [alias for alias, canonical in COORD_ALIASES.items() if canonical == coord]
                 alias_present = any(alias in coord_names for alias in aliases)
                 if alias_present:
-                    result.notes.append(f"坐标 {coord} 缺失，但存在别名 {aliases}")
+                    result.notes.append(f"Coordinate {coord} missing, but alias {aliases} exists")
                 else:
                     missing_coord_aliases.append(coord)
 
@@ -151,18 +138,18 @@ def inspect_nc_file(
         missing_variables = sorted(set(expected_vars) - var_names)
         if missing_variables:
             result.missing_vars = ", ".join(missing_variables)
-            result.notes.append("部分 ERA5 变量缺失")
+            result.notes.append("Some ERA5 variables are missing")
 
         redundant_dims = dim_names - set(expected_coords) - set(COORD_ALIASES)
         if redundant_dims:
-            result.notes.append(f"额外维度: {sorted(redundant_dims)}")
+            result.notes.append(f"Extra dimensions: {sorted(redundant_dims)}")
 
         if "number" in dataset.dims:
-            result.notes.append("检测到集合维度 number，可能需要先平均处理")
+            result.notes.append("Detected ensemble dimension 'number', may need averaging first")
 
         for alias, canonical in COORD_ALIASES.items():
             if alias in coord_names and canonical not in coord_names:
-                result.notes.append(f"建议重命名坐标 {alias} -> {canonical}")
+                result.notes.append(f"Suggest renaming coordinate {alias} -> {canonical}")
 
     finally:
         dataset.close()
@@ -179,40 +166,40 @@ def collect_files(target: Path, recursive: bool) -> List[Path]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetCDF 文件结构核查工具")
+    parser = argparse.ArgumentParser(description="NetCDF File Structure Inspection Tool")
     parser.add_argument(
         "target",
         nargs="?",
         default=str(DEFAULT_TARGET),
-        help=f"NetCDF 文件或目录路径（默认：{DEFAULT_TARGET}）",
+        help=f"NetCDF file or directory path (default: {DEFAULT_TARGET})",
     )
     parser.add_argument(
         "--engine",
         default="netcdf4",
-        help="xarray 读取引擎（默认：netcdf4）",
+        help="xarray reading engine (default: netcdf4)",
     )
     parser.add_argument(
         "--recursive",
         dest="recursive",
         action="store_true",
         default=True,
-        help="当 target 为目录时，递归遍历子目录（默认开启）",
+        help="When target is a directory, recursively traverse subdirectories (enabled by default)",
     )
     parser.add_argument(
         "--no-recursive",
         dest="recursive",
         action="store_false",
-        help="禁用递归遍历，仅检查当前目录",
+        help="Disable recursive traversal, only check current directory",
     )
     parser.add_argument(
         "--output",
         type=str,
-        help="可选：将结果写入 CSV 报告",
+        help="Optional: write results to CSV report",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="输出调试信息",
+        help="Output debug information",
     )
     return parser
 
@@ -224,20 +211,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     configure_logger(verbose=args.verbose)
 
     target_path = Path(args.target).expanduser()
-    logging.info("开始核查：%s", target_path)
+    logging.info("Starting inspection: %s", target_path)
 
     if not target_path.exists():
-        logging.error("指定路径不存在：%s", target_path)
+        logging.error("Specified path does not exist: %s", target_path)
         return 1
 
     files = collect_files(target_path, recursive=args.recursive)
     if not files:
-        logging.warning("未找到任何 .nc 文件")
+        logging.warning("No .nc files found")
         return 2
 
     results: List[InspectionResult] = []
     for file_path in files:
-        logging.debug("检查文件：%s", file_path)
+        logging.debug("Checking file: %s", file_path)
         result = inspect_nc_file(Path(file_path), engine=args.engine)
         results.append(result)
 
@@ -249,20 +236,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             result.coordinates or "-",
         )
         if result.missing_coords:
-            logging.warning("缺失坐标：%s", result.missing_coords)
+            logging.warning("Missing coordinates: %s", result.missing_coords)
         if result.missing_vars:
-            logging.warning("缺失变量：%s", result.missing_vars)
+            logging.warning("Missing variables: %s", result.missing_vars)
         if result.notes:
-            logging.info("备注：%s", "; ".join(result.notes))
+            logging.info("Notes: %s", "; ".join(result.notes))
 
     if args.output:
         output_path = Path(args.output).expanduser()
         df = pd.DataFrame([res.to_dict() for res in results])
         output_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(output_path, index=False, encoding="utf-8-sig")
-        logging.info("报告已保存：%s", output_path)
+        logging.info("Report saved: %s", output_path)
 
-    logging.info("核查完成，共处理 %d 个文件", len(results))
+    logging.info("Inspection completed, processed %d files", len(results))
     return 0
 
 
@@ -293,75 +280,75 @@ ERA5_VARS = [
 
 def inspect_nc_file(path: Path, expected_vars: Optional[Iterable[str]] = None) -> None:
     if not path.exists():
-        print(f"❌ 文件不存在：{path}")
+        print(f"❌ File does not exist: {path}")
         return
     if not path.is_file():
-        print(f"❌ 不是文件：{path}")
+        print(f"❌ Not a file: {path}")
         return
 
-    print(f"✅ 正在检查 NetCDF 文件：{path}")
+    print(f"✅ Checking NetCDF file: {path}")
     ds = xr.open_dataset(path, engine="netcdf4")
-    print("\n--- Dataset 概要 ---")
+    print("\n--- Dataset Summary ---")
     print(ds)
 
-    print("\n--- 坐标/维度 ---")
+    print("\n--- Coordinates/Dimensions ---")
     print(f"coords: {list(ds.coords)}")
     print(f"dims  : {dict(ds.sizes)}")
 
     missing_coords = [coord for coord in REQUIRED_COORDS if coord not in ds.coords]
     if missing_coords:
-        print(f"\n⚠️ 缺失关键坐标：{missing_coords}")
+        print(f"\n⚠️ Missing key coordinates: {missing_coords}")
         for alt, canonical in ALT_COORD_MAP.items():
             if alt in ds.coords and canonical not in ds.coords:
-                print(f"  • 检测到可替代坐标 `{alt}` → 建议重命名为 `{canonical}`")
+                print(f"  • Detected alternative coordinate `{alt}` → suggest renaming to `{canonical}`")
     else:
-        print("\n✅ 关键坐标齐全")
+        print("\n✅ All key coordinates present")
 
     extra_coords = [coord for coord in OPTIONAL_COORDS if coord in ds.variables]
     if extra_coords:
-        print(f"\nℹ️ 检测到可删除的辅助坐标变量：{extra_coords}")
+        print(f"\nℹ️ Detected auxiliary coordinate variables that can be removed: {extra_coords}")
 
     ensemble_dims = [dim for dim in OPTIONAL_DIMS if dim in ds.dims]
     if ensemble_dims:
-        print(f"\nℹ️ 数据包含集合维度 {ensemble_dims}，后续可按需取均值或选择单成员")
+        print(f"\nℹ️ Data contains ensemble dimensions {ensemble_dims}, may need averaging or single member selection")
 
     vars_available = [v for v in ds.data_vars]
-    print("\n--- 数据变量 ---")
+    print("\n--- Data Variables ---")
     for name in vars_available:
         print(f"  • {name}")
 
     if expected_vars:
         missing_vars = [v for v in expected_vars if v not in vars_available]
         if missing_vars:
-            print(f"\n⚠️ 缺失预期变量：{missing_vars}")
+            print(f"\n⚠️ Missing expected variables: {missing_vars}")
         else:
-            print("\n✅ 预期变量均存在")
+            print("\n✅ All expected variables present")
 
-    print("\n--- 建议操作 ---")
+    print("\n--- Suggested Actions ---")
     if missing_coords or extra_coords or ensemble_dims:
-        print(" 1) 可以在加载后执行 `.rename()`、`.drop_vars()` 或 `.mean(dim=...)` 处理。")
+        print(" 1) Can execute `.rename()`, `.drop_vars()`, or `.mean(dim=...)` after loading.")
     else:
-        print(" 1) 该文件结构符合预期，可直接进入数据处理流程。")
-    print(" 2) 若需批量检查，可在外层循环遍历目录并调用 `inspect_nc_file`。")
+        print(" 1) File structure meets expectations, can proceed directly to data processing.")
+    print(" 2) For batch inspection, iterate through directories in outer loop and call `inspect_nc_file`.")
     ds.close()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="核查 NetCDF 文件格式与关键要素。")
+    parser = argparse.ArgumentParser(description="Inspect NetCDF file format and key elements.")
     parser.add_argument(
         "path",
         nargs="?",
         default=str(DEFAULT_TARGET),
-        help=f"NetCDF 文件路径或包含 .nc 的目录（默认：{DEFAULT_TARGET}）",
+        help=f"NetCDF file path or directory containing .nc files (default: {DEFAULT_TARGET})",
     )
-    parser.add_argument("--check-era5-vars", action="store_true", help="额外校验 ERA5 常用变量")
+    parser.add_argument("--check-era5-vars", action="store_true", help="Additionally validate common ERA5 variables")
     args = parser.parse_args()
     target = Path(args.path)
 
     if target.is_dir():
         files = sorted(target.glob("*.nc"))
         if not files:
-            print(f"⚠️ 指定目录下未找到 .nc 文件：{target}")
+            print(f"⚠️ No .nc files found in specified directory: {target}")
             return
         for file in files:
             print("\n" + "=" * 80)

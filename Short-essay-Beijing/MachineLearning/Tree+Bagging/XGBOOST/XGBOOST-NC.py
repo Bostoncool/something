@@ -1,8 +1,3 @@
-"""
-Beijing PM2.5 Concentration Prediction - XGBoost Model (NetCDF Version)
-读取 ERA5 气象数据的逻辑参考自 `LightGBM-NC.py`，实现基于 NetCDF 文件的高效加载流程
-"""
-
 import os
 import glob
 import warnings
@@ -11,7 +6,7 @@ import pickle
 import multiprocessing
 from pathlib import Path
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -36,14 +31,16 @@ try:
     TQDM_AVAILABLE = True
 except ImportError:
     TQDM_AVAILABLE = False
-    print("提示：未检测到 tqdm，进度显示将使用简易模式。")
-    print("      可执行 `pip install tqdm` 获得更友好的进度条体验。")
+    print("Note: tqdm not detected, progress display will use simple mode.")
+    print("      Run `pip install tqdm` for a better progress bar experience.")
 
-plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial Unicode MS"]
+plt.rcParams["font.sans-serif"] = ["Arial", "DejaVu Sans", "Liberation Sans"]
 plt.rcParams["axes.unicode_minus"] = False
 plt.rcParams["figure.dpi"] = 100
 
-np.random.seed(RANDOM_SEED)
+# 使用numpy的新随机数生成器API（避免弃用警告）
+# 注意：XGBoost使用random_state参数控制随机性，这里设置全局种子主要用于其他随机操作
+np.random.default_rng(RANDOM_SEED)
 
 
 def daterange(start: datetime, end: datetime):
@@ -51,23 +48,35 @@ def daterange(start: datetime, end: datetime):
         yield start + timedelta(n_days)
 
 
-def find_file(base_path: str, date_str: str, prefix: str) -> str | None:
-    filename = f"{prefix}_{date_str}.csv"
+def build_file_path_dict(base_path: str, prefix: str) -> dict[str, str]:
+    """预先扫描目录，构建日期到文件路径的字典，时间复杂度O(1)查找"""
+    file_dict: dict[str, str] = {}
+    print(f"  正在扫描 {base_path} 目录...")
     for root, _, files in os.walk(base_path):
-        if filename in files:
-            return os.path.join(root, filename)
-    return None
+        for filename in files:
+            if filename.startswith(f"{prefix}_") and filename.endswith(".csv"):
+                # 提取日期部分：beijing_all_YYYYMMDD.csv -> YYYYMMDD
+                date_str = filename[len(prefix) + 1:-4]  # 去掉前缀和下划线，去掉.csv
+                if len(date_str) == 8 and date_str.isdigit():  # 确保是8位日期格式
+                    file_path = os.path.join(root, filename)
+                    if date_str not in file_dict:
+                        file_dict[date_str] = file_path
+                    else:
+                        # 如果存在重复，保留第一个找到的
+                        pass
+    print(f"  找到 {len(file_dict)} 个文件")
+    return file_dict
 
 
 def read_pollution_day(
     date: datetime,
-    pollution_all_path: str,
-    pollution_extra_path: str,
+    file_dict_all: dict[str, str],
+    file_dict_extra: dict[str, str],
     pollutants: list[str],
 ) -> pd.DataFrame | None:
     date_str = date.strftime("%Y%m%d")
-    all_file = find_file(pollution_all_path, date_str, "beijing_all")
-    extra_file = find_file(pollution_extra_path, date_str, "beijing_extra")
+    all_file = file_dict_all.get(date_str)
+    extra_file = file_dict_extra.get(date_str)
 
     if not all_file or not extra_file:
         return None
@@ -110,18 +119,25 @@ def read_all_pollution(
     pollution_extra_path: str,
     pollutants: list[str],
 ) -> pd.DataFrame:
-    print("\n加载污染物数据...")
-    print(f"使用 {MAX_WORKERS} 个并行线程")
+    print("\nLoading pollution data...")
+    print(f"Using {MAX_WORKERS} parallel processes")
+    
+    # 预先构建文件路径字典，避免每次遍历查找
+    print("\n构建文件路径字典...")
+    file_dict_all = build_file_path_dict(pollution_all_path, "beijing_all")
+    file_dict_extra = build_file_path_dict(pollution_extra_path, "beijing_extra")
+    
     dates = list(daterange(start_date, end_date))
     pollution_dfs: list[pd.DataFrame] = []
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    # 使用多进程而不是多线程，避免netcdf4库的线程安全问题
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
             executor.submit(
                 read_pollution_day,
                 date,
-                pollution_all_path,
-                pollution_extra_path,
+                file_dict_all,
+                file_dict_extra,
                 pollutants,
             ): date
             for date in dates
@@ -131,7 +147,7 @@ def read_all_pollution(
             for future in tqdm(
                 as_completed(futures),
                 total=len(futures),
-                desc="污染物数据加载",
+                desc="Loading pollution data",
                 unit="day",
             ):
                 result = future.result()
@@ -144,19 +160,19 @@ def read_all_pollution(
                     pollution_dfs.append(result)
                 if idx % 500 == 0 or idx == len(futures):
                     print(
-                        f"  已处理 {idx}/{len(futures)} 天数据 "
+                        f"  Processed {idx}/{len(futures)} days of data "
                         f"({idx / len(futures) * 100:.1f}%)"
                     )
 
     if pollution_dfs:
-        print(f"  成功读取 {len(pollution_dfs)}/{len(dates)} 天数据")
+        print(f"  Successfully read {len(pollution_dfs)}/{len(dates)} days of data")
         df_poll_all = pd.concat(pollution_dfs)
-        df_poll_all.ffill(inplace=True)
-        df_poll_all.fillna(df_poll_all.mean(), inplace=True)
-        print(f"污染物数据加载完成，形状：{df_poll_all.shape}")
+        df_poll_all = df_poll_all.ffill()
+        df_poll_all = df_poll_all.fillna(df_poll_all.mean())
+        print(f"Pollution data loading completed, shape: {df_poll_all.shape}")
         return df_poll_all
 
-    print("⚠️ 未成功加载任何污染物数据！")
+    print("⚠️ Failed to load any pollution data!")
     return pd.DataFrame()
 
 
@@ -165,9 +181,14 @@ def read_era5_month(
     month: int,
     era5_path: str,
     era5_vars: list[str],
-    beijing_lats: np.ndarray,
-    beijing_lons: np.ndarray,
+    beijing_lats: list[float] | np.ndarray,
+    beijing_lons: list[float] | np.ndarray,
 ) -> pd.DataFrame | None:
+    # 确保是numpy数组（多进程传递时可能是列表）
+    if isinstance(beijing_lats, list):
+        beijing_lats = np.array(beijing_lats)
+    if isinstance(beijing_lons, list):
+        beijing_lons = np.array(beijing_lons)
     month_str = f"{year}{month:02d}"
     all_files = glob.glob(os.path.join(era5_path, "**", f"*{month_str}*.nc"), recursive=True)
     fallback_used = False
@@ -195,7 +216,7 @@ def read_era5_month(
                 available_vars = [v for v in era5_vars if v in nc_file.variables]
             if not available_vars:
                 print(
-                    f"[WARN] {os.path.basename(file_path)} 缺少目标变量列表中的字段，跳过"
+                    f"[WARN] {os.path.basename(file_path)} missing variables from target list, skipping"
                 )
                 continue
 
@@ -236,7 +257,7 @@ def read_era5_month(
 
                 ds_subset = ds[available_vars]
                 if "time" not in ds_subset.coords:
-                    print(f"[WARN] {os.path.basename(file_path)} 缺少时间坐标，跳过")
+                    print(f"[WARN] {os.path.basename(file_path)} missing time coordinate, skipping")
                     continue
                 ds_subset = ds_subset.sortby("time")
 
@@ -245,7 +266,7 @@ def read_era5_month(
                         ds_subset = ds_subset.sel(time=slice(month_start, month_end))
                     except Exception as err:
                         print(
-                            f"[WARN] {os.path.basename(file_path)} 时间筛选失败：{err}"
+                            f"[WARN] {os.path.basename(file_path)} time filtering failed: {err}"
                         )
                         continue
                     if ds_subset.sizes.get("time", 0) == 0:
@@ -274,10 +295,10 @@ def read_era5_month(
                 monthly_datasets.append(ds_daily.load())
                 print(
                     f"  [+] {os.path.basename(file_path)} -> {year}-{month:02d} "
-                    f"天数: {ds_daily.sizes.get('time', 0)}, 变量数: {len(ds_daily.data_vars)}"
+                    f"Days: {ds_daily.sizes.get('time', 0)}, Variables: {len(ds_daily.data_vars)}"
                 )
         except Exception as err:
-            print(f"[ERROR] 读取 {os.path.basename(file_path)} 失败：{type(err).__name__}: {err}")
+            print(f"[ERROR] Failed to read {os.path.basename(file_path)}: {type(err).__name__}: {err}")
             continue
 
     if not monthly_datasets:
@@ -292,7 +313,7 @@ def read_era5_month(
         return None
 
     print(
-        f"  成功读取 ERA5 数据：{year}-{month:02d}，天数: {len(df_month)}，变量: {len(df_month.columns)}"
+        f"  Successfully read ERA5 data: {year}-{month:02d}, Days: {len(df_month)}, Variables: {len(df_month.columns)}"
     )
     return df_month
 
@@ -305,16 +326,16 @@ def read_all_era5(
     beijing_lats: np.ndarray,
     beijing_lons: np.ndarray,
 ) -> pd.DataFrame:
-    print("\n加载 ERA5 气象数据 (NetCDF)...")
-    print(f"使用 {MAX_WORKERS} 个并行线程")
-    print(f"气象数据目录: {era5_path}")
-    print(f"目录是否存在: {os.path.exists(era5_path)}")
+    print("\nLoading ERA5 meteorological data (NetCDF)...")
+    print(f"Using {MAX_WORKERS} parallel processes")
+    print(f"Meteorological data directory: {era5_path}")
+    print(f"Directory exists: {os.path.exists(era5_path)}")
 
     if os.path.exists(era5_path):
         all_nc = glob.glob(os.path.join(era5_path, "**", "*.nc"), recursive=True)
-        print(f"已发现 {len(all_nc)} 个 NetCDF 文件")
+        print(f"Found {len(all_nc)} NetCDF files")
         if all_nc:
-            print(f"示例文件: {[os.path.basename(f) for f in all_nc[:5]]}")
+            print(f"Sample files: {[os.path.basename(f) for f in all_nc[:5]]}")
 
     era5_dfs: list[pd.DataFrame] = []
     years = range(start_year, end_year + 1)
@@ -326,9 +347,11 @@ def read_all_era5(
         for month in months
         if not (year == end_year and month > 12)
     ]
-    print(f"计划加载 {len(month_tasks)} 个月的数据...")
+    print(f"Planning to load {len(month_tasks)} months of data...")
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    # 使用多进程而不是多线程，避免netcdf4库的线程安全问题
+    # 注意：需要将numpy数组转换为列表以便序列化传递给子进程
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
             executor.submit(
                 read_era5_month,
@@ -336,8 +359,8 @@ def read_all_era5(
                 month,
                 era5_path,
                 era5_vars,
-                beijing_lats,
-                beijing_lons,
+                beijing_lats.tolist(),  # 转换为列表以便序列化
+                beijing_lons.tolist(),  # 转换为列表以便序列化
             ): (year, month)
             for year, month in month_tasks
         }
@@ -347,7 +370,7 @@ def read_all_era5(
             for future in tqdm(
                 as_completed(futures),
                 total=len(futures),
-                desc="气象数据加载",
+                desc="Loading meteorological data",
                 unit="month",
             ):
                 result = future.result()
@@ -362,41 +385,41 @@ def read_all_era5(
                     success_count += 1
                 if idx % 20 == 0 or idx == len(futures):
                     print(
-                        f"  进度: {idx}/{len(futures)} 月份 (成功 {success_count} 个, "
+                        f"  Progress: {idx}/{len(futures)} months (successful {success_count}, "
                         f"{idx / len(futures) * 100:.1f}%)"
                     )
 
-        print(f"  共成功加载 {success_count}/{len(futures)} 个月份的数据")
+        print(f"  Successfully loaded {success_count}/{len(futures)} months of data")
 
     if not era5_dfs:
-        print("\n❌ 错误：没有成功加载任何气象数据文件！")
-        print("排查建议：")
-        print("1. 确认文件命名是否包含 YYYYMM 或者目录下是否存在 .nc 文件")
-        print("2. 检查文件内容是否包含时间、经纬度坐标以及目标变量")
-        print("3. 核对 ERA5 数据路径是否正确")
+        print("\n❌ Error: Failed to load any meteorological data files!")
+        print("Troubleshooting suggestions:")
+        print("1. Verify file naming contains YYYYMM or check if .nc files exist in the directory")
+        print("2. Check if files contain time, latitude/longitude coordinates and target variables")
+        print("3. Verify the ERA5 data path is correct")
         return pd.DataFrame()
 
-    print("\n合并气象数据...")
+    print("\nMerging meteorological data...")
     df_era5_all = pd.concat(era5_dfs, axis=0)
-    print("  去重...")
+    print("  Removing duplicates...")
     df_era5_all = df_era5_all[~df_era5_all.index.duplicated(keep="first")]
-    print("  排序...")
-    df_era5_all.sort_index(inplace=True)
+    print("  Sorting...")
+    df_era5_all = df_era5_all.sort_index()
 
-    print(f"合并后形状: {df_era5_all.shape}")
-    print(f"时间范围: {df_era5_all.index.min()} 至 {df_era5_all.index.max()}")
+    print(f"Merged shape: {df_era5_all.shape}")
+    print(f"Time range: {df_era5_all.index.min()} to {df_era5_all.index.max()}")
     preview_cols = list(df_era5_all.columns[:10])
-    print(f"示例变量: {preview_cols}{'...' if len(df_era5_all.columns) > 10 else ''}")
+    print(f"Sample variables: {preview_cols}{'...' if len(df_era5_all.columns) > 10 else ''}")
 
-    print("  处理缺失值...")
+    print("  Processing missing values...")
     initial_na = df_era5_all.isna().sum().sum()
-    df_era5_all.ffill(inplace=True)
-    df_era5_all.bfill(inplace=True)
-    df_era5_all.fillna(df_era5_all.mean(), inplace=True)
+    df_era5_all = df_era5_all.ffill()
+    df_era5_all = df_era5_all.bfill()
+    df_era5_all = df_era5_all.fillna(df_era5_all.mean())
     final_na = df_era5_all.isna().sum().sum()
-    print(f"缺失值: {initial_na} -> {final_na}")
+    print(f"Missing values: {initial_na} -> {final_na}")
 
-    print("气象数据加载完成。")
+    print("Meteorological data loading completed.")
     return df_era5_all
 
 
@@ -416,8 +439,8 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame:
     df_copy["year"] = df_copy.index.year
     df_copy["month"] = df_copy.index.month
     df_copy["day"] = df_copy.index.day
-    df_copy["day_of_year"] = df_copy.index.dayofyear
-    df_copy["day_of_week"] = df_copy.index.dayofweek
+    df_copy["day_of_year"] = df_copy.index.day_of_year  # 使用新的API替代已弃用的dayofyear
+    df_copy["day_of_week"] = df_copy.index.day_of_week  # 使用新的API替代已弃用的dayofweek
     df_copy["week_of_year"] = df_copy.index.isocalendar().week.astype(int)
 
     df_copy["season"] = df_copy["month"].apply(
@@ -467,7 +490,7 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame:
 def evaluate_model(y_true: pd.Series, y_pred: np.ndarray, dataset_name: str) -> dict:
     mask = y_true != 0
     safe_true = y_true[mask]
-    safe_pred = y_pred[mask.values]  # 使用布尔数组直接索引 numpy 数组
+    safe_pred = y_pred[mask.values]  # Use boolean array to directly index numpy array
 
     r2 = r2_score(y_true, y_pred)
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
@@ -499,27 +522,27 @@ def plot_training_curves(
         train_key = "validation_0"
         valid_key = "validation_1"
         if train_key in evals:
-            ax.plot(evals[train_key]["rmse"], label="训练集", linewidth=2)
-            ax.plot(evals[valid_key]["rmse"], label="验证集", linewidth=2)
+            ax.plot(evals[train_key]["rmse"], label="Training Set", linewidth=2)
+            ax.plot(evals[valid_key]["rmse"], label="Validation Set", linewidth=2)
         elif "train" in evals:
-            ax.plot(evals["train"]["rmse"], label="训练集", linewidth=2)
-            ax.plot(evals["valid"]["rmse"], label="验证集", linewidth=2)
+            ax.plot(evals["train"]["rmse"], label="Training Set", linewidth=2)
+            ax.plot(evals["valid"]["rmse"], label="Validation Set", linewidth=2)
         if hasattr(model, "best_iteration") and model.best_iteration is not None:
             ax.axvline(
                 x=model.best_iteration,
                 color="r",
                 linestyle="--",
                 linewidth=1.5,
-                label=f"最佳迭代 ({model.best_iteration})",
+                label=f"Best Iteration ({model.best_iteration})",
             )
-        ax.set_xlabel("迭代轮数", fontsize=12)
+        ax.set_xlabel("Iteration", fontsize=12)
         ax.set_ylabel("RMSE", fontsize=12)
         ax.set_title(title, fontsize=13, fontweight="bold")
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
 
-    _plot_curve(axes[0], evals_result, model_basic, "XGBoost 基础模型 - 训练过程")
-    _plot_curve(axes[1], evals_result_opt, model_opt, "XGBoost 优化模型 - 训练过程")
+    _plot_curve(axes[0], evals_result, model_basic, "XGBoost Basic Model - Training Process")
+    _plot_curve(axes[1], evals_result_opt, model_opt, "XGBoost Optimized Model - Training Process")
 
     plt.tight_layout()
     plt.savefig(output_dir / "training_curves.png", dpi=300, bbox_inches="tight")
@@ -547,12 +570,12 @@ def plot_prediction_scatter(
         )
         min_val = min(y_true.min(), y_pred.min())
         max_val = max(y_true.max(), y_pred.max())
-        ax.plot([min_val, max_val], [min_val, max_val], "r--", lw=2, label="理想预测")
+        ax.plot([min_val, max_val], [min_val, max_val], "r--", lw=2, label="Ideal Prediction")
 
         r2 = r2_score(y_true, y_pred)
         rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-        ax.set_xlabel("真实 PM2.5 浓度 (μg/m³)", fontsize=11)
-        ax.set_ylabel("预测 PM2.5 浓度 (μg/m³)", fontsize=11)
+        ax.set_xlabel("Actual PM2.5 Concentration (μg/m³)", fontsize=11)
+        ax.set_ylabel("Predicted PM2.5 Concentration (μg/m³)", fontsize=11)
         ax.set_title(
             f"XGBoost_{model_name} - {dataset}\nR²={r2:.4f}, RMSE={rmse:.2f}",
             fontsize=11,
@@ -578,19 +601,19 @@ def plot_time_series(
     plot_idx = range(len(y_test) - plot_range, len(y_test))
     time_idx = y_test.index[plot_idx]
 
-    axes[0].plot(time_idx, y_test.iloc[plot_idx], "k-", label="真实值", linewidth=2, alpha=0.8)
+    axes[0].plot(time_idx, y_test.iloc[plot_idx], "k-", label="Actual", linewidth=2, alpha=0.8)
     axes[0].plot(
         time_idx,
         y_test_pred_basic[plot_idx],
         "b--",
-        label="基础模型预测",
+        label="Basic Model Prediction",
         linewidth=1.5,
         alpha=0.7,
     )
-    axes[0].set_xlabel("日期", fontsize=12)
-    axes[0].set_ylabel("PM2.5 浓度 (μg/m³)", fontsize=12)
+    axes[0].set_xlabel("Date", fontsize=12)
+    axes[0].set_ylabel("PM2.5 Concentration (μg/m³)", fontsize=12)
     axes[0].set_title(
-        "XGBoost 基础模型 - 测试集后 300 天预测对比",
+        "XGBoost Basic Model - Last 300 Days Prediction Comparison",
         fontsize=13,
         fontweight="bold",
     )
@@ -598,19 +621,19 @@ def plot_time_series(
     axes[0].grid(True, alpha=0.3)
     plt.setp(axes[0].xaxis.get_majorticklabels(), rotation=45)
 
-    axes[1].plot(time_idx, y_test.iloc[plot_idx], "k-", label="真实值", linewidth=2, alpha=0.8)
+    axes[1].plot(time_idx, y_test.iloc[plot_idx], "k-", label="Actual", linewidth=2, alpha=0.8)
     axes[1].plot(
         time_idx,
         y_test_pred_opt[plot_idx],
         "g--",
-        label="优化模型预测",
+        label="Optimized Model Prediction",
         linewidth=1.5,
         alpha=0.7,
     )
-    axes[1].set_xlabel("日期", fontsize=12)
-    axes[1].set_ylabel("PM2.5 浓度 (μg/m³)", fontsize=12)
+    axes[1].set_xlabel("Date", fontsize=12)
+    axes[1].set_ylabel("PM2.5 Concentration (μg/m³)", fontsize=12)
     axes[1].set_title(
-        "XGBoost 优化模型 - 测试集后 300 天预测对比",
+        "XGBoost Optimized Model - Last 300 Days Prediction Comparison",
         fontsize=13,
         fontweight="bold",
     )
@@ -641,11 +664,11 @@ def plot_residuals(
             linewidth=0.3,
         )
         ax.axhline(y=0, color="r", linestyle="--", linewidth=2)
-        ax.set_xlabel("预测值 (μg/m³)", fontsize=11)
-        ax.set_ylabel("残差 (μg/m³)", fontsize=11)
+        ax.set_xlabel("Predicted Value (μg/m³)", fontsize=11)
+        ax.set_ylabel("Residual (μg/m³)", fontsize=11)
         ax.set_title(
-            f"XGBoost_{model_name} - {dataset}\n残差均值={residuals.mean():.2f}, "
-            f"标准差={residuals.std():.2f}",
+            f"XGBoost_{model_name} - {dataset}\nMean Residual={residuals.mean():.2f}, "
+            f"Std Dev={residuals.std():.2f}",
             fontsize=11,
             fontweight="bold",
         )
@@ -666,8 +689,8 @@ def plot_feature_importance(feature_importance: pd.DataFrame, output_dir: Path) 
     axes[0].barh(range(top_n), top_features_gain["Importance_Gain_Norm"], color="steelblue")
     axes[0].set_yticks(range(top_n))
     axes[0].set_yticklabels(top_features_gain["Feature"], fontsize=10)
-    axes[0].set_xlabel("重要性 (%)", fontsize=12)
-    axes[0].set_title(f"Top {top_n} 重要特征 (按 Gain)", fontsize=13, fontweight="bold")
+    axes[0].set_xlabel("Importance (%)", fontsize=12)
+    axes[0].set_title(f"Top {top_n} Important Features (by Gain)", fontsize=13, fontweight="bold")
     axes[0].grid(True, alpha=0.3, axis="x")
     axes[0].invert_yaxis()
 
@@ -678,8 +701,8 @@ def plot_feature_importance(feature_importance: pd.DataFrame, output_dir: Path) 
     )
     axes[1].set_yticks(range(top_n))
     axes[1].set_yticklabels(top_features_weight["Feature"], fontsize=10)
-    axes[1].set_xlabel("重要性 (%)", fontsize=12)
-    axes[1].set_title(f"Top {top_n} 重要特征 (按 Weight)", fontsize=13, fontweight="bold")
+    axes[1].set_xlabel("Importance (%)", fontsize=12)
+    axes[1].set_title(f"Top {top_n} Important Features (by Weight)", fontsize=13, fontweight="bold")
     axes[1].grid(True, alpha=0.3, axis="x")
     axes[1].invert_yaxis()
 
@@ -705,12 +728,12 @@ def plot_model_comparison(test_results: pd.DataFrame, output_dir: Path) -> None:
             linewidth=1.5,
         )
         axes[idx].set_xticks(x_pos)
-        axes[idx].set_xticklabels(["基础", "优化"], fontsize=11)
+        axes[idx].set_xticklabels(["Basic", "Optimized"], fontsize=11)
         axes[idx].set_ylabel(metric, fontsize=12)
         if metric == "R²":
-            axes[idx].set_title(f"{metric} 对比\n(越高越好)", fontsize=12, fontweight="bold")
+            axes[idx].set_title(f"{metric} Comparison\n(Higher is Better)", fontsize=12, fontweight="bold")
         else:
-            axes[idx].set_title(f"{metric} 对比\n(越低越好)", fontsize=12, fontweight="bold")
+            axes[idx].set_title(f"{metric} Comparison\n(Lower is Better)", fontsize=12, fontweight="bold")
         axes[idx].grid(True, alpha=0.3, axis="y")
         for j, value in enumerate(test_results[metric]):
             if metric == "MAPE":
@@ -745,11 +768,11 @@ def plot_error_distribution(
     fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
     axes[0].hist(errors_basic, bins=50, color="blue", alpha=0.7, edgecolor="black")
-    axes[0].axvline(x=0, color="r", linestyle="--", linewidth=2.5, label="零误差")
-    axes[0].set_xlabel("预测误差 (μg/m³)", fontsize=12)
-    axes[0].set_ylabel("频数", fontsize=12)
+    axes[0].axvline(x=0, color="r", linestyle="--", linewidth=2.5, label="Zero Error")
+    axes[0].set_xlabel("Prediction Error (μg/m³)", fontsize=12)
+    axes[0].set_ylabel("Frequency", fontsize=12)
     axes[0].set_title(
-        f"基础模型 - 误差分布\n均值={errors_basic.mean():.2f}, 标准差={errors_basic.std():.2f}",
+        f"Basic Model - Error Distribution\nMean={errors_basic.mean():.2f}, Std Dev={errors_basic.std():.2f}",
         fontsize=13,
         fontweight="bold",
     )
@@ -757,11 +780,11 @@ def plot_error_distribution(
     axes[0].grid(True, alpha=0.3, axis="y")
 
     axes[1].hist(errors_opt, bins=50, color="green", alpha=0.7, edgecolor="black")
-    axes[1].axvline(x=0, color="r", linestyle="--", linewidth=2.5, label="零误差")
-    axes[1].set_xlabel("预测误差 (μg/m³)", fontsize=12)
-    axes[1].set_ylabel("频数", fontsize=12)
+    axes[1].axvline(x=0, color="r", linestyle="--", linewidth=2.5, label="Zero Error")
+    axes[1].set_xlabel("Prediction Error (μg/m³)", fontsize=12)
+    axes[1].set_ylabel("Frequency", fontsize=12)
     axes[1].set_title(
-        f"优化模型 - 误差分布\n均值={errors_opt.mean():.2f}, 标准差={errors_opt.std():.2f}",
+        f"Optimized Model - Error Distribution\nMean={errors_opt.mean():.2f}, Std Dev={errors_opt.std():.2f}",
         fontsize=13,
         fontweight="bold",
     )
@@ -811,14 +834,14 @@ def save_results(
 
 def main():
     print("=" * 80)
-    print("北京 PM2.5 浓度预测 - XGBoost 模型（NetCDF 数据版本）")
+    print("Beijing PM2.5 Concentration Prediction - XGBoost Model (NetCDF Data Version)")
     print("=" * 80)
 
-    print("\n配置参数...")
+    print("\nConfiguring parameters...")
 
-    pollution_all_path = r"E:\DATA Science\Benchmark\all(AQI+PM2.5+PM10)"
-    pollution_extra_path = r"E:\DATA Science\Benchmark\extra(SO2+NO2+CO+O3)"
-    era5_path = r"E:\DATA Science\ERA5-Beijing-NC"
+    pollution_all_path = '/root/autodl-tmp/Benchmark/all(AQI+PM2.5+PM10)'
+    pollution_extra_path = '/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)'
+    era5_path = '/root/autodl-tmp/ERA5-Beijing-NC'
 
     output_dir = Path("./output")
     output_dir.mkdir(exist_ok=True)
@@ -854,14 +877,14 @@ def main():
         "lsm",
     ]
 
-    print(f"数据时间范围: {start_date.date()} 至 {end_date.date()}")
-    print(f"目标变量: PM2.5 浓度")
-    print(f"输出目录: {output_dir.resolve()}")
-    print(f"模型保存目录: {model_dir.resolve()}")
-    print(f"CPU 核心数: {CPU_COUNT}, 并行线程数: {MAX_WORKERS}")
+    print(f"Data time range: {start_date.date()} to {end_date.date()}")
+    print(f"Target variable: PM2.5 Concentration")
+    print(f"Output directory: {output_dir.resolve()}")
+    print(f"Model save directory: {model_dir.resolve()}")
+    print(f"CPU cores: {CPU_COUNT}, Parallel threads: {MAX_WORKERS}")
 
     print("\n" + "=" * 80)
-    print("步骤 1: 数据加载与预处理")
+    print("Step 1: Data Loading and Preprocessing")
     print("=" * 80)
 
     df_pollution = read_all_pollution(
@@ -880,61 +903,61 @@ def main():
         beijing_lons,
     )
 
-    print("\n数据加载检查:")
-    print(f"  污染物数据形状: {df_pollution.shape}")
-    print(f"  气象数据形状: {df_era5.shape}")
+    print("\nData loading check:")
+    print(f"  Pollution data shape: {df_pollution.shape}")
+    print(f"  Meteorological data shape: {df_era5.shape}")
 
     if df_pollution.empty:
-        print("\n⚠️ 警告: 污染物数据为空，请检查数据路径和文件。")
+        print("\n⚠️ Warning: Pollution data is empty, please check data paths and files.")
         raise SystemExit(1)
     if df_era5.empty:
-        print("\n⚠️ 警告: 气象数据为空，请检查数据路径和文件。")
+        print("\n⚠️ Warning: Meteorological data is empty, please check data paths and files.")
         raise SystemExit(1)
 
     df_pollution.index = pd.to_datetime(df_pollution.index)
     df_era5.index = pd.to_datetime(df_era5.index)
 
     print(
-        f"  污染物数据时间范围: {df_pollution.index.min()} 至 {df_pollution.index.max()}"
+        f"  Pollution data time range: {df_pollution.index.min()} to {df_pollution.index.max()}"
     )
-    print(f"  气象数据时间范围: {df_era5.index.min()} 至 {df_era5.index.max()}")
+    print(f"  Meteorological data time range: {df_era5.index.min()} to {df_era5.index.max()}")
 
-    print("\n数据合并...")
+    print("\nMerging data...")
     df_combined = df_pollution.join(df_era5, how="inner")
 
     if df_combined.empty:
-        print("\n❌ 错误: 合并后数据为空，可能两类数据日期没有交集。")
-        print(f"  污染物数据行数: {len(df_pollution)}")
-        print(f"  气象数据行数: {len(df_era5)}")
-        print(f"  合并后行数: {len(df_combined)}")
+        print("\n❌ Error: Merged data is empty, dates may not overlap between the two datasets.")
+        print(f"  Pollution data rows: {len(df_pollution)}")
+        print(f"  Meteorological data rows: {len(df_era5)}")
+        print(f"  Merged rows: {len(df_combined)}")
         raise SystemExit(1)
 
-    print("\n创建特征...")
+    print("\nCreating features...")
     df_combined = create_features(df_combined)
 
-    print("\n数据清洗...")
-    df_combined.replace([np.inf, -np.inf], np.nan, inplace=True)
+    print("\nData cleaning...")
+    df_combined = df_combined.replace([np.inf, -np.inf], np.nan)
     initial_rows = len(df_combined)
-    df_combined.dropna(inplace=True)
+    df_combined = df_combined.dropna()
     final_rows = len(df_combined)
-    print(f"移除缺失行数: {initial_rows - final_rows}")
+    print(f"Removed missing rows: {initial_rows - final_rows}")
 
-    print(f"\n合并后数据形状: {df_combined.shape}")
+    print(f"\nMerged data shape: {df_combined.shape}")
     print(
-        f"时间范围: {df_combined.index.min().date()} 至 "
+        f"Time range: {df_combined.index.min().date()} to "
         f"{df_combined.index.max().date()}"
     )
-    print(f"样本量: {len(df_combined)}")
-    print(f"特征数量: {df_combined.shape[1]}")
+    print(f"Sample size: {len(df_combined)}")
+    print(f"Number of features: {df_combined.shape[1]}")
 
-    print("\n特征示例 (前 20 个):")
+    print("\nSample features (first 20):")
     for idx, col in enumerate(df_combined.columns[:20], 1):
         print(f"  {idx}. {col}")
     if len(df_combined.columns) > 20:
-        print(f"  ... 以及另外 {len(df_combined.columns) - 20} 个特征")
+        print(f"  ... and {len(df_combined.columns) - 20} more features")
 
     print("\n" + "=" * 80)
-    print("步骤 2: 特征选择与数据准备")
+    print("Step 2: Feature Selection and Data Preparation")
     print("=" * 80)
 
     target = "PM2.5"
@@ -945,27 +968,27 @@ def main():
         if col not in exclude_cols
     ]
 
-    print(f"\n选取的特征数量: {len(numeric_features)}")
-    print(f"目标变量: {target}")
+    print(f"\nNumber of selected features: {len(numeric_features)}")
+    print(f"Target variable: {target}")
 
     X = df_combined[numeric_features].copy()
     y = df_combined[target].copy()
 
     if X.empty or y.empty:
-        print("\n❌ 错误: 有效建模数据为空，请检查数据源与预处理流程。")
+        print("\n❌ Error: Valid modeling data is empty, please check data sources and preprocessing pipeline.")
         raise SystemExit(1)
 
-    print(f"\n特征矩阵形状: {X.shape}")
-    print(f"目标变量形状: {y.shape}")
-    print("\nPM2.5 统计信息:")
-    print(f"  均值: {y.mean():.2f} μg/m³")
-    print(f"  标准差: {y.std():.2f} μg/m³")
-    print(f"  最小值: {y.min():.2f} μg/m³")
-    print(f"  最大值: {y.max():.2f} μg/m³")
-    print(f"  中位数: {y.median():.2f} μg/m³")
+    print(f"\nFeature matrix shape: {X.shape}")
+    print(f"Target variable shape: {y.shape}")
+    print("\nPM2.5 Statistics:")
+    print(f"  Mean: {y.mean():.2f} μg/m³")
+    print(f"  Std Dev: {y.std():.2f} μg/m³")
+    print(f"  Min: {y.min():.2f} μg/m³")
+    print(f"  Max: {y.max():.2f} μg/m³")
+    print(f"  Median: {y.median():.2f} μg/m³")
 
     print("\n" + "=" * 80)
-    print("步骤 3: 数据集划分")
+    print("Step 3: Dataset Splitting")
     print("=" * 80)
 
     n_samples = len(X)
@@ -980,22 +1003,22 @@ def main():
     y_val = y.iloc[train_size : train_size + val_size]
     y_test = y.iloc[train_size + val_size :]
 
-    print(f"\n训练集: {len(X_train)} 样本 ({len(X_train) / n_samples * 100:.1f}%)")
+    print(f"\nTraining set: {len(X_train)} samples ({len(X_train) / n_samples * 100:.1f}%)")
     print(
-        f"  时间范围: {X_train.index.min().date()} 至 {X_train.index.max().date()}"
+        f"  Time range: {X_train.index.min().date()} to {X_train.index.max().date()}"
     )
     print(f"  PM2.5: {y_train.mean():.2f} ± {y_train.std():.2f} μg/m³")
 
-    print(f"\n验证集: {len(X_val)} 样本 ({len(X_val) / n_samples * 100:.1f}%)")
-    print(f"  时间范围: {X_val.index.min().date()} 至 {X_val.index.max().date()}")
+    print(f"\nValidation set: {len(X_val)} samples ({len(X_val) / n_samples * 100:.1f}%)")
+    print(f"  Time range: {X_val.index.min().date()} to {X_val.index.max().date()}")
     print(f"  PM2.5: {y_val.mean():.2f} ± {y_val.std():.2f} μg/m³")
 
-    print(f"\n测试集: {len(X_test)} 样本 ({len(X_test) / n_samples * 100:.1f}%)")
-    print(f"  时间范围: {X_test.index.min().date()} 至 {X_test.index.max().date()}")
+    print(f"\nTest set: {len(X_test)} samples ({len(X_test) / n_samples * 100:.1f}%)")
+    print(f"  Time range: {X_test.index.min().date()} to {X_test.index.max().date()}")
     print(f"  PM2.5: {y_test.mean():.2f} ± {y_test.std():.2f} μg/m³")
 
     print("\n" + "=" * 80)
-    print("步骤 4: XGBoost 基础模型训练")
+    print("Step 4: XGBoost Basic Model Training")
     print("=" * 80)
 
     params_basic = {
@@ -1011,11 +1034,11 @@ def main():
         "eval_metric": "rmse",
     }
 
-    print("\n基础模型参数:")
+    print("\nBasic model parameters:")
     for key, value in params_basic.items():
         print(f"  {key}: {value}")
 
-    print("\n开始训练基础模型...")
+    print("\nStarting basic model training...")
     model_basic = xgb.XGBRegressor(**params_basic, early_stopping_rounds=50)
     evals_result_basic: dict = {}
     model_basic.fit(
@@ -1024,12 +1047,12 @@ def main():
         eval_set=[(X_train, y_train), (X_val, y_val)],
         verbose=50,
     )
-    # 获取训练历史
+    # Get training history
     evals_result_basic = model_basic.evals_result()
 
-    print("\n✓ 基础模型训练完成")
+    print("\n✓ Basic model training completed")
     if hasattr(model_basic, "best_iteration") and model_basic.best_iteration is not None:
-        print(f"  最佳迭代轮数: {model_basic.best_iteration}")
+        print(f"  Best iteration: {model_basic.best_iteration}")
 
     y_train_pred_basic = model_basic.predict(X_train)
     y_val_pred_basic = model_basic.predict(X_val)
@@ -1041,18 +1064,18 @@ def main():
         evaluate_model(y_test, y_test_pred_basic, "Test"),
     ]
     results_basic_df = pd.DataFrame(results_basic)
-    print("\n基础模型表现:")
+    print("\nBasic model performance:")
     print(results_basic_df.to_string(index=False))
 
     print("\n" + "=" * 80)
-    print("步骤 5: 超参数优化 (可选)")
+    print("Step 5: Hyperparameter Optimization (Optional)")
     print("=" * 80)
 
-    optimize_input = input("\n是否执行网格搜索优化? (y/n, 默认为 n): ").strip().lower()
+    optimize_input = input("\nExecute grid search optimization? (y/n, default is n): ").strip().lower()
     optimize = optimize_input == "y"
 
     if optimize:
-        print("\n执行网格搜索，请稍候...\n")
+        print("\nExecuting grid search, please wait...\n")
         param_grid = {
             "max_depth": [3, 5, 7],
             "learning_rate": [0.01, 0.05, 0.1],
@@ -1077,7 +1100,7 @@ def main():
         )
         grid_search.fit(X_train, y_train)
         best_params = grid_search.best_params_
-        print("\n最佳参数组合:")
+        print("\nBest parameter combination:")
         for param, value in best_params.items():
             print(f"  {param}: {value}")
 
@@ -1096,17 +1119,17 @@ def main():
             eval_set=[(X_train, y_train), (X_val, y_val)],
             verbose=50,
         )
-        # 获取训练历史
+        # Get training history
         evals_result_opt = model_optimized.evals_result()
-        print("\n✓ 使用最优参数重新训练模型完成")
+        print("\n✓ Retrained model with optimal parameters completed")
     else:
-        print("\n跳过超参数优化，沿用基础模型参数。")
+        print("\nSkipping hyperparameter optimization, using basic model parameters.")
         params_optimized = params_basic
         model_optimized = model_basic
         evals_result_opt = evals_result_basic
 
     print("\n" + "=" * 80)
-    print("步骤 6: 优化模型评估")
+    print("Step 6: Optimized Model Evaluation")
     print("=" * 80)
 
     y_train_pred_opt = model_optimized.predict(X_train)
@@ -1119,11 +1142,11 @@ def main():
         evaluate_model(y_test, y_test_pred_opt, "Test"),
     ]
     results_opt_df = pd.DataFrame(results_opt)
-    print("\n优化模型表现:")
+    print("\nOptimized model performance:")
     print(results_opt_df.to_string(index=False))
 
     print("\n" + "=" * 80)
-    print("步骤 7: 模型效果对比")
+    print("Step 7: Model Performance Comparison")
     print("=" * 80)
 
     results_basic_df["Model"] = "XGBoost_Basic"
@@ -1131,13 +1154,13 @@ def main():
     all_results = pd.concat([results_basic_df, results_opt_df])
     all_results = all_results[["Model", "Dataset", "R²", "RMSE", "MAE", "MAPE"]]
 
-    print("\n模型性能对比:")
+    print("\nModel performance comparison:")
     print(all_results.to_string(index=False))
 
     test_results = all_results[all_results["Dataset"] == "Test"].sort_values(
         "R²", ascending=False
     )
-    print("\n测试集表现排名:")
+    print("\nTest set performance ranking:")
     print(test_results.to_string(index=False))
 
     basic_test_r2 = results_basic_df.loc[
@@ -1164,12 +1187,12 @@ def main():
         else np.nan
     )
 
-    print("\n优化效果:")
-    print(f"  R² 提升: {r2_improvement:.2f}%")
-    print(f"  RMSE 降低: {rmse_improvement:.2f}%")
+    print("\nOptimization effect:")
+    print(f"  R² improvement: {r2_improvement:.2f}%")
+    print(f"  RMSE reduction: {rmse_improvement:.2f}%")
 
     print("\n" + "=" * 80)
-    print("步骤 8: 特征重要性分析")
+    print("Step 8: Feature Importance Analysis")
     print("=" * 80)
 
     feature_names = X_train.columns.tolist()
@@ -1200,9 +1223,9 @@ def main():
         / feature_importance["Importance_Gain"].sum()
         * 100
     )
-    feature_importance.sort_values("Importance_Gain", ascending=False, inplace=True)
+    feature_importance = feature_importance.sort_values("Importance_Gain", ascending=False)
 
-    print("\nTop 20 重要特征 (按 Gain):")
+    print("\nTop 20 Important Features (by Gain):")
     print(
         feature_importance.head(20)[["Feature", "Importance_Gain_Norm"]].to_string(
             index=False
@@ -1210,7 +1233,7 @@ def main():
     )
 
     print("\n" + "=" * 80)
-    print("步骤 9: 生成可视化结果")
+    print("Step 9: Generate Visualization Results")
     print("=" * 80)
 
     models_data = [
@@ -1231,7 +1254,7 @@ def main():
     plot_error_distribution(y_test - y_test_pred_basic, y_test - y_test_pred_opt, output_dir)
 
     print("\n" + "=" * 80)
-    print("步骤 10: 保存结果")
+    print("Step 10: Save Results")
     print("=" * 80)
 
     save_results(
@@ -1246,39 +1269,39 @@ def main():
         model_optimized,
     )
 
-    print("\n生成的文件:")
-    print("\nCSV 文件:")
-    print("  - model_performance.csv       模型性能对比")
-    print("  - feature_importance.csv      特征重要性")
-    print("  - best_parameters.csv         最优参数")
-    print("  - predictions.csv             预测结果")
+    print("\nGenerated files:")
+    print("\nCSV files:")
+    print("  - model_performance.csv       Model performance comparison")
+    print("  - feature_importance.csv     Feature importance")
+    print("  - best_parameters.csv        Best parameters")
+    print("  - predictions.csv             Prediction results")
 
-    print("\n图表文件:")
-    print("  - training_curves.png         训练曲线")
-    print("  - prediction_scatter.png      预测 vs 实际散点图")
-    print("  - timeseries_comparison.png   时间序列预测对比")
-    print("  - residuals_analysis.png      残差分析")
-    print("  - feature_importance.png      特征重要性柱状图")
-    print("  - model_comparison.png        模型性能对比柱状图")
-    print("  - error_distribution.png      预测误差分布")
+    print("\nChart files:")
+    print("  - training_curves.png        Training curves")
+    print("  - prediction_scatter.png      Prediction vs Actual scatter plot")
+    print("  - timeseries_comparison.png   Time series prediction comparison")
+    print("  - residuals_analysis.png      Residual analysis")
+    print("  - feature_importance.png      Feature importance bar chart")
+    print("  - model_comparison.png        Model performance comparison bar chart")
+    print("  - error_distribution.png      Prediction error distribution")
 
-    print("\n模型文件:")
-    print("  - xgboost_optimized.txt       XGBoost 模型 (文本格式)")
-    print("  - xgboost_optimized.pkl       XGBoost 模型 (pickle 格式)")
+    print("\nModel files:")
+    print("  - xgboost_optimized.txt      XGBoost model (text format)")
+    print("  - xgboost_optimized.pkl       XGBoost model (pickle format)")
 
     best_model = test_results.iloc[0]
-    print(f"\n最佳模型: {best_model['Model']}")
+    print(f"\nBest model: {best_model['Model']}")
     print(f"  R²: {best_model['R²']:.4f}")
     print(f"  RMSE: {best_model['RMSE']:.2f} μg/m³")
     print(f"  MAE: {best_model['MAE']:.2f} μg/m³")
     print(f"  MAPE: {best_model['MAPE']:.2f}%")
 
-    print("\nTop 5 最重要特征:")
+    print("\nTop 5 Most Important Features:")
     for _, row in feature_importance.head(5).iterrows():
         print(f"  {row['Feature']}: {row['Importance_Gain_Norm']:.2f}%")
 
     print("\n" + "=" * 80)
-    print("XGBoost PM2.5 浓度预测完成！")
+    print("XGBoost PM2.5 Concentration Prediction Completed!")
     print("=" * 80)
 
 

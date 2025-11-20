@@ -3,8 +3,7 @@ import hashlib
 import os
 import re
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
@@ -12,9 +11,11 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import xarray as xr
-from netCDF4 import Dataset  # noqa: F401
 
-warnings.filterwarnings("ignore")
+# 忽略警告，使用更明确的方式
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 plt.rcParams["font.sans-serif"] = ["Arial", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
@@ -23,7 +24,7 @@ plt.rcParams["figure.figsize"] = (16, 8)
 
 
 class DataCache:
-    """基于文件修改时间的简单缓存."""
+    """Simple cache based on file modification time."""
 
     def __init__(self, cache_dir: str = "cache_meteorology_nc") -> None:
         self.cache_dir = cache_dir
@@ -48,8 +49,146 @@ class DataCache:
         pd.to_pickle(data, cache_file)
 
 
+# 独立函数用于多进程处理
+def _process_single_file_worker(
+    filepath: str,
+    cache_dir: str,
+    beijing_lats: np.ndarray,
+    beijing_lons: np.ndarray,
+    era5_vars: List[str],
+) -> Optional[Dict[str, float]]:
+    """独立的工作函数，用于多进程处理单个文件。"""
+    cache = DataCache(cache_dir)
+    cached = cache.load(filepath)
+    if cached:
+        return cached
+
+    try:
+        with xr.open_dataset(
+            filepath, engine="netcdf4", decode_times=True, cache=False
+        ) as dataset:
+            # 重命名坐标
+            rename_map: Dict[str, str] = {}
+            for time_key in (
+                "valid_time",
+                "forecast_time",
+                "verification_time",
+                "time1",
+                "time2",
+            ):
+                if time_key in dataset.coords and "time" not in dataset.coords:
+                    rename_map[time_key] = "time"
+            if "lat" in dataset.coords and "latitude" not in dataset.coords:
+                rename_map["lat"] = "latitude"
+            if "lon" in dataset.coords and "longitude" not in dataset.coords:
+                rename_map["lon"] = "longitude"
+            if rename_map:
+                dataset = dataset.rename(rename_map)
+
+            try:
+                dataset = xr.decode_cf(dataset)
+            except Exception:
+                pass
+
+            for extra in ("expver", "surface"):
+                if extra in dataset.variables:
+                    dataset = dataset.drop_vars(extra)
+
+            if "number" in dataset.dims:
+                dataset = dataset.mean(dim="number", skipna=True)
+
+            available_vars = [var for var in era5_vars if var in dataset.data_vars]
+            if not available_vars:
+                print(f"[WARN] {os.path.basename(filepath)} missing target variables, skipping")
+                return None
+
+            # 选择北京区域
+            if "latitude" in dataset.coords and "longitude" in dataset.coords:
+                latitude_values = dataset["latitude"].values
+                if latitude_values[0] > latitude_values[-1]:
+                    lat_slice = slice(beijing_lats.max(), beijing_lats.min())
+                else:
+                    lat_slice = slice(beijing_lats.min(), beijing_lats.max())
+
+                dataset = dataset.sel(
+                    latitude=lat_slice,
+                    longitude=slice(beijing_lons.min(), beijing_lons.max()),
+                )
+                if "latitude" in dataset.dims and "longitude" in dataset.dims:
+                    dataset = dataset.mean(dim=["latitude", "longitude"], skipna=True)
+
+            if "time" not in dataset.coords:
+                print(f"[WARN] {os.path.basename(filepath)} missing time dimension, skipping")
+                return None
+
+            dataset = dataset.sortby("time")
+            dataset = dataset.resample(time="1D").mean(keep_attrs=False)
+            dataset = dataset.dropna("time", how="all")
+            if dataset.sizes.get("time", 0) == 0:
+                print(f"[WARN] {os.path.basename(filepath)} no valid time steps, skipping")
+                return None
+
+            dataset.load()
+
+            stats: Dict[str, float] = {}
+            time_index = pd.to_datetime(dataset["time"].values)
+            if len(time_index) > 0:
+                first_time = time_index[0]
+                stats["year"] = int(first_time.year)
+                stats["month"] = int(first_time.month)
+                stats["days"] = int(len(time_index))
+            else:
+                stats["days"] = int(dataset.sizes.get("time", 0))
+
+            if "year" not in stats or "month" not in stats:
+                match = re.search(r"(\d{4})(\d{2})", os.path.basename(filepath))
+                if match:
+                    stats["year"] = int(match.group(1))
+                    stats["month"] = int(match.group(2))
+
+            year = stats.get("year")
+            month = stats.get("month")
+            if year is not None and month is not None:
+                stats["year_month"] = f"{int(year):04d}{int(month):02d}"
+            else:
+                stats["year_month"] = os.path.basename(filepath)
+
+            for var in available_vars:
+                try:
+                    values = np.asarray(dataset[var].values, dtype=np.float32)
+                    values = values[np.isfinite(values)]
+                    if values.size == 0:
+                        continue
+
+                    if var in {"t2m", "d2m", "mn2t"} and np.nanmax(values) > 100:
+                        values = values - 273.15
+
+                    stats[f"{var}_mean"] = float(np.nanmean(values))
+                    stats[f"{var}_std"] = float(np.nanstd(values))
+                    stats[f"{var}_min"] = float(np.nanmin(values))
+                    stats[f"{var}_max"] = float(np.nanmax(values))
+                    stats[f"{var}_median"] = float(np.nanmedian(values))
+                except Exception as err:
+                    print(f"[ERROR] {os.path.basename(filepath)} variable {var} processing failed: {err}")
+                    continue
+
+            stats["source_file"] = os.path.basename(filepath)
+            cache.save(filepath, stats)
+            print(
+                f"  [+] {os.path.basename(filepath)} -> variables: {len(available_vars)}, "
+                f"time steps: {stats.get('days', 0)}"
+            )
+            return stats
+    except Exception as exc:
+        print(
+            f"[ERROR] Failed to open {os.path.basename(filepath)}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None
+
+
 class MeteorologicalAnalyzerNC:
-    """基于 ERA5 NetCDF 的北京气象数据分析器."""
+    """Beijing meteorological data analyzer based on ERA5 NetCDF."""
 
     def __init__(self, data_dir: str = ".", max_workers: Optional[int] = None) -> None:
         self.data_dir = data_dir
@@ -58,7 +197,6 @@ class MeteorologicalAnalyzerNC:
             if max_workers
             else min(max(4, (os.cpu_count() or 4) - 1), 12)
         )
-        self.print_lock = Lock()
         self.cache = DataCache()
 
         self.meteo_data = pd.DataFrame()
@@ -109,22 +247,21 @@ class MeteorologicalAnalyzerNC:
         }
 
     # -------------------------------------------------------------------------
-    # 数据发现
+    # Data Discovery
     # -------------------------------------------------------------------------
     def find_meteorological_files(self) -> List[str]:
         pattern = os.path.join(self.data_dir, "**", "*.nc")
         files = glob.glob(pattern, recursive=True)
         files.sort()
 
-        with self.print_lock:
-            print(f"搜索目录: {self.data_dir}")
-            print(f"发现 {len(files)} 个 NetCDF 文件")
-            if files:
-                print(f"示例文件: {os.path.basename(files[0])}")
+        print(f"Searching directory: {self.data_dir}")
+        print(f"Found {len(files)} NetCDF files")
+        if files:
+            print(f"Example file: {os.path.basename(files[0])}")
         return files
 
     # -------------------------------------------------------------------------
-    # NC 文件处理
+    # NC File Processing
     # -------------------------------------------------------------------------
     def _rename_common_coords(self, dataset: xr.Dataset) -> xr.Dataset:
         rename_map: Dict[str, str] = {}
@@ -161,132 +298,16 @@ class MeteorologicalAnalyzerNC:
             dataset = dataset.mean(dim=["latitude", "longitude"], skipna=True)
         return dataset
 
-    def _process_single_file(self, filepath: str) -> Optional[Dict[str, float]]:
-        cached = self.cache.load(filepath)
-        if cached:
-            return cached
-
-        try:
-            with xr.open_dataset(
-                filepath, engine="netcdf4", decode_times=True, cache=False
-            ) as dataset:
-                dataset = self._rename_common_coords(dataset)
-                try:
-                    dataset = xr.decode_cf(dataset)
-                except Exception:
-                    pass
-
-                for extra in ("expver", "surface"):
-                    if extra in dataset.variables:
-                        dataset = dataset.drop_vars(extra)
-
-                if "number" in dataset.dims:
-                    dataset = dataset.mean(dim="number", skipna=True)
-
-                available_vars = [
-                    var for var in self.era5_vars if var in dataset.data_vars
-                ]
-                if not available_vars:
-                    with self.print_lock:
-                        print(
-                            f"[WARN] {os.path.basename(filepath)} 缺少目标变量，跳过"
-                        )
-                    return None
-
-                dataset = self._select_beijing_region(dataset)
-
-                if "time" not in dataset.coords:
-                    with self.print_lock:
-                        print(
-                            f"[WARN] {os.path.basename(filepath)} 缺少时间维度，跳过"
-                        )
-                    return None
-
-                dataset = dataset.sortby("time")
-                dataset = dataset.resample(time="1D").mean(keep_attrs=False)
-                dataset = dataset.dropna("time", how="all")
-                if dataset.sizes.get("time", 0) == 0:
-                    with self.print_lock:
-                        print(
-                            f"[WARN] {os.path.basename(filepath)} 无有效时间步，跳过"
-                        )
-                    return None
-
-                dataset.load()
-
-                stats: Dict[str, float] = {}
-                time_index = pd.to_datetime(dataset["time"].values)
-                if len(time_index) > 0:
-                    first_time = time_index[0]
-                    stats["year"] = int(first_time.year)
-                    stats["month"] = int(first_time.month)
-                    stats["days"] = int(len(time_index))
-                else:
-                    stats["days"] = int(dataset.sizes.get("time", 0))
-
-                if "year" not in stats or "month" not in stats:
-                    match = re.search(r"(\d{4})(\d{2})", os.path.basename(filepath))
-                    if match:
-                        stats["year"] = int(match.group(1))
-                        stats["month"] = int(match.group(2))
-
-                year = stats.get("year")
-                month = stats.get("month")
-                if year is not None and month is not None:
-                    stats["year_month"] = f"{int(year):04d}{int(month):02d}"
-                else:
-                    stats["year_month"] = os.path.basename(filepath)
-
-                for var in available_vars:
-                    try:
-                        values = np.asarray(dataset[var].values, dtype=np.float32)
-                        values = values[np.isfinite(values)]
-                        if values.size == 0:
-                            continue
-
-                        if var in {"t2m", "d2m", "mn2t"} and np.nanmax(values) > 100:
-                            values = values - 273.15
-
-                        stats[f"{var}_mean"] = float(np.nanmean(values))
-                        stats[f"{var}_std"] = float(np.nanstd(values))
-                        stats[f"{var}_min"] = float(np.nanmin(values))
-                        stats[f"{var}_max"] = float(np.nanmax(values))
-                        stats[f"{var}_median"] = float(np.nanmedian(values))
-                    except Exception as err:
-                        with self.print_lock:
-                            print(
-                                f"[ERROR] {os.path.basename(filepath)} 变量 {var} 处理失败: {err}"
-                            )
-                        continue
-
-                stats["source_file"] = os.path.basename(filepath)
-                self.cache.save(filepath, stats)
-                with self.print_lock:
-                    print(
-                        f"  [+] {os.path.basename(filepath)} -> 变量: {len(available_vars)}, "
-                        f"时间步: {stats.get('days', 0)}"
-                    )
-                return stats
-        except Exception as exc:
-            with self.print_lock:
-                print(
-                    f"[ERROR] 打开 {os.path.basename(filepath)} 失败: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-            return None
-
     # -------------------------------------------------------------------------
-    # 数据加载主流程
+    # Main Data Loading Workflow
     # -------------------------------------------------------------------------
     def load_all_data(self) -> None:
-        with self.print_lock:
-            print("\n开始使用并行方式加载气象数据（NC）...")
-            print(f"线程数: {self.max_workers}")
+        print("\nStarting to load meteorological data (NC) in parallel...")
+        print(f"Number of processes: {self.max_workers}")
 
         files = self.find_meteorological_files()
         if not files:
-            with self.print_lock:
-                print("错误: 未找到任何 NetCDF 文件")
+            print("Error: No NetCDF files found")
             self.meteo_data = pd.DataFrame()
             return
 
@@ -294,22 +315,39 @@ class MeteorologicalAnalyzerNC:
         total = len(files)
         completed = 0
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(self._process_single_file, path): path for path in files}
+        # 准备参数用于多进程
+        cache_dir = self.cache.cache_dir
+        beijing_lats = self.beijing_lats
+        beijing_lons = self.beijing_lons
+        era5_vars = self.era5_vars
+
+        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _process_single_file_worker,
+                    path,
+                    cache_dir,
+                    beijing_lats,
+                    beijing_lons,
+                    era5_vars,
+                ): path
+                for path in files
+            }
             for future in as_completed(futures):
                 filepath = futures[future]
                 completed += 1
-                result = future.result()
-                if result:
-                    all_stats.append(result)
+                try:
+                    result = future.result()
+                    if result:
+                        all_stats.append(result)
+                except Exception as exc:
+                    print(f"[ERROR] Failed to process {os.path.basename(filepath)}: {exc}")
 
                 if completed % 20 == 0 or completed == total:
-                    with self.print_lock:
-                        print(f"进度: [{completed}/{total}] 已处理 {os.path.basename(filepath)}")
+                    print(f"Progress: [{completed}/{total}] Processed {os.path.basename(filepath)}")
 
         if not all_stats:
-            with self.print_lock:
-                print("错误: 数据加载失败，未得到有效统计结果")
+            print("Error: Data loading failed, no valid statistics obtained")
             self.meteo_data = pd.DataFrame()
             return
 
@@ -388,11 +426,13 @@ class MeteorologicalAnalyzerNC:
         )
 
         if {"year", "month"}.issubset(self.meteo_data.columns):
+            # 使用字典方式创建日期，更简洁且避免字符串拼接
             self.meteo_data["date"] = pd.to_datetime(
-                self.meteo_data["year"].astype(int).astype(str)
-                + "-"
-                + self.meteo_data["month"].astype(int).astype(str).str.zfill(2)
-                + "-01"
+                {
+                    "year": self.meteo_data["year"].astype(int),
+                    "month": self.meteo_data["month"].astype(int),
+                    "day": 1,
+                }
             )
 
         if {"u10_mean", "v10_mean"}.issubset(self.meteo_data.columns):
@@ -404,30 +444,29 @@ class MeteorologicalAnalyzerNC:
                 self.meteo_data["u100_mean"] ** 2 + self.meteo_data["v100_mean"] ** 2
             )
 
-        with self.print_lock:
-            print("\n气象数据加载完成!")
-            print(f"总记录数: {len(self.meteo_data)}")
-            if "date" in self.meteo_data.columns:
-                print(
-                    f"时间范围: {self.meteo_data['date'].min()} -> "
-                    f"{self.meteo_data['date'].max()}"
-                )
+        print("\nMeteorological data loading completed!")
+        print(f"Total records: {len(self.meteo_data)}")
+        if "date" in self.meteo_data.columns:
+            print(
+                f"Time range: {self.meteo_data['date'].min()} -> "
+                f"{self.meteo_data['date'].max()}"
+            )
 
     # -------------------------------------------------------------------------
-    # 可视化与统计
+    # Visualization and Statistics
     # -------------------------------------------------------------------------
     def plot_temperature_timeseries(self, save_path: str = "temperature_timeseries_nc.png") -> None:
         if self.meteo_data.empty:
-            print("错误: 无数据可用于温度序列图绘制")
+            print("Error: No data available for temperature time series plotting")
             return
 
-        print("\n开始绘制温度时间序列图...")
+        print("\nStarting to plot temperature time series...")
 
         temp_params = ["t2m", "d2m", "mn2t"]
         available_temps = [p for p in temp_params if f"{p}_mean" in self.meteo_data.columns]
 
         if not available_temps:
-            print("警告: 无可用温度变量")
+            print("Warning: No available temperature variables")
             return
 
         fig, ax = plt.subplots(figsize=(20, 8))
@@ -488,15 +527,15 @@ class MeteorologicalAnalyzerNC:
 
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
-        print(f"温度时间序列图已保存至: {save_path}")
+        print(f"Temperature time series plot saved to: {save_path}")
         plt.show()
 
     def plot_wind_speed_analysis(self, save_path: str = "wind_speed_analysis_nc.png") -> None:
         if self.meteo_data.empty:
-            print("错误: 无数据可用于风速分析")
+            print("Error: No data available for wind speed analysis")
             return
 
-        print("\n开始绘制风速分析图...")
+        print("\nStarting to plot wind speed analysis...")
 
         if "wind_speed_10m" not in self.meteo_data.columns and {
             "u10_mean",
@@ -517,7 +556,7 @@ class MeteorologicalAnalyzerNC:
             col for col in ["wind_speed_10m", "wind_speed_100m"] if col in self.meteo_data.columns
         ]
         if not available:
-            print("警告: 无可用风速变量")
+            print("Warning: No available wind speed variables")
             return
 
         fig, axes = plt.subplots(2, 1, figsize=(20, 12))
@@ -578,18 +617,18 @@ class MeteorologicalAnalyzerNC:
 
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
-        print(f"风速分析图已保存至: {save_path}")
+        print(f"Wind speed analysis plot saved to: {save_path}")
         plt.show()
 
     def plot_precipitation_analysis(self, save_path: str = "precipitation_analysis_nc.png") -> None:
         if self.meteo_data.empty:
-            print("错误: 无数据可用于降水分析")
+            print("Error: No data available for precipitation analysis")
             return
 
-        print("\n开始绘制降水分析图...")
+        print("\nStarting to plot precipitation analysis...")
 
         if "tp_mean" not in self.meteo_data.columns and "avg_tprate_mean" not in self.meteo_data.columns:
-            print("警告: 无可用降水变量")
+            print("Warning: No available precipitation variables")
             return
 
         fig, axes = plt.subplots(2, 1, figsize=(20, 12))
@@ -634,15 +673,15 @@ class MeteorologicalAnalyzerNC:
 
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
-        print(f"降水分析图已保存至: {save_path}")
+        print(f"Precipitation analysis plot saved to: {save_path}")
         plt.show()
 
     def plot_seasonal_analysis(self, save_path: str = "seasonal_analysis_nc.png") -> None:
         if self.meteo_data.empty:
-            print("错误: 无数据可用于季节分析")
+            print("Error: No data available for seasonal analysis")
             return
 
-        print("\n开始绘制季节分析图...")
+        print("\nStarting to plot seasonal analysis...")
 
         def get_season(month: int) -> str:
             if month in (12, 1, 2):
@@ -680,7 +719,7 @@ class MeteorologicalAnalyzerNC:
                     )
                     axes[0, 0].grid(True, alpha=0.3, linestyle="--", axis="y")
             except Exception as err:
-                print(f"温度季节分布绘图失败: {err}")
+                print(f"Temperature seasonal distribution plotting failed: {err}")
                 axes[0, 0].text(0.5, 0.5, "Insufficient data", transform=axes[0, 0].transAxes)
 
         target_for_second = (
@@ -714,7 +753,7 @@ class MeteorologicalAnalyzerNC:
                     axes[0, 1].set_title(title, fontsize=14, fontweight="bold", pad=20)
                     axes[0, 1].grid(True, alpha=0.3, linestyle="--", axis="y")
             except Exception as err:
-                print(f"第二子图绘制失败: {err}")
+                print(f"Second subplot plotting failed: {err}")
                 axes[0, 1].text(0.5, 0.5, "Insufficient data", transform=axes[0, 1].transAxes)
 
         if "tp_mean" in self.meteo_data.columns:
@@ -739,7 +778,7 @@ class MeteorologicalAnalyzerNC:
                     )
                     axes[1, 0].grid(True, alpha=0.3, linestyle="--", axis="y")
             except Exception as err:
-                print(f"降水季节分布绘图失败: {err}")
+                print(f"Precipitation seasonal distribution plotting failed: {err}")
                 axes[1, 0].text(0.5, 0.5, "Insufficient data", transform=axes[1, 0].transAxes)
 
         if "blh_mean" in self.meteo_data.columns:
@@ -764,23 +803,23 @@ class MeteorologicalAnalyzerNC:
                     )
                     axes[1, 1].grid(True, alpha=0.3, linestyle="--", axis="y")
             except Exception as err:
-                print(f"边界层高度季节分布绘图失败: {err}")
+                print(f"Boundary layer height seasonal distribution plotting failed: {err}")
                 axes[1, 1].text(0.5, 0.5, "Insufficient data", transform=axes[1, 1].transAxes)
 
         plt.tight_layout(h_pad=4.0, w_pad=2.0)
         plt.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
-        print(f"季节分析图已保存至: {save_path}")
+        print(f"Seasonal analysis plot saved to: {save_path}")
         plt.show()
 
     def save_data_summary(self, save_path: str = "meteorological_summary_nc.csv") -> None:
         if self.meteo_data.empty:
-            print("错误: 无数据可导出")
+            print("Error: No data to export")
             return
 
-        print("\n开始保存气象统计汇总...")
+        print("\nStarting to save meteorological statistics summary...")
 
         self.meteo_data.to_csv(save_path, index=False, encoding="utf-8-sig")
-        print(f"完整统计已保存至: {save_path}")
+        print(f"Complete statistics saved to: {save_path}")
 
         numeric_cols = [
             col
@@ -794,10 +833,10 @@ class MeteorologicalAnalyzerNC:
         ]
         summary_path = save_path.replace(".csv", "_statistics.csv")
         summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
-        print(f"统计摘要已保存至: {summary_path}")
+        print(f"Statistics summary saved to: {summary_path}")
 
     # -------------------------------------------------------------------------
-    # 主流程
+    # Main Workflow
     # -------------------------------------------------------------------------
     def run_analysis(self) -> None:
         print("=" * 60)
@@ -806,7 +845,7 @@ class MeteorologicalAnalyzerNC:
 
         self.load_all_data()
         if self.meteo_data.empty:
-            print("错误: 数据加载失败，请检查数据路径与文件格式")
+            print("Error: Data loading failed, please check data path and file format")
             return
 
         self.plot_temperature_timeseries()
@@ -815,28 +854,28 @@ class MeteorologicalAnalyzerNC:
         self.plot_seasonal_analysis()
         self.save_data_summary()
 
-        print("\n分析完成!")
+        print("\nAnalysis completed!")
 
 
 def main() -> None:
-    data_dir = r"E:\DATA Science\ERA5-Beijing-NC"
+    data_dir = "/root/autodl-tmp/ERA5-Beijing-NC"
     if not os.path.exists(data_dir):
         fallback_paths = [
-            r"C:\Users\IU\Desktop\something\ERA5-Beijing-NC",
-            r"C:\Users\IU\Desktop\ERA5-Data",
-            r"C:\Users\IU\Desktop\something\Short-essay-Beijing\Statistics\Meteorological\NC",
+            "/root/autodl-tmp/ERA5-Beijing-NC",
+            "/root/autodl-tmp/ERA5-Data",
+            "/root/autodl-tmp/Short-essay-Beijing/Statistics/Meteorological/NC",
         ]
         for path in fallback_paths:
             if os.path.exists(path):
                 data_dir = path
-                print(f"使用备选路径: {data_dir}")
+                print(f"Using fallback path: {data_dir}")
                 break
         else:
-            print("错误: 未找到 ERA5 NetCDF 数据目录，请调整 main() 中的 data_dir")
+            print("Error: ERA5 NetCDF data directory not found, please adjust data_dir in main()")
             return
 
-    print(f"数据目录: {data_dir}")
-    print("如需更改数据路径，请修改 main() 函数中的 data_dir 变量\n")
+    print(f"Data directory: {data_dir}")
+    print("To change the data path, please modify the data_dir variable in the main() function\n")
 
     analyzer = MeteorologicalAnalyzerNC(data_dir=data_dir)
     analyzer.run_analysis()

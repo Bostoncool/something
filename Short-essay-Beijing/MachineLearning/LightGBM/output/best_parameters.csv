@@ -1,2 +1,0 @@
-﻿objective,metric,boosting_type,num_leaves,max_depth,learning_rate,feature_fraction,bagging_fraction,bagging_freq,min_child_samples,num_threads,verbose,seed
-regression,rmse,gbdt,94,11,0.01,1.0,0.5764351098081065,5,27,15,-1,42

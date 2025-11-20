@@ -1,12 +1,3 @@
-"""将 NetCDF 变量转换为可供 PyTorch 训练的张量.
-
-使用示例：
-    python NC-tensor.py --nc-file path/to/file.nc --var-name temperature \
-        --sample-dim time --output tensor.pt --stats
-
-依赖：xarray、netCDF4、torch、numpy
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -25,14 +16,14 @@ def _resolve_dim_order(data: xr.DataArray, sample_dim: str | None,
     if target_dims is not None:
         missing = set(target_dims) - set(dims)
         if missing:
-            raise ValueError(f"目标维度 {missing} 不存在于变量 {dims} 中")
+            raise ValueError(f"Target dimensions {missing} not found in variable {dims}")
         return data.transpose(*target_dims)
 
     if sample_dim is None:
         return data
 
     if sample_dim not in dims:
-        raise ValueError(f"样本维度 {sample_dim} 不存在于变量 {dims} 中")
+        raise ValueError(f"Sample dimension {sample_dim} not found in variable {dims}")
 
     ordered_dims = [sample_dim] + [dim for dim in dims if dim != sample_dim]
     return data.transpose(*ordered_dims)
@@ -40,7 +31,7 @@ def _resolve_dim_order(data: xr.DataArray, sample_dim: str | None,
 
 def _coerce_dtype(array: np.ndarray, dtype: str) -> np.ndarray:
     if dtype not in {"float32", "float64"}:
-        raise ValueError("仅支持 float32 或 float64 输出类型")
+        raise ValueError("Only float32 or float64 output types are supported")
     return array.astype(dtype, copy=False)
 
 
@@ -55,11 +46,11 @@ def load_nc_tensor(nc_file: Path, var_name: str, *, sample_dim: str | None,
 
     if var_name not in dataset.data_vars:
         available = ", ".join(dataset.data_vars)
-        raise KeyError(f"变量 {var_name} 不存在，当前可用变量：{available}")
+        raise KeyError(f"Variable {var_name} not found, available variables: {available}")
 
     data = dataset[var_name]
 
-    # 解码 CF 元数据（如 scale_factor、add_offset）
+    # Decode CF metadata (e.g., scale_factor, add_offset)
     data = xr.decode_cf(data.to_dataset(name=var_name))[var_name]
 
     data = data.squeeze() if squeeze else data
@@ -77,7 +68,7 @@ def _format_stats(tensor: torch.Tensor) -> str:
     with torch.no_grad():
         finite_tensor = tensor[torch.isfinite(tensor)]
         if finite_tensor.numel() == 0:
-            return "张量无有限值"
+            return "Tensor has no finite values"
 
         stats = {
             "shape": tuple(tensor.shape),
@@ -100,24 +91,24 @@ def parse_dims(dims: str | None) -> Sequence[str] | None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="读取 NetCDF 文件并输出 PyTorch 张量"
+        description="Read NetCDF files and output PyTorch tensors"
     )
-    parser.add_argument("--nc-file", type=Path, required=True, help="NetCDF 文件路径")
-    parser.add_argument("--var-name", type=str, required=True, help="目标变量名")
+    parser.add_argument("--nc-file", type=Path, required=True, help="NetCDF file path")
+    parser.add_argument("--var-name", type=str, required=True, help="Target variable name")
     parser.add_argument("--sample-dim", type=str, default=None,
-                        help="将指定维度置于首位，常用于时间维度")
+                        help="Place specified dimension first, commonly used for time dimension")
     parser.add_argument("--dims", type=str, default=None,
-                        help="显式指定维度顺序，逗号分隔")
+                        help="Explicitly specify dimension order, comma-separated")
     parser.add_argument("--dtype", type=str, default="float32",
-                        choices=["float32", "float64"], help="输出张量数据类型")
+                        choices=["float32", "float64"], help="Output tensor data type")
     parser.add_argument("--fill-value", type=float, default=0.0,
-                        help="缺失值填充值")
+                        help="Fill value for missing values")
     parser.add_argument("--squeeze", action="store_true",
-                        help="移除长度为 1 的维度")
+                        help="Remove dimensions of length 1")
     parser.add_argument("--stats", action="store_true",
-                        help="打印张量统计信息")
+                        help="Print tensor statistics")
     parser.add_argument("--output", type=Path, default=None,
-                        help="若指定，则使用 torch.save() 输出 *.pt 文件")
+                        help="If specified, use torch.save() to output *.pt file")
     return parser
 
 
@@ -141,7 +132,7 @@ def main() -> None:
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         torch.save(tensor, args.output)
-        print(f"张量已保存至 {args.output}")
+        print(f"Tensor saved to {args.output}")
 
 
 if __name__ == "__main__":

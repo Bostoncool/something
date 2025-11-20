@@ -1,25 +1,9 @@
-"""
-Beijing PM2.5 Concentration Prediction - LightGBM Model
-Using LightGBM gradient boosting decision tree for time series prediction
-
-Features:
-- Efficient gradient boosting algorithm
-- Supports categorical features
-- Built-in feature importance
-- Early stopping mechanism to prevent overfitting
-- Bayesian optimization hyperparameters
-
-Data sources:
-- Pollution data: Benchmark dataset (PM2.5, PM10, SO2, NO2, CO, O3)
-- Meteorological data: ERA5 reanalysis data
-"""
-
 import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import warnings
 import pickle
 from pathlib import Path
@@ -44,11 +28,86 @@ except ImportError:
     print("Note: tqdm is not installed, progress display will use simplified version.")
     print("      You can use 'pip install tqdm' to install for better progress bar display.")
 
-from sklearn.model_selection import train_test_split, cross_val_score, KFold
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-from sklearn.preprocessing import StandardScaler
 
 import lightgbm as lgb
+
+# 检测GPU可用性（强制要求GPU）
+def check_gpu_availability():
+    """检查LightGBM GPU支持是否可用，如果不可用则直接退出"""
+    print("\n检测GPU加速支持...")
+    print("要求: 必须使用GPU加速，CPU模式将被拒绝")
+    
+    try:
+        # 尝试创建一个小数据集来测试GPU
+        test_X = np.random.rand(100, 10).astype(np.float32)
+        test_y = np.random.rand(100).astype(np.float32)
+        
+        # 创建Dataset时传递GPU参数
+        gpu_params = {
+            'device': 'gpu',
+            'gpu_platform_id': 0,
+            'gpu_device_id': 0,
+            'max_bin': 63  # GPU优化参数
+        }
+        test_data = lgb.Dataset(test_X, label=test_y, params=gpu_params)
+        
+        test_params = {
+            'objective': 'regression',
+            'device': 'gpu',
+            'gpu_platform_id': 0,
+            'gpu_device_id': 0,
+            'num_gpu': 1,
+            'max_bin': 63,  # GPU优化：减少bin数量可提高GPU利用率
+            'verbose': -1
+        }
+        
+        # 尝试训练一个非常小的模型来测试GPU
+        try:
+            lgb.train(test_params, test_data, num_boost_round=1, verbose_eval=False)
+            print("✓ GPU加速可用，将使用GPU进行训练")
+            print("  设备: RTX 5090 (32GB)")
+            print("  GPU优化参数已启用")
+            return True
+        except Exception as e:
+            error_msg = str(e).lower()
+            print("\n" + "=" * 80)
+            print("❌ 错误: GPU不可用或未正确配置!")
+            print("=" * 80)
+            print(f"\n错误详情: {e}")
+            print("\n可能的原因:")
+            print("1. LightGBM未安装GPU版本")
+            print("2. CUDA驱动或CUDA工具包未正确安装")
+            print("3. GPU设备不可访问")
+            print("\n解决方案:")
+            print("1. 安装支持GPU的LightGBM:")
+            print("   方法1（推荐，使用conda）:")
+            print("   conda install -c conda-forge lightgbm")
+            print("   方法2（使用pip + 环境变量）:")
+            print("   LIGHTGBM_GPU=1 pip install lightgbm")
+            print("   方法3（从源码编译）:")
+            print("   git clone --recursive https://github.com/microsoft/LightGBM")
+            print("   cd LightGBM && mkdir build && cd build")
+            print("   cmake -DUSE_GPU=1 .. && make -j4")
+            print("   cd ../python-package && python setup.py install")
+            print("2. 确保CUDA已正确安装:")
+            print("   nvidia-smi  # 检查GPU是否可见")
+            print("   nvcc --version  # 检查CUDA版本")
+            print("\n程序将退出，请修复GPU配置后重试。")
+            print("=" * 80)
+            import sys
+            sys.exit(1)
+    except Exception as e:
+        print("\n" + "=" * 80)
+        print("❌ 错误: GPU检测失败!")
+        print("=" * 80)
+        print(f"\n错误详情: {e}")
+        print("\n程序将退出，请修复GPU配置后重试。")
+        print("=" * 80)
+        import sys
+        sys.exit(1)
+
+GPU_AVAILABLE = check_gpu_availability()
 
 bayes_opt_spec = find_spec("bayes_opt")
 if bayes_opt_spec is not None:
@@ -72,9 +131,9 @@ print("=" * 80)
 
 print("\nConfiguring parameters...")
 
-pollution_all_path = r'E:\DATA Science\Benchmark\all(AQI+PM2.5+PM10)'
-pollution_extra_path = r'E:\DATA Science\Benchmark\extra(SO2+NO2+CO+O3)'
-era5_path = r'E:\DATA Science\ERA5-Beijing-NC'
+pollution_all_path = '/root/autodl-tmp/Benchmark/all(AQI+PM2.5+PM10)'
+pollution_extra_path = '/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)'
+era5_path = '/root/autodl-tmp/ERA5-Beijing-NC'
 
 output_dir = Path('./output')
 output_dir.mkdir(exist_ok=True)
@@ -103,30 +162,52 @@ print(f"Data time range: {start_date.date()} to {end_date.date()}")
 print(f"Target variable: PM2.5 concentration")
 print(f"Output directory: {output_dir}")
 print(f"Model save directory: {model_dir}")
-print(f"CPU core count: {CPU_COUNT}, parallel worker threads: {MAX_WORKERS}")
+print(f"CPU core count: {CPU_COUNT}, parallel worker processes: {MAX_WORKERS}")
+print("GPU acceleration: Enabled (Required)")
+print("GPU device: RTX 5090 (32GB)")
 
 def daterange(start, end):
     for n in range(int((end - start).days) + 1):
         yield start + timedelta(n)
 
-def find_file(base_path, date_str, prefix):
-    filename = f"{prefix}_{date_str}.csv"
+def build_file_path_dict(base_path, prefix):
+    """预先构建文件路径字典，避免每次遍历文件系统"""
+    file_dict = {}
+    print(f"  正在构建 {prefix} 文件路径字典...")
     for root, _, files in os.walk(base_path):
-        if filename in files:
-            return os.path.join(root, filename)
-    return None
+        for filename in files:
+            if filename.startswith(prefix) and filename.endswith('.csv'):
+                # 从文件名中提取日期，格式: prefix_YYYYMMDD.csv
+                try:
+                    date_str = filename.replace(f"{prefix}_", "").replace(".csv", "")
+                    if len(date_str) == 8 and date_str.isdigit():
+                        file_dict[date_str] = os.path.join(root, filename)
+                except Exception:
+                    continue
+    print(f"  找到 {len(file_dict)} 个 {prefix} 文件")
+    return file_dict
 
-def read_pollution_day(date):
+def read_pollution_day(args):
+    """读取单日污染数据，使用字典查找文件路径（O(1)时间复杂度）"""
+    date, file_dict_all, file_dict_extra, pollutants_list = args
     date_str = date.strftime('%Y%m%d')
-    all_file = find_file(pollution_all_path, date_str, 'beijing_all')
-    extra_file = find_file(pollution_extra_path, date_str, 'beijing_extra')
+    
+    # 使用字典查找，O(1)时间复杂度
+    all_file = file_dict_all.get(date_str)
+    extra_file = file_dict_extra.get(date_str)
     
     if not all_file or not extra_file:
         return None
     
     try:
-        df_all = pd.read_csv(all_file, encoding='utf-8', on_bad_lines='skip')
-        df_extra = pd.read_csv(extra_file, encoding='utf-8', on_bad_lines='skip')
+        # pandas 1.3.0+使用on_bad_lines，旧版本使用error_bad_lines=False
+        try:
+            df_all = pd.read_csv(all_file, encoding='utf-8', on_bad_lines='skip')
+            df_extra = pd.read_csv(extra_file, encoding='utf-8', on_bad_lines='skip')
+        except TypeError:
+            # 兼容pandas < 1.3.0
+            df_all = pd.read_csv(all_file, encoding='utf-8', error_bad_lines=False, warn_bad_lines=False)
+            df_extra = pd.read_csv(extra_file, encoding='utf-8', error_bad_lines=False, warn_bad_lines=False)
         
         df_all = df_all[~df_all['type'].str.contains('_24h|AQI', na=False)]
         df_extra = df_extra[~df_extra['type'].str.contains('_24h', na=False)]
@@ -145,7 +226,7 @@ def read_pollution_day(date):
         
         df_daily.index = pd.to_datetime(df_daily.index, format='%Y%m%d', errors='coerce')
         
-        df_daily = df_daily[[col for col in pollutants if col in df_daily.columns]]
+        df_daily = df_daily[[col for col in pollutants_list if col in df_daily.columns]]
         
         return df_daily
     except Exception:
@@ -153,12 +234,21 @@ def read_pollution_day(date):
 
 def read_all_pollution():
     print("\nLoading pollution data...")
-    print(f"Using {MAX_WORKERS} parallel worker threads")
+    print(f"Using {MAX_WORKERS} parallel worker processes")
+    
+    # 预先构建文件路径字典，避免每次遍历文件系统
+    print("Building file path dictionaries...")
+    file_dict_all = build_file_path_dict(pollution_all_path, 'beijing_all')
+    file_dict_extra = build_file_path_dict(pollution_extra_path, 'beijing_extra')
+    
     dates = list(daterange(start_date, end_date))
     pollution_dfs = []
     
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(read_pollution_day, date): date for date in dates}
+    # 准备参数列表，将文件字典和污染物列表一起传递
+    args_list = [(date, file_dict_all, file_dict_extra, pollutants) for date in dates]
+    
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(read_pollution_day, args): args[0] for args in args_list}
         
         if TQDM_AVAILABLE:
             for future in tqdm(as_completed(futures), total=len(futures), 
@@ -184,13 +274,15 @@ def read_all_pollution():
         return df_poll_all
     return pd.DataFrame()
 
-def read_era5_month(year, month):
+def read_era5_month(args):
+    """读取单月ERA5气象数据，使用多进程"""
+    year, month, era5_path_val, era5_vars_list, beijing_lats_val, beijing_lons_val = args
     month_str = f"{year}{month:02d}"
     # 优先按文件名包含 YYYYMM 的方式匹配；若找不到则回退到全量 *.nc，再按时间窗口筛选
-    all_files = glob.glob(os.path.join(era5_path, "**", f"*{month_str}*.nc"), recursive=True)
+    all_files = glob.glob(os.path.join(era5_path_val, "**", f"*{month_str}*.nc"), recursive=True)
     fallback_used = False
     if not all_files:
-        all_files = glob.glob(os.path.join(era5_path, "**", "*.nc"), recursive=True)
+        all_files = glob.glob(os.path.join(era5_path_val, "**", "*.nc"), recursive=True)
         fallback_used = True
         if not all_files:
             return None
@@ -206,9 +298,9 @@ def read_era5_month(year, month):
     for file_path in all_files:
         try:
             with Dataset(file_path, mode='r') as nc_file:
-                available_vars = [v for v in era5_vars if v in nc_file.variables]
+                available_vars = [v for v in era5_vars_list if v in nc_file.variables]
             if not available_vars:
-                print(f"[WARN] {os.path.basename(file_path)} 不含目标变量({len(era5_vars)} 列表)，跳过")
+                print(f"[WARN] {os.path.basename(file_path)} 不含目标变量({len(era5_vars_list)} 列表)，跳过")
                 continue
             with xr.open_dataset(file_path, engine="netcdf4", decode_times=True) as ds:
                 rename_map = {}
@@ -260,10 +352,10 @@ def read_era5_month(year, month):
                 if 'latitude' in ds_subset.coords and 'longitude' in ds_subset.coords:
                     lat_values = ds_subset['latitude']
                     if lat_values[0] > lat_values[-1]:
-                        lat_slice = slice(beijing_lats.max(), beijing_lats.min())
+                        lat_slice = slice(beijing_lats_val.max(), beijing_lats_val.min())
                     else:
-                        lat_slice = slice(beijing_lats.min(), beijing_lats.max())
-                    ds_subset = ds_subset.sel(latitude=lat_slice, longitude=slice(beijing_lons.min(), beijing_lons.max()))
+                        lat_slice = slice(beijing_lats_val.min(), beijing_lats_val.max())
+                    ds_subset = ds_subset.sel(latitude=lat_slice, longitude=slice(beijing_lons_val.min(), beijing_lons_val.max()))
                     if 'latitude' in ds_subset.dims and 'longitude' in ds_subset.dims:
                         ds_subset = ds_subset.mean(dim=['latitude', 'longitude'], skipna=True)
                 ds_daily = ds_subset.resample(time='1D').mean(keep_attrs=False)
@@ -291,7 +383,7 @@ def read_era5_month(year, month):
 
 def read_all_era5():
     print("\nLoading meteorological data...")
-    print(f"Using {MAX_WORKERS} parallel worker threads")
+    print(f"Using {MAX_WORKERS} parallel worker processes")
     print(f"Meteorological data directory: {era5_path}")
     print(f"Checking if directory exists: {os.path.exists(era5_path)}")
     
@@ -305,14 +397,15 @@ def read_all_era5():
     years = range(2015, 2025)
     months = range(1, 13)
     
-    month_tasks = [(year, month) for year in years for month in months 
+    month_tasks = [(year, month, era5_path, era5_vars, beijing_lats, beijing_lons) 
+                   for year in years for month in months 
                    if not (year == 2024 and month > 12)]
     total_months = len(month_tasks)
     print(f"Attempting to load {total_months} months of data...")
     
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(read_era5_month, year, month): (year, month) 
-                  for year, month in month_tasks}
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(read_era5_month, task): task 
+                  for task in month_tasks}
         
         successful_reads = 0
         if TQDM_AVAILABLE:
@@ -422,9 +515,21 @@ def create_features(df):
     df_copy['year'] = df_copy.index.year
     df_copy['month'] = df_copy.index.month
     df_copy['day'] = df_copy.index.day
-    df_copy['day_of_year'] = df_copy.index.dayofyear
-    df_copy['day_of_week'] = df_copy.index.dayofweek
-    df_copy['week_of_year'] = df_copy.index.isocalendar().week
+    # 使用兼容的方式获取日期特征
+    # pandas 2.0+推荐使用day_of_year/day_of_week，但dayofyear/dayofweek仍然可用
+    try:
+        df_copy['day_of_year'] = df_copy.index.day_of_year
+    except AttributeError:
+        df_copy['day_of_year'] = df_copy.index.dayofyear
+    
+    try:
+        df_copy['day_of_week'] = df_copy.index.day_of_week
+    except AttributeError:
+        df_copy['day_of_week'] = df_copy.index.dayofweek
+    
+    # isocalendar() 返回 ISO 日历元组
+    iso_calendar = df_copy.index.isocalendar()
+    df_copy['week_of_year'] = iso_calendar.week
     
     df_copy['season'] = df_copy['month'].apply(
         lambda x: 1 if x in [12, 1, 2] else 2 if x in [3, 4, 5] else 3 if x in [6, 7, 8] else 4
@@ -553,8 +658,36 @@ print(f"\nTest set: {len(X_test)} samples ({len(X_test)/n_samples*100:.1f}%)")
 print(f"  Time range: {X_test.index.min().date()} to {X_test.index.max().date()}")
 print(f"  PM2.5: {y_test.mean():.2f} ± {y_test.std():.2f} μg/m³")
 
-lgb_train = lgb.Dataset(X_train, y_train, feature_name=list(X_train.columns))
-lgb_val = lgb.Dataset(X_val, y_val, reference=lgb_train, feature_name=list(X_val.columns))
+# 准备GPU优化的数据：转换为numpy数组并确保float32格式
+print("\n准备GPU优化的数据集...")
+X_train_gpu = X_train.values.astype(np.float32)
+X_val_gpu = X_val.values.astype(np.float32)
+y_train_gpu = y_train.values.astype(np.float32)
+y_val_gpu = y_val.values.astype(np.float32)
+
+# GPU优化的Dataset参数
+gpu_dataset_params = {
+    'device': 'gpu',
+    'gpu_platform_id': 0,
+    'gpu_device_id': 0,
+    'max_bin': 63  # GPU优化：减少bin数量可提高GPU利用率
+}
+
+# 创建Dataset时传递GPU参数
+lgb_train = lgb.Dataset(
+    X_train_gpu, 
+    label=y_train_gpu, 
+    feature_name=list(X_train.columns),
+    params=gpu_dataset_params
+)
+lgb_val = lgb.Dataset(
+    X_val_gpu, 
+    label=y_val_gpu, 
+    reference=lgb_train, 
+    feature_name=list(X_val.columns),
+    params=gpu_dataset_params
+)
+print("✓ GPU数据集准备完成")
 
 print("\n" + "=" * 80)
 print("Step 4: Training LightGBM Basic Model")
@@ -569,10 +702,20 @@ params_basic = {
     'feature_fraction': 0.8,
     'bagging_fraction': 0.8,
     'bagging_freq': 5,
-    'num_threads': MAX_WORKERS,
     'verbose': -1,
-    'seed': 42
+    'seed': 42,
+    # GPU优化参数
+    'device': 'gpu',
+    'gpu_platform_id': 0,
+    'gpu_device_id': 0,
+    'num_gpu': 1,
+    'max_bin': 63,  # GPU优化：减少bin数量可提高GPU利用率
+    'gpu_use_dp': False,  # 使用单精度浮点数，提高速度
+    'tree_learner': 'serial'  # GPU模式下使用串行学习器
 }
+
+print("\n使用GPU加速训练基础模型")
+print("GPU优化参数已启用")
 
 print("\nBasic model parameters:")
 for key, value in params_basic.items():
@@ -598,9 +741,10 @@ print(f"  Best iteration: {model_basic.best_iteration}")
 print(f"  Training set RMSE: {evals_result_basic['train']['rmse'][model_basic.best_iteration-1]:.4f}")
 print(f"  Validation set RMSE: {evals_result_basic['valid']['rmse'][model_basic.best_iteration-1]:.4f}")
 
-y_train_pred_basic = model_basic.predict(X_train, num_iteration=model_basic.best_iteration)
-y_val_pred_basic = model_basic.predict(X_val, num_iteration=model_basic.best_iteration)
-y_test_pred_basic = model_basic.predict(X_test, num_iteration=model_basic.best_iteration)
+# 预测时也需要使用numpy数组格式
+y_train_pred_basic = model_basic.predict(X_train_gpu, num_iteration=model_basic.best_iteration)
+y_val_pred_basic = model_basic.predict(X_val_gpu, num_iteration=model_basic.best_iteration)
+y_test_pred_basic = model_basic.predict(X_test.values.astype(np.float32), num_iteration=model_basic.best_iteration)
 
 def evaluate_model(y_true, y_pred, dataset_name):
     r2 = r2_score(y_true, y_pred)
@@ -645,15 +789,35 @@ if BAYESIAN_OPT_AVAILABLE:
             'bagging_freq': 5,
             'min_child_samples': int(min_child_samples),
             'feature_pre_filter': False,
-            'num_threads': MAX_WORKERS,
             'verbose': -1,
             'seed': 42
         }
         
-        lgb_train_temp = lgb.Dataset(X_train, y_train, feature_name=list(X_train.columns), 
-                                      params={'feature_pre_filter': False})
-        lgb_val_temp = lgb.Dataset(X_val, y_val, reference=lgb_train_temp, 
-                                    feature_name=list(X_val.columns))
+        # GPU优化参数
+        params.update({
+            'device': 'gpu',
+            'gpu_platform_id': 0,
+            'gpu_device_id': 0,
+            'num_gpu': 1,
+            'max_bin': 63,
+            'gpu_use_dp': False,
+            'tree_learner': 'serial'
+        })
+        
+        # 使用GPU优化的数据集
+        lgb_train_temp = lgb.Dataset(
+            X_train_gpu, 
+            label=y_train_gpu, 
+            feature_name=list(X_train.columns),
+            params={**gpu_dataset_params, 'feature_pre_filter': False}
+        )
+        lgb_val_temp = lgb.Dataset(
+            X_val_gpu, 
+            label=y_val_gpu, 
+            reference=lgb_train_temp, 
+            feature_name=list(X_val.columns),
+            params=gpu_dataset_params
+        )
         
         model = lgb.train(
             params,
@@ -663,7 +827,7 @@ if BAYESIAN_OPT_AVAILABLE:
             callbacks=[lgb.early_stopping(stopping_rounds=30)]
         )
         
-        y_pred = model.predict(X_val, num_iteration=model.best_iteration)
+        y_pred = model.predict(X_val_gpu, num_iteration=model.best_iteration)
         rmse = np.sqrt(mean_squared_error(y_val, y_pred))
         
         return -rmse
@@ -723,15 +887,35 @@ else:
             'bagging_fraction': 0.8,
             'bagging_freq': 5,
             'feature_pre_filter': False,
-            'num_threads': MAX_WORKERS,
             'verbose': -1,
             'seed': 42
         }
         
-        lgb_train_temp = lgb.Dataset(X_train, y_train, feature_name=list(X_train.columns),
-                                      params={'feature_pre_filter': False})
-        lgb_val_temp = lgb.Dataset(X_val, y_val, reference=lgb_train_temp,
-                                    feature_name=list(X_val.columns))
+        # GPU优化参数
+        params_test.update({
+            'device': 'gpu',
+            'gpu_platform_id': 0,
+            'gpu_device_id': 0,
+            'num_gpu': 1,
+            'max_bin': 63,
+            'gpu_use_dp': False,
+            'tree_learner': 'serial'
+        })
+        
+        # 使用GPU优化的数据集
+        lgb_train_temp = lgb.Dataset(
+            X_train_gpu, 
+            label=y_train_gpu, 
+            feature_name=list(X_train.columns),
+            params={**gpu_dataset_params, 'feature_pre_filter': False}
+        )
+        lgb_val_temp = lgb.Dataset(
+            X_val_gpu, 
+            label=y_val_gpu, 
+            reference=lgb_train_temp,
+            feature_name=list(X_val.columns),
+            params=gpu_dataset_params
+        )
         
         model_temp = lgb.train(
             params_test,
@@ -741,7 +925,7 @@ else:
             callbacks=[lgb.early_stopping(stopping_rounds=30)]
         )
         
-        y_pred_temp = model_temp.predict(X_val, num_iteration=model_temp.best_iteration)
+        y_pred_temp = model_temp.predict(X_val_gpu, num_iteration=model_temp.best_iteration)
         rmse_temp = np.sqrt(mean_squared_error(y_val, y_pred_temp))
         
         return combo, rmse_temp
@@ -800,10 +984,20 @@ params_optimized = {
     'bagging_fraction': best_params.get('bagging_fraction', 0.8),
     'bagging_freq': 5,
     'min_child_samples': best_params.get('min_child_samples', 20),
-    'num_threads': MAX_WORKERS,
     'verbose': -1,
-    'seed': 42
+    'seed': 42,
+    # GPU优化参数
+    'device': 'gpu',
+    'gpu_platform_id': 0,
+    'gpu_device_id': 0,
+    'num_gpu': 1,
+    'max_bin': 63,  # GPU优化：减少bin数量可提高GPU利用率
+    'gpu_use_dp': False,  # 使用单精度浮点数，提高速度
+    'tree_learner': 'serial'  # GPU模式下使用串行学习器
 }
+
+print("\n使用GPU加速训练优化模型")
+print("GPU优化参数已启用")
 
 print("\nOptimized model parameters:")
 for key, value in params_optimized.items():
@@ -829,9 +1023,10 @@ print(f"  Best iteration: {model_optimized.best_iteration}")
 print(f"  Training set RMSE: {evals_result_opt['train']['rmse'][model_optimized.best_iteration-1]:.4f}")
 print(f"  Validation set RMSE: {evals_result_opt['valid']['rmse'][model_optimized.best_iteration-1]:.4f}")
 
-y_train_pred_opt = model_optimized.predict(X_train, num_iteration=model_optimized.best_iteration)
-y_val_pred_opt = model_optimized.predict(X_val, num_iteration=model_optimized.best_iteration)
-y_test_pred_opt = model_optimized.predict(X_test, num_iteration=model_optimized.best_iteration)
+# 预测时也需要使用numpy数组格式
+y_train_pred_opt = model_optimized.predict(X_train_gpu, num_iteration=model_optimized.best_iteration)
+y_val_pred_opt = model_optimized.predict(X_val_gpu, num_iteration=model_optimized.best_iteration)
+y_test_pred_opt = model_optimized.predict(X_test.values.astype(np.float32), num_iteration=model_optimized.best_iteration)
 
 results_opt = []
 results_opt.append(evaluate_model(y_train, y_train_pred_opt, 'Train'))
@@ -1163,5 +1358,3 @@ for i, row in feature_importance.head(5).iterrows():
 print("\n" + "=" * 80)
 print("LightGBM PM2.5 Concentration Prediction Complete!")
 print("=" * 80)
-
-

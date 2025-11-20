@@ -6,27 +6,147 @@ import seaborn as sns
 from scipy.stats import kendalltau
 import warnings
 import glob
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 import hashlib
 import pickle
 import time
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple
 import xarray as xr
-from netCDF4 import Dataset
 import re
 
 warnings.filterwarnings('ignore')
 
-# 设置字体配置
+# Set font configuration
 import matplotlib as mpl
 mpl.rcParams["font.sans-serif"] = ["DejaVu Sans"]
 mpl.rcParams['axes.unicode_minus'] = False
 mpl.rcParams['font.size'] = 12
 mpl.rcParams['figure.figsize'] = (10, 6)
 
+# 独立函数用于多进程处理NC文件
+def process_single_nc_file_worker(args):
+    """独立的工作函数，用于多进程处理单个ERA5 NetCDF文件"""
+    filepath, cache_dir, beijing_lats, beijing_lons, era5_vars = args
+    
+    # 每个进程创建自己的cache实例
+    cache = DataCache(cache_dir)
+    
+    try:
+        cached_data = cache.get_cached_data(filepath)
+        if cached_data:
+            return cached_data
+    except Exception:
+        cached_data = None
+    
+    try:
+        with xr.open_dataset(filepath, engine="netcdf4", decode_times=True) as ds:
+            rename_map = {}
+            for tkey in ("valid_time", "forecast_time", "verification_time", "time1", "time2"):
+                if tkey in ds.coords and "time" not in ds.coords:
+                    rename_map[tkey] = "time"
+            if "lat" in ds.coords and "latitude" not in ds.coords:
+                rename_map["lat"] = "latitude"
+            if "lon" in ds.coords and "longitude" not in ds.coords:
+                rename_map["lon"] = "longitude"
+            if rename_map:
+                ds = ds.rename(rename_map)
+            try:
+                ds = xr.decode_cf(ds)
+            except Exception:
+                pass
+            drop_vars = []
+            for extra_coord in ("expver", "surface"):
+                if extra_coord in ds:
+                    drop_vars.append(extra_coord)
+            if drop_vars:
+                ds = ds.drop_vars(drop_vars)
+            if "number" in ds.dims:
+                ds = ds.mean(dim="number", skipna=True)
+            available_vars = [var for var in era5_vars if var in ds.data_vars]
+            if not available_vars:
+                print(f"[WARN] {os.path.basename(filepath)} does not contain target variables, skipping")
+                return None
+            if "latitude" in ds.coords and "longitude" in ds.coords:
+                lat_values = ds["latitude"]
+                if lat_values[0] > lat_values[-1]:
+                    lat_slice = slice(beijing_lats.max(), beijing_lats.min())
+                else:
+                    lat_slice = slice(beijing_lats.min(), beijing_lats.max())
+                ds = ds.sel(
+                    latitude=lat_slice,
+                    longitude=slice(beijing_lons.min(), beijing_lons.max())
+                )
+                if "latitude" in ds.dims and "longitude" in ds.dims:
+                    ds = ds.mean(dim=["latitude", "longitude"], skipna=True)
+            if "time" not in ds.coords:
+                print(f"[WARN] {os.path.basename(filepath)} missing time coordinate, skipping")
+                return None
+            ds = ds.sortby("time")
+            ds = ds.resample(time="1D").mean(keep_attrs=False)
+            ds = ds.dropna("time", how="all")
+            if ds.sizes.get("time", 0) == 0:
+                print(f"[WARN] {os.path.basename(filepath)} no valid time after resampling, skipping")
+                return None
+            stats = {
+                "source_file": os.path.basename(filepath)
+            }
+            try:
+                time_index = pd.to_datetime(ds["time"].values)
+                if len(time_index) > 0:
+                    first_time = time_index[0]
+                    stats["year"] = int(first_time.year)
+                    stats["month"] = int(first_time.month)
+                    stats["days"] = int(len(time_index))
+                else:
+                    stats["year"] = np.nan
+                    stats["month"] = np.nan
+                    stats["days"] = ds.sizes.get("time", np.nan)
+            except Exception:
+                stats["year"] = np.nan
+                stats["month"] = np.nan
+                stats["days"] = ds.sizes.get("time", np.nan)
+            if pd.isna(stats["year"]) or pd.isna(stats["month"]):
+                filename = os.path.basename(filepath)
+                match = re.search(r"(\d{4})(\d{2})", filename)
+                if match:
+                    stats["year"] = int(match.group(1))
+                    stats["month"] = int(match.group(2))
+            day_count = stats.get("days", 0)
+            if pd.isna(day_count):
+                day_count = 0
+            
+            for var in available_vars:
+                try:
+                    values = ds[var].values
+                    values = values[np.isfinite(values)]
+                    if values.size == 0:
+                        stats[f"{var}_mean"] = np.nan
+                        stats[f"{var}_std"] = np.nan
+                        stats[f"{var}_min"] = np.nan
+                        stats[f"{var}_max"] = np.nan
+                        continue
+                    if var in ['t2m', 'mn2t', 'd2m'] and np.nanmax(values) > 100:
+                        values = values - 273.15
+                    stats[f"{var}_mean"] = float(np.nanmean(values))
+                    stats[f"{var}_std"] = float(np.nanstd(values))
+                    stats[f"{var}_min"] = float(np.nanmin(values))
+                    stats[f"{var}_max"] = float(np.nanmax(values))
+                except Exception as col_error:
+                    print(f"Error processing variable {var} in {os.path.basename(filepath)}: {col_error}")
+                    stats[f"{var}_mean"] = np.nan
+                    stats[f"{var}_std"] = np.nan
+                    stats[f"{var}_min"] = np.nan
+                    stats[f"{var}_max"] = np.nan
+        cache.save_cached_data(filepath, stats)
+        print(f"  [+] {os.path.basename(filepath)} -> variables: {len(available_vars)}, days: {int(day_count)}")
+        return stats
+    except Exception as e:
+        print(f"[ERROR] Failed to process {os.path.basename(filepath)}: {type(e).__name__}: {e}")
+        return None
+
 class DataCache:
-    """数据缓存类，避免重复处理相同文件"""
+    """Data cache class to avoid reprocessing the same files"""
     
     def __init__(self, cache_dir="cache"):
         self.cache_dir = cache_dir
@@ -44,7 +164,7 @@ class DataCache:
             try:
                 with open(cache_file, 'rb') as f:
                     return pickle.load(f)
-            except:
+            except Exception:
                 pass
         return None
     
@@ -62,12 +182,12 @@ class DataCache:
                     file_path = os.path.join(self.cache_dir, filename)
                     if os.path.isfile(file_path):
                         os.remove(file_path)
-                print(f"缓存已清空: {self.cache_dir}")
+                print(f"Cache cleared: {self.cache_dir}")
         except Exception as e:
-            print(f"清空缓存时出错: {e}")
+            print(f"Error clearing cache: {e}")
 
 class BeijingKendallAnalyzer:
-    """北京气象因子与污染变化 Kendall 相关性分析器"""
+    """Beijing meteorological factors and pollution variation Kendall correlation analyzer"""
     
     def __init__(self, meteo_data_dir=".", pollution_data_dir=".", additional_pollution_data_dir="."):
         self.meteo_data_dir = meteo_data_dir
@@ -78,11 +198,11 @@ class BeijingKendallAnalyzer:
         self.additional_pollution_data = []
         self.cache = DataCache()
         
-        # 北京区域范围
+        # Beijing region range
         self.beijing_lats = np.arange(39.0, 41.25, 0.25)
         self.beijing_lons = np.arange(115.0, 117.25, 0.25)
         
-        # 气象参数列名映射
+        # Meteorological parameter column name mapping
         self.meteo_columns = {
             't2m': '2m_temperature',
             'd2m': '2m_dewpoint_temperature',
@@ -104,7 +224,7 @@ class BeijingKendallAnalyzer:
             'tp': 'total_precipitation'
         }
         
-        # ERA5 变量列表
+        # ERA5 variable list
         self.era5_vars = [
             'd2m', 't2m', 'u10', 'v10', 'u100', 'v100',
             'blh', 'sp', 'tcwv',
@@ -114,141 +234,26 @@ class BeijingKendallAnalyzer:
             'mn2t', 'sd', 'lsm'
         ]
     
-    def process_single_nc_file(self, filepath: str) -> Optional[Dict]:
-        """处理单个 ERA5 NetCDF 文件，提取气象统计特征"""
-        try:
-            cached_data = self.cache.get_cached_data(filepath)
-            if cached_data:
-                return cached_data
-        except Exception:
-            cached_data = None
-        
-        try:
-            with xr.open_dataset(filepath, engine="netcdf4", decode_times=True) as ds:
-                rename_map = {}
-                for tkey in ("valid_time", "forecast_time", "verification_time", "time1", "time2"):
-                    if tkey in ds.coords and "time" not in ds.coords:
-                        rename_map[tkey] = "time"
-                if "lat" in ds.coords and "latitude" not in ds.coords:
-                    rename_map["lat"] = "latitude"
-                if "lon" in ds.coords and "longitude" not in ds.coords:
-                    rename_map["lon"] = "longitude"
-                if rename_map:
-                    ds = ds.rename(rename_map)
-                try:
-                    ds = xr.decode_cf(ds)
-                except Exception:
-                    pass
-                drop_vars = []
-                for extra_coord in ("expver", "surface"):
-                    if extra_coord in ds:
-                        drop_vars.append(extra_coord)
-                if drop_vars:
-                    ds = ds.drop_vars(drop_vars)
-                if "number" in ds.dims:
-                    ds = ds.mean(dim="number", skipna=True)
-                available_vars = [var for var in self.era5_vars if var in ds.data_vars]
-                if not available_vars:
-                    print(f"[WARN] {os.path.basename(filepath)} 不含目标变量，跳过")
-                    return None
-                if "latitude" in ds.coords and "longitude" in ds.coords:
-                    lat_values = ds["latitude"]
-                    if lat_values[0] > lat_values[-1]:
-                        lat_slice = slice(self.beijing_lats.max(), self.beijing_lats.min())
-                    else:
-                        lat_slice = slice(self.beijing_lats.min(), self.beijing_lats.max())
-                    ds = ds.sel(
-                        latitude=lat_slice,
-                        longitude=slice(self.beijing_lons.min(), self.beijing_lons.max())
-                    )
-                    if "latitude" in ds.dims and "longitude" in ds.dims:
-                        ds = ds.mean(dim=["latitude", "longitude"], skipna=True)
-                if "time" not in ds.coords:
-                    print(f"[WARN] {os.path.basename(filepath)} 缺少时间坐标，跳过")
-                    return None
-                ds = ds.sortby("time")
-                ds = ds.resample(time="1D").mean(keep_attrs=False)
-                ds = ds.dropna("time", how="all")
-                if ds.sizes.get("time", 0) == 0:
-                    print(f"[WARN] {os.path.basename(filepath)} 重采样后无有效时间，跳过")
-                    return None
-                stats = {
-                    "source_file": os.path.basename(filepath)
-                }
-                try:
-                    time_index = pd.to_datetime(ds["time"].values)
-                    if len(time_index) > 0:
-                        first_time = time_index[0]
-                        stats["year"] = int(first_time.year)
-                        stats["month"] = int(first_time.month)
-                        stats["days"] = int(len(time_index))
-                    else:
-                        stats["year"] = np.nan
-                        stats["month"] = np.nan
-                        stats["days"] = ds.sizes.get("time", np.nan)
-                except Exception:
-                    stats["year"] = np.nan
-                    stats["month"] = np.nan
-                    stats["days"] = ds.sizes.get("time", np.nan)
-                if pd.isna(stats["year"]) or pd.isna(stats["month"]):
-                    filename = os.path.basename(filepath)
-                    match = re.search(r"(\d{4})(\d{2})", filename)
-                    if match:
-                        stats["year"] = int(match.group(1))
-                        stats["month"] = int(match.group(2))
-                day_count = stats.get("days", 0)
-                if pd.isna(day_count):
-                    day_count = 0
-                
-                for var in available_vars:
-                    try:
-                        values = ds[var].values
-                        values = values[np.isfinite(values)]
-                        if values.size == 0:
-                            stats[f"{var}_mean"] = np.nan
-                            stats[f"{var}_std"] = np.nan
-                            stats[f"{var}_min"] = np.nan
-                            stats[f"{var}_max"] = np.nan
-                            continue
-                        if var in ['t2m', 'mn2t', 'd2m'] and np.nanmax(values) > 100:
-                            values = values - 273.15
-                        stats[f"{var}_mean"] = float(np.nanmean(values))
-                        stats[f"{var}_std"] = float(np.nanstd(values))
-                        stats[f"{var}_min"] = float(np.nanmin(values))
-                        stats[f"{var}_max"] = float(np.nanmax(values))
-                    except Exception as col_error:
-                        print(f"处理 {os.path.basename(filepath)} 中的变量 {var} 时出错: {col_error}")
-                        stats[f"{var}_mean"] = np.nan
-                        stats[f"{var}_std"] = np.nan
-                        stats[f"{var}_min"] = np.nan
-                        stats[f"{var}_max"] = np.nan
-            self.cache.save_cached_data(filepath, stats)
-            print(f"  [+] {os.path.basename(filepath)} -> 变量: {len(available_vars)}, 天数: {int(day_count)}")
-            return stats
-        except Exception as e:
-            print(f"[ERROR] 处理 {os.path.basename(filepath)} 失败: {type(e).__name__}: {e}")
-            return None
-    
     def load_meteo_data_parallel(self):
-        """并行加载气象数据（NC 格式），逐文件处理"""
-        print("开始并行加载气象数据（NC 格式）...")
+        """Load meteorological data (NC format) in parallel using multiprocessing"""
+        print("Starting parallel loading of meteorological data (NC format) using multiprocessing...")
         start_time = time.time()
         
         if not os.path.exists(self.meteo_data_dir):
-            print(f"警告: 气象数据目录不存在: {self.meteo_data_dir}")
+            print(f"Warning: Meteorological data directory does not exist: {self.meteo_data_dir}")
             return
         
         all_nc = glob.glob(os.path.join(self.meteo_data_dir, "**", "*.nc"), recursive=True)
-        print(f"找到 {len(all_nc)} 个 NetCDF 文件")
+        print(f"Found {len(all_nc)} NetCDF files")
         
         if len(all_nc) == 0:
-            print("未找到任何 NC 文件，请检查目录路径")
+            print("No NC files found, please check directory path")
             return
         
-        print(f"示例文件: {[os.path.basename(f) for f in all_nc[:5]]}")
+        print(f"Example files: {[os.path.basename(f) for f in all_nc[:5]]}")
         
         max_workers = min(max(4, multiprocessing.cpu_count() - 1), 12)
-        print(f"使用 {max_workers} 个并行线程处理 NC 文件")
+        print(f"Using {max_workers} parallel processes to process NC files")
         
         total_files = len(all_nc)
         processed_files = 0
@@ -257,8 +262,15 @@ class BeijingKendallAnalyzer:
         self.meteorological_data = []
         aggregated_stats: Dict[Tuple[int, int], Dict[str, Any]] = {}
         
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_file = {executor.submit(self.process_single_nc_file, filepath): filepath for filepath in all_nc}
+        # 准备参数列表
+        cache_dir = self.cache.cache_dir
+        args_list = [
+            (filepath, cache_dir, self.beijing_lats, self.beijing_lons, self.era5_vars)
+            for filepath in all_nc
+        ]
+        
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {executor.submit(process_single_nc_file_worker, args): args[0] for args in args_list}
             for future in as_completed(future_to_file):
                 processed_files += 1
                 result = future.result()
@@ -285,34 +297,37 @@ class BeijingKendallAnalyzer:
                         aggregated_stats[key][k] = v
                     successful_files += 1
                 if processed_files % 50 == 0 or processed_files == total_files:
-                    print(f"  进度: {processed_files}/{total_files} ({processed_files/total_files*100:.1f}%)")
+                    print(f"  Progress: {processed_files}/{total_files} ({processed_files/total_files*100:.1f}%)")
         
         aggregated_list = [aggregated_stats[key] for key in sorted(aggregated_stats.keys())]
         self.meteorological_data.extend(aggregated_list)
         
         end_time = time.time()
-        print(f"气象数据加载完成，耗时: {end_time - start_time:.2f} 秒")
-        print(f"成功处理 {successful_files}/{total_files} 个 NC 文件")
-        print(f"聚合后月份数据量: {len(self.meteorological_data)}")
+        print(f"Meteorological data loading completed, time taken: {end_time - start_time:.2f} seconds")
+        print(f"Successfully processed {successful_files}/{total_files} NC files")
+        print(f"Monthly data count after aggregation: {len(self.meteorological_data)}")
     
     def load_pollution_data_optimized(self):
-        """加载污染数据（优化版）"""
-        print("开始加载污染数据...")
+        """Load pollution data (optimized version with dictionary lookup)"""
+        print("Starting to load pollution data...")
         start_time = time.time()
         
-        def pollution_file_filter(filename):
-            return filename.startswith('beijing_all_') and filename.endswith('.csv')
-        
-        all_pollution_files = []
+        # 一次性构建文件名到路径的字典映射，时间复杂度O(1)查找
+        print("Building filename to filepath dictionary...")
+        pollution_file_dict = {}
         search_pattern = os.path.join(self.pollution_data_dir, "**", "*.csv")
         for filepath in glob.glob(search_pattern, recursive=True):
             filename = os.path.basename(filepath)
-            if pollution_file_filter(filename):
-                all_pollution_files.append(filepath)
+            if filename.startswith('beijing_all_') and filename.endswith('.csv'):
+                pollution_file_dict[filename] = filepath
         
-        print(f"找到 {len(all_pollution_files)} 个污染数据文件")
+        print(f"Found {len(pollution_file_dict)} pollution data files")
         
-        for filepath in all_pollution_files:
+        # 按文件名排序以确保处理顺序一致
+        sorted_filenames = sorted(pollution_file_dict.keys())
+        
+        for filename in sorted_filenames:
+            filepath = pollution_file_dict[filename]  # O(1)字典查找
             try:
                 cached_data = self.cache.get_cached_data(filepath)
                 if cached_data:
@@ -341,40 +356,43 @@ class BeijingKendallAnalyzer:
                         
                         self.cache.save_cached_data(filepath, pollution_stats)
                         self.pollution_data.append(pollution_stats)
-                        print(f"已加载污染数据: {os.path.basename(filepath)}")
+                        print(f"Loaded pollution data: {filename}")
             except Exception as e:
-                print(f"加载文件 {filepath} 出错: {e}")
+                print(f"Error loading file {filename}: {e}")
         
         end_time = time.time()
-        print(f"污染数据加载完成，耗时: {end_time - start_time:.2f} 秒")
-        print(f"成功加载 {len(self.pollution_data)} 个文件的数据")
+        print(f"Pollution data loading completed, time taken: {end_time - start_time:.2f} seconds")
+        print(f"Successfully loaded data from {len(self.pollution_data)} files")
     
     def load_additional_pollution_data_optimized(self):
-        """加载额外污染数据（SO2, CO, O3, NO2）"""
-        print("开始加载额外污染数据 (SO2, CO, O3, NO2)...")
+        """Load additional pollution data (SO2, CO, O3, NO2) with dictionary lookup"""
+        print("Starting to load additional pollution data (SO2, CO, O3, NO2)...")
         start_time = time.time()
         
         if not os.path.exists(self.additional_pollution_data_dir):
-            print(f"警告: 额外污染数据目录不存在: {self.additional_pollution_data_dir}")
-            print("跳过额外污染数据加载...")
+            print(f"Warning: Additional pollution data directory does not exist: {self.additional_pollution_data_dir}")
+            print("Skipping additional pollution data loading...")
             return
         
-        def additional_pollution_file_filter(filename):
-            return filename.startswith('beijing_extra_') and filename.endswith('.csv')
-        
-        all_additional_pollution_files = []
+        # 一次性构建文件名到路径的字典映射，时间复杂度O(1)查找
+        print("Building filename to filepath dictionary for additional pollution data...")
+        additional_pollution_file_dict = {}
         search_pattern = os.path.join(self.additional_pollution_data_dir, "**", "*.csv")
         for filepath in glob.glob(search_pattern, recursive=True):
             filename = os.path.basename(filepath)
-            if additional_pollution_file_filter(filename):
-                all_additional_pollution_files.append(filepath)
+            if filename.startswith('beijing_extra_') and filename.endswith('.csv'):
+                additional_pollution_file_dict[filename] = filepath
         
-        print(f"找到 {len(all_additional_pollution_files)} 个额外污染数据文件")
-        if len(all_additional_pollution_files) == 0:
-            print("未找到额外污染数据文件，请检查目录路径")
+        print(f"Found {len(additional_pollution_file_dict)} additional pollution data files")
+        if len(additional_pollution_file_dict) == 0:
+            print("No additional pollution data files found, please check directory path")
             return
         
-        for filepath in all_additional_pollution_files:
+        # 按文件名排序以确保处理顺序一致
+        sorted_filenames = sorted(additional_pollution_file_dict.keys())
+        
+        for filename in sorted_filenames:
+            filepath = additional_pollution_file_dict[filename]  # O(1)字典查找
             try:
                 cached_data = self.cache.get_cached_data(filepath)
                 if cached_data:
@@ -407,33 +425,33 @@ class BeijingKendallAnalyzer:
                         
                         self.cache.save_cached_data(filepath, additional_pollution_stats)
                         self.additional_pollution_data.append(additional_pollution_stats)
-                        print(f"已加载额外污染数据: {os.path.basename(filepath)}")
+                        print(f"Loaded additional pollution data: {filename}")
             except Exception as e:
-                print(f"加载文件 {filepath} 出错: {e}")
+                print(f"Error loading file {filename}: {e}")
         
         end_time = time.time()
-        print(f"额外污染数据加载完成，耗时: {end_time - start_time:.2f} 秒")
-        print(f"成功加载 {len(self.additional_pollution_data)} 个文件的数据")
+        print(f"Additional pollution data loading completed, time taken: {end_time - start_time:.2f} seconds")
+        print(f"Successfully loaded data from {len(self.additional_pollution_data)} files")
     
     def load_data(self):
-        """加载所有数据"""
-        print("开始加载所有数据...")
+        """Load all data"""
+        print("Starting to load all data...")
         
         self.load_meteo_data_parallel()
         self.load_pollution_data_optimized()
         self.load_additional_pollution_data_optimized()
         
-        print("数据加载完成!")
+        print("Data loading completed!")
     
     def prepare_combined_data(self):
-        """准备合并数据"""
-        print("准备合并数据...")
+        """Prepare combined data"""
+        print("Preparing combined data...")
         
         if not self.meteorological_data or not self.pollution_data:
-            print("错误: 数据不足，无法进行分析")
-            print(f"气象数据数量: {len(self.meteorological_data)}")
-            print(f"污染数据数量: {len(self.pollution_data)}")
-            print(f"额外污染数据数量: {len(self.additional_pollution_data)}")
+            print("Error: Insufficient data for analysis")
+            print(f"Meteorological data count: {len(self.meteorological_data)}")
+            print(f"Pollution data count: {len(self.pollution_data)}")
+            print(f"Additional pollution data count: {len(self.additional_pollution_data)}")
             return pd.DataFrame()
         
         meteo_df = pd.DataFrame(self.meteorological_data)
@@ -463,33 +481,33 @@ class BeijingKendallAnalyzer:
             if combined_data[col].isna().any():
                 mean_val = combined_data[col].mean()
                 if not pd.isna(mean_val):
-                    combined_data.loc[:, col] = combined_data[col].fillna(mean_val)
+                    combined_data[col] = combined_data[col].fillna(mean_val)
         
-        print(f"最终数据形状: {combined_data.shape}")
-        print(f"合并后的列名: {list(combined_data.columns)}")
+        print(f"Final data shape: {combined_data.shape}")
+        print(f"Column names after merging: {list(combined_data.columns)}")
         
         meteo_features = [col for col in combined_data.columns if any(x in col for x in self.meteo_columns.keys())]
         pollution_features = [col for col in combined_data.columns if any(x in col.lower() for x in ['pm25', 'pm10', 'aqi', 'so2', 'co', 'o3', 'no2'])]
         
-        print(f"气象参数数量: {len(meteo_features)}")
-        print(f"气象参数列表: {meteo_features[:10]}..." if len(meteo_features) > 10 else f"气象参数列表: {meteo_features}")
+        print(f"Meteorological parameter count: {len(meteo_features)}")
+        print(f"Meteorological parameter list: {meteo_features[:10]}..." if len(meteo_features) > 10 else f"Meteorological parameter list: {meteo_features}")
         
-        # 检查风分量数据
+        # Check wind component data
         wind_features = [col for col in combined_data.columns if any(wind in col for wind in ['u10', 'v10', 'u100', 'v100'])]
-        print(f"风分量参数数量: {len(wind_features)}")
-        print(f"风分量参数列表: {wind_features}")
+        print(f"Wind component parameter count: {len(wind_features)}")
+        print(f"Wind component parameter list: {wind_features}")
         
-        print(f"污染参数数量: {len(pollution_features)}")
-        print(f"污染参数列表: {pollution_features}")
+        print(f"Pollution parameter count: {len(pollution_features)}")
+        print(f"Pollution parameter list: {pollution_features}")
         
         return combined_data
     
     def perform_kendall_analysis(self, data):
-        """执行 Kendall 相关性分析"""
-        print("执行 Kendall 相关性分析...")
+        """Perform Kendall correlation analysis"""
+        print("Performing Kendall correlation analysis...")
         
         if data.empty:
-            print("错误: 无数据可用于 Kendall 相关性分析")
+            print("Error: No data available for Kendall correlation analysis")
             return None, None
         
         numeric_columns = data.select_dtypes(include=[np.number]).columns
@@ -499,7 +517,7 @@ class BeijingKendallAnalyzer:
         kendall_corr_matrix = pd.DataFrame(index=feature_columns, columns=feature_columns)
         kendall_p_matrix = pd.DataFrame(index=feature_columns, columns=feature_columns)
         
-        print("计算 Kendall 相关系数...")
+        print("Calculating Kendall correlation coefficients...")
         for i, var1 in enumerate(feature_columns):
             for j, var2 in enumerate(feature_columns):
                 if i <= j:
@@ -517,7 +535,7 @@ class BeijingKendallAnalyzer:
                             kendall_p_matrix.loc[var1, var2] = np.nan
                             kendall_p_matrix.loc[var2, var1] = np.nan
                     except Exception as e:
-                        print(f"计算 {var1} 和 {var2} 的 Kendall 相关性时出错: {e}")
+                        print(f"Error calculating Kendall correlation between {var1} and {var2}: {e}")
                         kendall_corr_matrix.loc[var1, var2] = np.nan
                         kendall_corr_matrix.loc[var2, var1] = np.nan
                         kendall_p_matrix.loc[var1, var2] = np.nan
@@ -526,28 +544,28 @@ class BeijingKendallAnalyzer:
         kendall_corr_matrix = kendall_corr_matrix.astype(float)
         kendall_p_matrix = kendall_p_matrix.astype(float)
         
-        print(f"Kendall 相关矩阵形状: {kendall_corr_matrix.shape}")
+        print(f"Kendall correlation matrix shape: {kendall_corr_matrix.shape}")
         
         return kendall_corr_matrix, kendall_p_matrix
     
     def analyze_kendall_correlations(self, data, kendall_corr_matrix):
-        """分析 Kendall 相关性"""
-        print("分析 Kendall 相关性...")
+        """Analyze Kendall correlations"""
+        print("Analyzing Kendall correlations...")
         
         if data.empty or kendall_corr_matrix is None:
-            print("错误: 无数据可用于 Kendall 相关性分析")
+            print("Error: No data available for Kendall correlation analysis")
             return None
         
         numeric_columns = data.select_dtypes(include=[np.number]).columns
         exclude_columns = ['year', 'month']
         feature_columns = [col for col in numeric_columns if col not in exclude_columns]
         
-        print("\n气象因子与污染指标之间的 Kendall 相关性分析:")
+        print("\nKendall correlation analysis between meteorological factors and pollution indicators:")
         pollution_features = [col for col in feature_columns if any(x in col.lower() for x in ['pm25', 'pm10', 'aqi', 'so2', 'co', 'o3', 'no2'])]
         meteo_features = [col for col in feature_columns if any(x in col for x in self.meteo_columns.keys())]
         
         if pollution_features and meteo_features:
-            print(f"找到 {len(pollution_features)} 个污染指标和 {len(meteo_features)} 个气象因子")
+            print(f"Found {len(pollution_features)} pollution indicators and {len(meteo_features)} meteorological factors")
             
             for pollution_feat in pollution_features:
                 if pollution_feat in kendall_corr_matrix.index:
@@ -555,28 +573,28 @@ class BeijingKendallAnalyzer:
                     correlations = correlations.dropna()
                     if len(correlations) > 0:
                         top_correlations = correlations.nlargest(5)
-                        print(f"\n与 {pollution_feat} 相关性最强的气象因子 (Kendall):")
+                        print(f"\nMeteorological factors with strongest correlation to {pollution_feat} (Kendall):")
                         for meteo_feat, corr in top_correlations.items():
                             print(f"  {meteo_feat}: {corr:.3f}")
         
         return kendall_corr_matrix
     
     def plot_kendall_heatmap(self, kendall_corr_matrix, save_path='beijing_kendall_correlation_heatmap_nc.png'):
-        """绘制 Kendall 相关性热力图"""
+        """Plot Kendall correlation heatmap"""
         if kendall_corr_matrix is None:
-            print("错误: 无 Kendall 相关性数据可绘图")
+            print("Error: No Kendall correlation data available for plotting")
             return
         
         plt.style.use('default')
         
-        # 根据特征数量动态调整图片大小
+        # Dynamically adjust image size based on number of features
         n_features = len(kendall_corr_matrix)
         fig_size = max(20, n_features * 0.3)
         fig, ax = plt.subplots(figsize=(fig_size, fig_size))
         
         mask = np.triu(np.ones_like(kendall_corr_matrix, dtype=bool))
         
-        # 绘制热力图，明确设置标签
+        # Plot heatmap with explicit label settings
         sns.heatmap(kendall_corr_matrix, 
                    mask=mask,
                    annot=False,
@@ -586,13 +604,13 @@ class BeijingKendallAnalyzer:
                    cbar_kws={'shrink': 0.8, 'aspect': 50, 'label': 'Kendall Correlation Coefficient'},
                    linewidths=0.2,
                    linecolor='white',
-                   xticklabels=True,  # 显示x轴标签
-                   yticklabels=True,  # 显示y轴标签
+                   xticklabels=True,  # Show x-axis labels
+                   yticklabels=True,  # Show y-axis labels
                    ax=ax)
         
-        # 设置x轴标签
+        # Set x-axis labels
         ax.set_xticklabels(ax.get_xticklabels(), rotation=90, ha='right', fontsize=8)
-        # 设置y轴标签
+        # Set y-axis labels
         ax.set_yticklabels(ax.get_yticklabels(), rotation=0, fontsize=8)
         
         plt.title('Beijing Meteorological Factors and Pollution Indicators Kendall Correlation Heatmap (NC Data)\n(PM2.5, PM10, AQI, SO2, CO, O3, NO2)', 
@@ -601,41 +619,41 @@ class BeijingKendallAnalyzer:
         plt.tight_layout()
         plt.savefig(save_path, dpi=1200, bbox_inches='tight', 
                    facecolor='white', edgecolor='none')
-        plt.close()  # 关闭图形以释放内存
+        plt.close()  # Close figure to release memory
         
-        print(f"Kendall 相关性热力图已保存至: {save_path}")
-        print(f"热力图包含 {n_features} 个特征（气象参数 + 污染指标）")
+        print(f"Kendall correlation heatmap saved to: {save_path}")
+        print(f"Heatmap contains {n_features} features (meteorological parameters + pollution indicators)")
     
     def plot_meteo_pollution_heatmap(self, kendall_corr_matrix, save_path='beijing_meteo_pollution_correlation_nc.png'):
-        """绘制气象参数与污染指标之间的相关性热力图（子集）"""
+        """Plot correlation heatmap between meteorological parameters and pollution indicators (subset)"""
         if kendall_corr_matrix is None:
-            print("错误: 无 Kendall 相关性数据可绘图")
+            print("Error: No Kendall correlation data available for plotting")
             return
         
-        # 识别气象参数和污染指标
+        # Identify meteorological parameters and pollution indicators
         all_features = kendall_corr_matrix.index.tolist()
         meteo_features = [col for col in all_features if any(x in col for x in self.meteo_columns.keys())]
         pollution_features = [col for col in all_features if any(x in col.lower() for x in ['pm25', 'pm10', 'aqi', 'so2', 'co', 'o3', 'no2'])]
         
         if not meteo_features or not pollution_features:
-            print("警告: 未找到足够的气象参数或污染指标")
+            print("Warning: Insufficient meteorological parameters or pollution indicators found")
             return
         
-        # 提取子矩阵：行为污染指标，列为气象参数
+        # Extract submatrix: rows are pollution indicators, columns are meteorological parameters
         subset_matrix = kendall_corr_matrix.loc[pollution_features, meteo_features]
         
-        print(f"\n绘制气象-污染相关性子集热力图...")
-        print(f"  污染指标数量: {len(pollution_features)}")
-        print(f"  气象参数数量: {len(meteo_features)}")
+        print(f"\nPlotting meteorological-pollution correlation subset heatmap...")
+        print(f"  Pollution indicator count: {len(pollution_features)}")
+        print(f"  Meteorological parameter count: {len(meteo_features)}")
         
         plt.style.use('default')
         
-        # 动态调整图片大小
+        # Dynamically adjust image size
         fig_width = max(16, len(meteo_features) * 0.3)
         fig_height = max(8, len(pollution_features) * 0.5)
         fig, ax = plt.subplots(figsize=(fig_width, fig_height))
         
-        # 绘制热力图
+        # Plot heatmap
         sns.heatmap(subset_matrix, 
                    annot=False,
                    cmap='RdYlBu_r',
@@ -647,14 +665,14 @@ class BeijingKendallAnalyzer:
                    yticklabels=True,
                    ax=ax)
         
-        # 设置轴标签
+        # Set axis labels
         ax.set_xticklabels(ax.get_xticklabels(), rotation=90, ha='right', fontsize=9)
         ax.set_yticklabels(ax.get_yticklabels(), rotation=0, fontsize=10)
         
-        ax.set_xlabel('气象参数', fontsize=12, fontweight='bold')
-        ax.set_ylabel('污染指标', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Meteorological Parameters', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Pollution Indicators', fontsize=12, fontweight='bold')
         
-        plt.title('气象参数与污染指标 Kendall 相关性热力图 (NC 数据)\n(PM2.5, PM10, AQI, SO2, CO, O3, NO2)', 
+        plt.title('Kendall Correlation Heatmap of Meteorological Parameters and Pollution Indicators (NC Data)\n(PM2.5, PM10, AQI, SO2, CO, O3, NO2)', 
                  fontsize=16, fontweight='bold', pad=20, color='#2E3440')
         
         plt.tight_layout()
@@ -662,19 +680,19 @@ class BeijingKendallAnalyzer:
                    facecolor='white', edgecolor='none')
         plt.close()
         
-        print(f"气象-污染相关性热力图已保存至: {save_path}")
+        print(f"Meteorological-pollution correlation heatmap saved to: {save_path}")
     
     def plot_kendall_statistics(self, kendall_corr_matrix, kendall_p_matrix, feature_columns, save_path='beijing_kendall_statistics_nc.png'):
-        """绘制 Kendall 统计图表"""
+        """Plot Kendall statistical charts"""
         if kendall_corr_matrix is None:
-            print("错误: 无 Kendall 相关性数据可绘图")
+            print("Error: No Kendall correlation data available for plotting")
             return
         
         plt.style.use('default')
         fig, axes = plt.subplots(2, 2, figsize=(20, 16))
         colors = ['#3498db', '#e74c3c', '#2ecc71', '#f39c12']
         
-        # 1. 相关系数分布
+        # 1. Correlation coefficient distribution
         corr_values = kendall_corr_matrix.values
         corr_values = corr_values[~np.isnan(corr_values)]
         corr_values = corr_values[np.abs(corr_values) > 0]
@@ -692,7 +710,7 @@ class BeijingKendallAnalyzer:
         axes[0, 0].axvline(mean_corr, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_corr:.3f}')
         axes[0, 0].legend()
         
-        # 2. P值分布
+        # 2. P-value distribution
         p_values = kendall_p_matrix.values
         p_values = p_values[~np.isnan(p_values)]
         p_values = p_values[p_values > 0]
@@ -709,7 +727,7 @@ class BeijingKendallAnalyzer:
         axes[0, 1].axvline(0.01, color='orange', linestyle='--', linewidth=2, label='α = 0.01')
         axes[0, 1].legend()
         
-        # 3. 强相关性 (|r| > 0.3)
+        # 3. Strong correlations (|r| > 0.3)
         strong_corr_pairs = []
         for i, var1 in enumerate(feature_columns):
             for j, var2 in enumerate(feature_columns):
@@ -745,7 +763,7 @@ class BeijingKendallAnalyzer:
                            ha='center', va='center', transform=axes[1, 0].transAxes, fontsize=14)
             axes[1, 0].set_title('Strong Correlation Analysis', fontsize=14, fontweight='bold', pad=15)
         
-        # 4. 相关性强度汇总
+        # 4. Correlation strength summary
         mask = np.triu(np.ones_like(kendall_corr_matrix.values, dtype=bool), k=1)
         corr_values_masked = kendall_corr_matrix.values.copy()
         corr_values_masked[mask] = np.nan
@@ -782,56 +800,56 @@ class BeijingKendallAnalyzer:
                    facecolor='white', edgecolor='none')
         plt.show()
         
-        print(f"Kendall 统计图表已保存至: {save_path}")
+        print(f"Kendall statistical charts saved to: {save_path}")
     
     def generate_analysis_report(self, data, kendall_corr_matrix, kendall_p_matrix, feature_columns):
-        """生成分析报告"""
+        """Generate analysis report"""
         print("\n" + "="*80)
-        print("北京多气象因子与污染变化 Kendall 相关性分析报告 (NC 数据)")
-        print("污染指标: PM2.5, PM10, AQI, SO2, CO, O3, NO2")
+        print("Beijing Multi-Meteorological Factors and Pollution Variation Kendall Correlation Analysis Report (NC Data)")
+        print("Pollution Indicators: PM2.5, PM10, AQI, SO2, CO, O3, NO2")
         print("="*80)
         
         if data.empty:
-            print("错误: 无数据可用于生成报告")
+            print("Error: No data available for report generation")
             return
         
-        print(f"\n1. 数据概览:")
-        print(f"   - 数据形状: {data.shape}")
-        print(f"   - 特征数量: {len(feature_columns)}")
-        print(f"   - 样本数量: {len(data)}")
+        print(f"\n1. Data Overview:")
+        print(f"   - Data shape: {data.shape}")
+        print(f"   - Feature count: {len(feature_columns)}")
+        print(f"   - Sample count: {len(data)}")
         
         meteo_features = [col for col in feature_columns if any(x in col for x in self.meteo_columns.keys())]
         pollution_features = [col for col in feature_columns if any(x in col.lower() for x in ['pm25', 'pm10', 'aqi', 'so2', 'co', 'o3', 'no2'])]
         
-        print(f"\n2. 特征分类:")
-        print(f"   - 气象因子数量: {len(meteo_features)}")
-        print(f"   - 污染指标数量: {len(pollution_features)}")
+        print(f"\n2. Feature Classification:")
+        print(f"   - Meteorological factor count: {len(meteo_features)}")
+        print(f"   - Pollution indicator count: {len(pollution_features)}")
         
-        print(f"\n3. 气象因子详情:")
+        print(f"\n3. Meteorological Factor Details:")
         for i, feature in enumerate(meteo_features[:10]):
             print(f"   - {feature}")
         if len(meteo_features) > 10:
-            print(f"   ... 以及其他 {len(meteo_features) - 10} 个气象因子")
+            print(f"   ... and {len(meteo_features) - 10} other meteorological factors")
         
-        print(f"\n4. 污染指标详情:")
+        print(f"\n4. Pollution Indicator Details:")
         for feature in pollution_features:
             print(f"   - {feature}")
         
         if kendall_corr_matrix is not None:
-            print(f"\n5. Kendall 相关性分析:")
+            print(f"\n5. Kendall Correlation Analysis:")
             
             corr_values = kendall_corr_matrix.values
             corr_values = corr_values[~np.isnan(corr_values)]
             corr_values = corr_values[np.abs(corr_values) > 0]
             
-            print(f"   - 计算的相关性总数: {len(corr_values)}")
-            print(f"   - 平均相关系数: {np.mean(corr_values):.4f}")
-            print(f"   - 标准差: {np.std(corr_values):.4f}")
-            print(f"   - 强相关性 (|r| > 0.3): {np.sum(np.abs(corr_values) > 0.3)}")
-            print(f"   - 中等相关性 (0.1 < |r| <= 0.3): {np.sum((np.abs(corr_values) > 0.1) & (np.abs(corr_values) <= 0.3))}")
+            print(f"   - Total correlations calculated: {len(corr_values)}")
+            print(f"   - Mean correlation coefficient: {np.mean(corr_values):.4f}")
+            print(f"   - Standard deviation: {np.std(corr_values):.4f}")
+            print(f"   - Strong correlations (|r| > 0.3): {np.sum(np.abs(corr_values) > 0.3)}")
+            print(f"   - Moderate correlations (0.1 < |r| <= 0.3): {np.sum((np.abs(corr_values) > 0.1) & (np.abs(corr_values) <= 0.3))}")
             
             if pollution_features and meteo_features:
-                print("   与污染指标相关性最强的气象因子:")
+                print("   Meteorological factors with strongest correlation to pollution indicators:")
                 for pollution_feat in pollution_features:
                     if pollution_feat in kendall_corr_matrix.index:
                         correlations = kendall_corr_matrix[pollution_feat][meteo_features].abs()
@@ -843,7 +861,7 @@ class BeijingKendallAnalyzer:
                                 print(f"     - {meteo_feat}: {corr:.3f}")
         
         if kendall_p_matrix is not None:
-            print(f"\n6. 统计显著性分析:")
+            print(f"\n6. Statistical Significance Analysis:")
             p_values = kendall_p_matrix.values
             p_values = p_values[~np.isnan(p_values)]
             p_values = p_values[p_values > 0]
@@ -852,30 +870,30 @@ class BeijingKendallAnalyzer:
             significant_01 = np.sum(p_values < 0.01)
             significant_001 = np.sum(p_values < 0.001)
             
-            print(f"   - P值总数: {len(p_values)}")
-            print(f"   - α = 0.05 水平显著: {significant_05} ({significant_05/len(p_values)*100:.1f}%)")
-            print(f"   - α = 0.01 水平显著: {significant_01} ({significant_01/len(p_values)*100:.1f}%)")
-            print(f"   - α = 0.001 水平显著: {significant_001} ({significant_001/len(p_values)*100:.1f}%)")
+            print(f"   - Total P-values: {len(p_values)}")
+            print(f"   - Significant at α = 0.05 level: {significant_05} ({significant_05/len(p_values)*100:.1f}%)")
+            print(f"   - Significant at α = 0.01 level: {significant_01} ({significant_01/len(p_values)*100:.1f}%)")
+            print(f"   - Significant at α = 0.001 level: {significant_001} ({significant_001/len(p_values)*100:.1f}%)")
         
-        print(f"\n7. 主要发现:")
-        print("   - Kendall 相关性分析揭示了变量间的非参数关系")
-        print("   - 温度、湿度和风因子与污染水平呈现显著相关性")
-        print("   - 边界层高度和大气稳定度是关键影响因素")
-        print("   - 降水和风速对污染物扩散有显著影响")
-        print("   - 非参数分析对异常值的鲁棒性优于 Pearson 相关性")
+        print(f"\n7. Main Findings:")
+        print("   - Kendall correlation analysis reveals non-parametric relationships between variables")
+        print("   - Temperature, humidity, and wind factors show significant correlations with pollution levels")
+        print("   - Boundary layer height and atmospheric stability are key influencing factors")
+        print("   - Precipitation and wind speed have significant effects on pollutant dispersion")
+        print("   - Non-parametric analysis is more robust to outliers than Pearson correlation")
         
         print("\n" + "="*80)
     
     def run_analysis(self):
-        """运行完整分析流程"""
-        print("北京多气象因子与污染变化 Kendall 相关性分析 (NC 数据)")
+        """Run complete analysis workflow"""
+        print("Beijing Multi-Meteorological Factors and Pollution Variation Kendall Correlation Analysis (NC Data)")
         print("="*60)
         
         self.load_data()
         combined_data = self.prepare_combined_data()
         
         if combined_data.empty:
-            print("错误: 无法准备数据，请检查数据文件")
+            print("Error: Unable to prepare data, please check data files")
             return
         
         kendall_corr_matrix, kendall_p_matrix = self.perform_kendall_analysis(combined_data)
@@ -884,34 +902,34 @@ class BeijingKendallAnalyzer:
                           if col not in ['year', 'month']]
         self.analyze_kendall_correlations(combined_data, kendall_corr_matrix)
         
-        # 绘制完整热力图（所有特征）
+        # Plot complete heatmap (all features)
         self.plot_kendall_heatmap(kendall_corr_matrix)
         
-        # 绘制气象-污染子集热力图（更清晰地展示气象参数与污染指标的关系）
+        # Plot meteorological-pollution subset heatmap (more clearly showing the relationship between meteorological parameters and pollution indicators)
         self.plot_meteo_pollution_heatmap(kendall_corr_matrix)
         
-        # 绘制统计图表
+        # Plot statistical charts
         self.plot_kendall_statistics(kendall_corr_matrix, kendall_p_matrix, feature_columns)
         
-        # 生成分析报告
+        # Generate analysis report
         self.generate_analysis_report(combined_data, kendall_corr_matrix, kendall_p_matrix, feature_columns)
         
-        print("\n清空缓存以释放空间...")
+        print("\nClearing cache to free up space...")
         self.cache.clear_cache()
         
-        print("\n分析完成!")
+        print("\nAnalysis completed!")
 
 def main():
-    # 请根据实际情况修改这三个路径
-    meteo_data_dir = r"E:\DATA Science\ERA5-Beijing-NC"  # 气象数据文件夹路径 (NC 格式)
-    pollution_data_dir = r"E:\DATA Science\Benchmark\all(AQI+PM2.5+PM10)"  # 污染数据文件夹路径 (AQI, PM2.5, PM10)
-    additional_pollution_data_dir = r"E:\DATA Science\Benchmark\extra(SO2+NO2+CO+O3)"  # 额外污染数据文件夹路径 (SO2, CO, O3, NO2)
+    # Please modify these three paths according to actual situation
+    meteo_data_dir = '/root/autodl-tmp/ERA5-Beijing-NC'  # Meteorological data folder path (NC format)
+    pollution_data_dir = '/root/autodl-tmp/Benchmark/all(AQI+PM2.5+PM10)'  # Pollution data folder path (AQI, PM2.5, PM10)
+    additional_pollution_data_dir = '/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)'  # Additional pollution data folder path (SO2, CO, O3, NO2)
     
-    print("请确认数据文件夹路径:")
-    print(f"气象数据目录 (NC 格式): {meteo_data_dir}")
-    print(f"污染数据目录 (AQI, PM2.5, PM10): {pollution_data_dir}")
-    print(f"额外污染数据目录 (SO2, CO, O3, NO2): {additional_pollution_data_dir}")
-    print("若路径不正确，请在 main() 函数中修改路径设置")
+    print("Please confirm data folder paths:")
+    print(f"Meteorological data directory (NC format): {meteo_data_dir}")
+    print(f"Pollution data directory (AQI, PM2.5, PM10): {pollution_data_dir}")
+    print(f"Additional pollution data directory (SO2, CO, O3, NO2): {additional_pollution_data_dir}")
+    print("If paths are incorrect, please modify path settings in main() function")
     
     analyzer = BeijingKendallAnalyzer(meteo_data_dir, pollution_data_dir, additional_pollution_data_dir)
     analyzer.run_analysis()

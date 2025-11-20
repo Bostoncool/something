@@ -6,7 +6,7 @@ import pickle
 import re
 import time
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib as mpl
@@ -15,7 +15,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import xarray as xr
-from netCDF4 import Dataset  # noqa: F401
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
@@ -28,8 +27,170 @@ mpl.rcParams["font.size"] = 12
 mpl.rcParams["figure.figsize"] = (10, 6)
 
 
+def process_single_nc_file(
+    filepath: str,
+    beijing_lats: np.ndarray,
+    beijing_lons: np.ndarray,
+    era5_vars: List[str],
+) -> Optional[Dict[str, Any]]:
+    """Process a single ERA5 NetCDF file and extract statistical features (独立函数用于多进程)."""
+    # 创建临时缓存实例用于多进程
+    cache = DataCache()
+    cached_data = None
+    try:
+        cached_data = cache.get_cached_data(filepath)
+    except Exception:
+        cached_data = None
+
+    if cached_data:
+        return cached_data
+
+    try:
+        with xr.open_dataset(
+            filepath, engine="netcdf4", decode_times=True
+        ) as dataset:
+            rename_map: Dict[str, str] = {}
+            for time_key in (
+                "valid_time",
+                "forecast_time",
+                "verification_time",
+                "time1",
+                "time2",
+            ):
+                if time_key in dataset.coords and "time" not in dataset.coords:
+                    rename_map[time_key] = "time"
+            if "lat" in dataset.coords and "latitude" not in dataset.coords:
+                rename_map["lat"] = "latitude"
+            if "lon" in dataset.coords and "longitude" not in dataset.coords:
+                rename_map["lon"] = "longitude"
+            if rename_map:
+                dataset = dataset.rename(rename_map)
+
+            try:
+                dataset = xr.decode_cf(dataset)
+            except Exception:
+                pass
+
+            drop_vars: List[str] = []
+            for extra_coord in ("expver", "surface"):
+                if extra_coord in dataset:
+                    drop_vars.append(extra_coord)
+            if drop_vars:
+                dataset = dataset.drop_vars(drop_vars)
+
+            if "number" in dataset.dims:
+                dataset = dataset.mean(dim="number", skipna=True)
+
+            available_vars = [
+                var for var in era5_vars if var in dataset.data_vars
+            ]
+            if not available_vars:
+                print(
+                    f"[WARN] {os.path.basename(filepath)} does not contain target variables, skipped"
+                )
+                return None
+
+            if "latitude" in dataset.coords and "longitude" in dataset.coords:
+                lat_values = dataset["latitude"]
+                if lat_values[0] > lat_values[-1]:
+                    lat_slice = slice(
+                        beijing_lats.max(), beijing_lats.min()
+                    )
+                else:
+                    lat_slice = slice(
+                        beijing_lats.min(), beijing_lats.max()
+                    )
+                dataset = dataset.sel(
+                    latitude=lat_slice,
+                    longitude=slice(
+                        beijing_lons.min(), beijing_lons.max()
+                    ),
+                )
+                if "latitude" in dataset.dims and "longitude" in dataset.dims:
+                    dataset = dataset.mean(
+                        dim=["latitude", "longitude"], skipna=True
+                    )
+
+            if "time" not in dataset.coords:
+                print(f"[WARN] {os.path.basename(filepath)} missing time coordinate, skipped")
+                return None
+
+            dataset = dataset.sortby("time")
+            dataset = dataset.resample(time="1D").mean()
+            dataset = dataset.dropna("time", how="all")
+
+            if dataset.sizes.get("time", 0) == 0:
+                print(
+                    f"[WARN] {os.path.basename(filepath)} no valid time after resampling, skipped"
+                )
+                return None
+
+            stats: Dict[str, Any] = {"source_file": os.path.basename(filepath)}
+
+            try:
+                time_index = pd.to_datetime(dataset["time"].values)
+                if len(time_index) > 0:
+                    first_time = time_index[0]
+                    stats["year"] = int(first_time.year)
+                    stats["month"] = int(first_time.month)
+                    stats["days"] = int(len(time_index))
+            except Exception:
+                stats["year"] = np.nan
+                stats["month"] = np.nan
+                stats["days"] = dataset.sizes.get("time", np.nan)
+
+            if pd.isna(stats.get("year")) or pd.isna(stats.get("month")):
+                filename = os.path.basename(filepath)
+                match = re.search(r"(\d{4})(\d{2})", filename)
+                if match:
+                    stats["year"] = int(match.group(1))
+                    stats["month"] = int(match.group(2))
+
+            day_count = stats.get("days", 0)
+            if pd.isna(day_count):
+                day_count = 0
+
+            for var in available_vars:
+                try:
+                    values = dataset[var].values
+                    values = values[np.isfinite(values)]
+                    if values.size == 0:
+                        stats[f"{var}_mean"] = np.nan
+                        stats[f"{var}_std"] = np.nan
+                        stats[f"{var}_min"] = np.nan
+                        stats[f"{var}_max"] = np.nan
+                        continue
+                    if var in {"t2m", "mn2t", "d2m"} and np.nanmax(values) > 100:
+                        values = values - 273.15
+                    stats[f"{var}_mean"] = float(np.nanmean(values))
+                    stats[f"{var}_std"] = float(np.nanstd(values))
+                    stats[f"{var}_min"] = float(np.nanmin(values))
+                    stats[f"{var}_max"] = float(np.nanmax(values))
+                except Exception as err:
+                    print(
+                        f"Error extracting variable {var} from {os.path.basename(filepath)}: {err}"
+                    )
+                    stats[f"{var}_mean"] = np.nan
+                    stats[f"{var}_std"] = np.nan
+                    stats[f"{var}_min"] = np.nan
+                    stats[f"{var}_max"] = np.nan
+
+            cache.save_cached_data(filepath, stats)
+            print(
+                f"  [+] {os.path.basename(filepath)} -> Variables: "
+                f"{len(available_vars)}, Days: {int(day_count)}"
+            )
+            return stats
+    except Exception as exc:
+        print(
+            f"[ERROR] Failed to process {os.path.basename(filepath)}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None
+
+
 class DataCache:
-    """缓存处理结果，避免重复计算。"""
+    """Cache processing results to avoid redundant calculations."""
 
     def __init__(self, cache_dir: str = "cache") -> None:
         self.cache_dir = cache_dir
@@ -65,11 +226,11 @@ class DataCache:
             file_path = os.path.join(self.cache_dir, filename)
             if os.path.isfile(file_path):
                 os.remove(file_path)
-        print(f"缓存目录已清空: {self.cache_dir}")
+        print(f"Cache directory cleared: {self.cache_dir}")
 
 
 class BeijingPCAAnalyzerNC:
-    """北京多气象因子污染变化 PCA 分析器（NC 数据）。"""
+    """PCA analyzer for Beijing multi-meteorological factor pollution variation (NC data)."""
 
     def __init__(
         self,
@@ -89,6 +250,10 @@ class BeijingPCAAnalyzerNC:
         self.extra_pollution_data: List[Dict[str, Any]] = []
 
         self.cache = DataCache()
+        
+        # 文件名到路径的字典映射，用于O(1)查找
+        self.pollution_file_map: Dict[str, str] = {}
+        self.extra_pollution_file_map: Dict[str, str] = {}
 
         self.beijing_lats = np.arange(39.0, 41.25, 0.25)
         self.beijing_lons = np.arange(115.0, 117.25, 0.25)
@@ -135,182 +300,29 @@ class BeijingPCAAnalyzerNC:
             "lsm",
         ]
 
-    def process_single_nc_file(self, filepath: str) -> Optional[Dict[str, Any]]:
-        """处理单个 ERA5 NetCDF 文件并提取统计特征。"""
-        cached_data = None
-        try:
-            cached_data = self.cache.get_cached_data(filepath)
-        except Exception:
-            cached_data = None
-
-        if cached_data:
-            return cached_data
-
-        try:
-            with xr.open_dataset(
-                filepath, engine="netcdf4", decode_times=True
-            ) as dataset:
-                rename_map: Dict[str, str] = {}
-                for time_key in (
-                    "valid_time",
-                    "forecast_time",
-                    "verification_time",
-                    "time1",
-                    "time2",
-                ):
-                    if time_key in dataset.coords and "time" not in dataset.coords:
-                        rename_map[time_key] = "time"
-                if "lat" in dataset.coords and "latitude" not in dataset.coords:
-                    rename_map["lat"] = "latitude"
-                if "lon" in dataset.coords and "longitude" not in dataset.coords:
-                    rename_map["lon"] = "longitude"
-                if rename_map:
-                    dataset = dataset.rename(rename_map)
-
-                try:
-                    dataset = xr.decode_cf(dataset)
-                except Exception:
-                    pass
-
-                drop_vars: List[str] = []
-                for extra_coord in ("expver", "surface"):
-                    if extra_coord in dataset:
-                        drop_vars.append(extra_coord)
-                if drop_vars:
-                    dataset = dataset.drop_vars(drop_vars)
-
-                if "number" in dataset.dims:
-                    dataset = dataset.mean(dim="number", skipna=True)
-
-                available_vars = [
-                    var for var in self.era5_vars if var in dataset.data_vars
-                ]
-                if not available_vars:
-                    print(
-                        f"[WARN] {os.path.basename(filepath)} 不含目标变量，已跳过"
-                    )
-                    return None
-
-                if "latitude" in dataset.coords and "longitude" in dataset.coords:
-                    lat_values = dataset["latitude"]
-                    if lat_values[0] > lat_values[-1]:
-                        lat_slice = slice(
-                            self.beijing_lats.max(), self.beijing_lats.min()
-                        )
-                    else:
-                        lat_slice = slice(
-                            self.beijing_lats.min(), self.beijing_lats.max()
-                        )
-                    dataset = dataset.sel(
-                        latitude=lat_slice,
-                        longitude=slice(
-                            self.beijing_lons.min(), self.beijing_lons.max()
-                        ),
-                    )
-                    if "latitude" in dataset.dims and "longitude" in dataset.dims:
-                        dataset = dataset.mean(
-                            dim=["latitude", "longitude"], skipna=True
-                        )
-
-                if "time" not in dataset.coords:
-                    print(f"[WARN] {os.path.basename(filepath)} 缺少时间坐标，已跳过")
-                    return None
-
-                dataset = dataset.sortby("time")
-                dataset = dataset.resample(time="1D").mean(keep_attrs=False)
-                dataset = dataset.dropna("time", how="all")
-
-                if dataset.sizes.get("time", 0) == 0:
-                    print(
-                        f"[WARN] {os.path.basename(filepath)} 重采样后无有效时间，已跳过"
-                    )
-                    return None
-
-                stats: Dict[str, Any] = {"source_file": os.path.basename(filepath)}
-
-                try:
-                    time_index = pd.to_datetime(dataset["time"].values)
-                    if len(time_index) > 0:
-                        first_time = time_index[0]
-                        stats["year"] = int(first_time.year)
-                        stats["month"] = int(first_time.month)
-                        stats["days"] = int(len(time_index))
-                except Exception:
-                    stats["year"] = np.nan
-                    stats["month"] = np.nan
-                    stats["days"] = dataset.sizes.get("time", np.nan)
-
-                if pd.isna(stats.get("year")) or pd.isna(stats.get("month")):
-                    filename = os.path.basename(filepath)
-                    match = re.search(r"(\d{4})(\d{2})", filename)
-                    if match:
-                        stats["year"] = int(match.group(1))
-                        stats["month"] = int(match.group(2))
-
-                day_count = stats.get("days", 0)
-                if pd.isna(day_count):
-                    day_count = 0
-
-                for var in available_vars:
-                    try:
-                        values = dataset[var].values
-                        values = values[np.isfinite(values)]
-                        if values.size == 0:
-                            stats[f"{var}_mean"] = np.nan
-                            stats[f"{var}_std"] = np.nan
-                            stats[f"{var}_min"] = np.nan
-                            stats[f"{var}_max"] = np.nan
-                            continue
-                        if var in {"t2m", "mn2t", "d2m"} and np.nanmax(values) > 100:
-                            values = values - 273.15
-                        stats[f"{var}_mean"] = float(np.nanmean(values))
-                        stats[f"{var}_std"] = float(np.nanstd(values))
-                        stats[f"{var}_min"] = float(np.nanmin(values))
-                        stats[f"{var}_max"] = float(np.nanmax(values))
-                    except Exception as err:
-                        print(
-                            f"提取 {os.path.basename(filepath)} 中的变量 {var} 时出错: {err}"
-                        )
-                        stats[f"{var}_mean"] = np.nan
-                        stats[f"{var}_std"] = np.nan
-                        stats[f"{var}_min"] = np.nan
-                        stats[f"{var}_max"] = np.nan
-
-                self.cache.save_cached_data(filepath, stats)
-                print(
-                    f"  [+] {os.path.basename(filepath)} -> 变量: "
-                    f"{len(available_vars)}, 天数: {int(day_count)}"
-                )
-                return stats
-        except Exception as exc:
-            print(
-                f"[ERROR] 处理 {os.path.basename(filepath)} 失败: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            return None
 
     def load_meteo_data_parallel(self) -> None:
-        """并行加载气象数据 (NC)。"""
-        print("开始并行加载气象数据（NC 格式）...")
+        """Load meteorological data in parallel (NC format)."""
+        print("Starting parallel loading of meteorological data (NC format)...")
         start_time = time.time()
 
         if not os.path.exists(self.meteo_data_dir):
-            print(f"警告: 气象数据目录不存在: {self.meteo_data_dir}")
+            print(f"Warning: Meteorological data directory does not exist: {self.meteo_data_dir}")
             return
 
         all_nc_files = glob.glob(
             os.path.join(self.meteo_data_dir, "**", "*.nc"), recursive=True
         )
-        print(f"找到 {len(all_nc_files)} 个 NetCDF 文件")
+        print(f"Found {len(all_nc_files)} NetCDF files")
 
         if not all_nc_files:
-            print("未找到任何 NC 文件，请检查目录路径配置")
+            print("No NC files found, please check directory path configuration")
             return
 
-        print(f"示例文件: {[os.path.basename(f) for f in all_nc_files[:5]]}")
+        print(f"Sample files: {[os.path.basename(f) for f in all_nc_files[:5]]}")
 
         max_workers = min(max(4, multiprocessing.cpu_count() - 1), 12)
-        print(f"使用 {max_workers} 个线程处理 NC 文件")
+        print(f"Using {max_workers} processes to process NC files")
 
         total_files = len(all_nc_files)
         processed_files = 0
@@ -319,9 +331,15 @@ class BeijingPCAAnalyzerNC:
         self.meteorological_data = []
         aggregated_stats: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
             future_to_file = {
-                executor.submit(self.process_single_nc_file, filepath): filepath
+                executor.submit(
+                    process_single_nc_file,
+                    filepath,
+                    self.beijing_lats,
+                    self.beijing_lons,
+                    self.era5_vars,
+                ): filepath
                 for filepath in all_nc_files
             }
             for future in as_completed(future_to_file):
@@ -355,7 +373,7 @@ class BeijingPCAAnalyzerNC:
 
                 if processed_files % 50 == 0 or processed_files == total_files:
                     percentage = processed_files / total_files * 100
-                    print(f"  进度: {processed_files}/{total_files} ({percentage:.1f}%)")
+                    print(f"  Progress: {processed_files}/{total_files} ({percentage:.1f}%)")
 
         aggregated_list = [
             aggregated_stats[key] for key in sorted(aggregated_stats.keys())
@@ -363,27 +381,38 @@ class BeijingPCAAnalyzerNC:
         self.meteorological_data.extend(aggregated_list)
 
         elapsed = time.time() - start_time
-        print(f"气象数据加载完成，耗时: {elapsed:.2f} 秒")
-        print(f"成功处理 {successful_files}/{total_files} 个 NC 文件")
-        print(f"聚合后月份数据量: {len(self.meteorological_data)}")
+        print(f"Meteorological data loading completed, elapsed time: {elapsed:.2f} seconds")
+        print(f"Successfully processed {successful_files}/{total_files} NC files")
+        print(f"Aggregated monthly data count: {len(self.meteorological_data)}")
 
-    def load_pollution_data(self) -> None:
-        """加载 PM2.5、PM10、AQI 污染数据 (CSV)。"""
-        print("开始加载污染数据...")
-        start_time = time.time()
-
+    def _build_pollution_file_map(self) -> None:
+        """构建污染数据文件名到路径的字典映射，用于O(1)查找."""
+        print("Building pollution file path mapping...")
+        self.pollution_file_map.clear()
+        
         def pollution_file_filter(filename: str) -> bool:
             return filename.startswith("beijing_all_") and filename.endswith(".csv")
-
-        all_pollution_files: List[str] = []
+        
         search_pattern = os.path.join(self.pollution_data_dir, "**", "*.csv")
         for filepath in glob.glob(search_pattern, recursive=True):
-            if pollution_file_filter(os.path.basename(filepath)):
-                all_pollution_files.append(filepath)
+            filename = os.path.basename(filepath)
+            if pollution_file_filter(filename):
+                self.pollution_file_map[filename] = filepath
+        
+        print(f"Built mapping for {len(self.pollution_file_map)} pollution data files")
 
-        print(f"找到 {len(all_pollution_files)} 个污染数据文件")
+    def load_pollution_data(self) -> None:
+        """Load PM2.5, PM10, AQI pollution data (CSV format)."""
+        print("Starting to load pollution data...")
+        start_time = time.time()
 
-        for filepath in all_pollution_files:
+        # 如果映射未构建，先构建
+        if not self.pollution_file_map:
+            self._build_pollution_file_map()
+
+        print(f"Found {len(self.pollution_file_map)} pollution data files")
+
+        for filename, filepath in self.pollution_file_map.items():
             try:
                 cached_data = self.cache.get_cached_data(filepath)
                 if cached_data:
@@ -424,40 +453,52 @@ class BeijingPCAAnalyzerNC:
 
                         self.cache.save_cached_data(filepath, pollution_stats)
                         self.pollution_data.append(pollution_stats)
-                        print(f"已加载污染数据: {os.path.basename(filepath)}")
+                        print(f"Loaded pollution data: {os.path.basename(filepath)}")
             except Exception as exc:
-                print(f"加载文件 {filepath} 出错: {exc}")
+                print(f"Error loading file {filepath}: {exc}")
 
         elapsed = time.time() - start_time
-        print(f"污染数据加载完成，耗时: {elapsed:.2f} 秒")
-        print(f"成功加载 {len(self.pollution_data)} 个文件的数据")
+        print(f"Pollution data loading completed, elapsed time: {elapsed:.2f} seconds")
+        print(f"Successfully loaded data from {len(self.pollution_data)} files")
 
-    def load_extra_pollution_data(self) -> None:
-        """加载 SO2、CO、O3、NO2 等额外污染数据 (CSV)。"""
-        print("开始加载额外污染数据 (SO2, CO, O3, NO2)...")
-        start_time = time.time()
-
+    def _build_extra_pollution_file_map(self) -> None:
+        """构建额外污染数据文件名到路径的字典映射，用于O(1)查找."""
+        print("Building extra pollution file path mapping...")
+        self.extra_pollution_file_map.clear()
+        
         if not os.path.exists(self.extra_pollution_data_dir):
             print(
-                f"警告: 额外污染数据目录不存在: {self.extra_pollution_data_dir}，已跳过"
+                f"Warning: Additional pollution data directory does not exist: {self.extra_pollution_data_dir}, skipped"
             )
             return
 
         def extra_pollution_file_filter(filename: str) -> bool:
             return filename.startswith("beijing_extra_") and filename.endswith(".csv")
 
-        all_extra_files: List[str] = []
         search_pattern = os.path.join(self.extra_pollution_data_dir, "**", "*.csv")
         for filepath in glob.glob(search_pattern, recursive=True):
-            if extra_pollution_file_filter(os.path.basename(filepath)):
-                all_extra_files.append(filepath)
+            filename = os.path.basename(filepath)
+            if extra_pollution_file_filter(filename):
+                self.extra_pollution_file_map[filename] = filepath
+        
+        print(f"Built mapping for {len(self.extra_pollution_file_map)} additional pollution data files")
 
-        print(f"找到 {len(all_extra_files)} 个额外污染数据文件")
-        if not all_extra_files:
-            print("未找到额外污染数据文件")
+    def load_extra_pollution_data(self) -> None:
+        """Load additional pollution data (SO2, CO, O3, NO2) (CSV format)."""
+        print("Starting to load additional pollution data (SO2, CO, O3, NO2)...")
+        start_time = time.time()
+
+        # 如果映射未构建，先构建
+        if not self.extra_pollution_file_map:
+            self._build_extra_pollution_file_map()
+
+        if not self.extra_pollution_file_map:
+            print("No additional pollution data files found")
             return
 
-        for filepath in all_extra_files:
+        print(f"Found {len(self.extra_pollution_file_map)} additional pollution data files")
+
+        for filename, filepath in self.extra_pollution_file_map.items():
             try:
                 cached_data = self.cache.get_cached_data(filepath)
                 if cached_data:
@@ -523,31 +564,35 @@ class BeijingPCAAnalyzerNC:
 
                         self.cache.save_cached_data(filepath, extra_stats)
                         self.extra_pollution_data.append(extra_stats)
-                        print(f"已加载额外污染数据: {os.path.basename(filepath)}")
+                        print(f"Loaded additional pollution data: {os.path.basename(filepath)}")
             except Exception as exc:
-                print(f"加载文件 {filepath} 出错: {exc}")
+                print(f"Error loading file {filepath}: {exc}")
 
         elapsed = time.time() - start_time
-        print(f"额外污染数据加载完成，耗时: {elapsed:.2f} 秒")
-        print(f"成功加载 {len(self.extra_pollution_data)} 个文件的数据")
+        print(f"Additional pollution data loading completed, elapsed time: {elapsed:.2f} seconds")
+        print(f"Successfully loaded data from {len(self.extra_pollution_data)} files")
 
     def load_data(self) -> None:
-        """整体加载气象与污染数据。"""
-        print("开始加载全部数据...")
+        """Load all meteorological and pollution data."""
+        print("Starting to load all data...")
+        # 先构建文件映射，避免重复遍历
+        self._build_pollution_file_map()
+        self._build_extra_pollution_file_map()
+        # 然后加载数据
         self.load_meteo_data_parallel()
         self.load_pollution_data()
         self.load_extra_pollution_data()
-        print("数据加载完成!")
+        print("Data loading completed!")
 
     def prepare_combined_data(self) -> pd.DataFrame:
-        """合并气象与污染数据。"""
-        print("准备合并数据...")
+        """Combine meteorological and pollution data."""
+        print("Preparing to combine data...")
 
         if not self.meteorological_data or not self.pollution_data:
-            print("错误: 数据不足，无法开展分析")
-            print(f"气象数据数量: {len(self.meteorological_data)}")
-            print(f"污染数据数量: {len(self.pollution_data)}")
-            print(f"额外污染数据数量: {len(self.extra_pollution_data)}")
+            print("Error: Insufficient data, cannot proceed with analysis")
+            print(f"Meteorological data count: {len(self.meteorological_data)}")
+            print(f"Pollution data count: {len(self.pollution_data)}")
+            print(f"Additional pollution data count: {len(self.extra_pollution_data)}")
             return pd.DataFrame()
 
         meteo_df = pd.DataFrame(self.meteorological_data)
@@ -583,9 +628,9 @@ class BeijingPCAAnalyzerNC:
                 if not pd.isna(mean_val):
                     combined_data.loc[:, column] = combined_data[column].fillna(mean_val)
 
-        print(f"最终数据形状: {combined_data.shape}")
-        print(f"合并后的列名数量: {len(combined_data.columns)}")
-        print(f"合并后空值总数: {combined_data.isna().sum().sum()}")
+        print(f"Final data shape: {combined_data.shape}")
+        print(f"Number of columns after merging: {len(combined_data.columns)}")
+        print(f"Total null values after merging: {combined_data.isna().sum().sum()}")
 
         meteo_features = [
             col for col in combined_data.columns if any(x in col for x in self.meteo_columns.keys())
@@ -599,23 +644,23 @@ class BeijingPCAAnalyzerNC:
             col for col in combined_data.columns if any(wind in col for wind in ["u10", "v10", "u100", "v100"])
         ]
 
-        print(f"气象参数数量: {len(meteo_features)}")
+        print(f"Meteorological parameter count: {len(meteo_features)}")
         if meteo_features:
             preview = meteo_features[:10]
-            print(f"气象参数示例: {preview}{' ...' if len(meteo_features) > 10 else ''}")
-        print(f"风分量参数数量: {len(wind_features)}")
-        print(f"污染参数数量: {len(pollution_features)}")
+            print(f"Meteorological parameter examples: {preview}{' ...' if len(meteo_features) > 10 else ''}")
+        print(f"Wind component parameter count: {len(wind_features)}")
+        print(f"Pollution parameter count: {len(pollution_features)}")
 
         return combined_data
 
     def perform_pca_analysis(
         self, data: pd.DataFrame, n_components: int = 2
     ) -> Tuple[Optional[np.ndarray], List[str], Optional[np.ndarray]]:
-        """执行 PCA 分析。"""
-        print("执行 PCA 分析...")
+        """Perform PCA analysis."""
+        print("Performing PCA analysis...")
 
         if data.empty:
-            print("错误: 无可用于 PCA 的数据")
+            print("Error: No data available for PCA")
             return None, [], None
 
         numeric_columns = data.select_dtypes(include=[np.number]).columns
@@ -632,33 +677,33 @@ class BeijingPCAAnalyzerNC:
         explained_variance_ratio = self.pca.explained_variance_ratio_
         cumulative_variance_ratio = np.cumsum(explained_variance_ratio)
 
-        print(f"前 {len(explained_variance_ratio)} 个主成分的方差贡献率:")
+        print(f"Variance contribution ratio of the first {len(explained_variance_ratio)} principal components:")
         for idx, (var_ratio, cum_var_ratio) in enumerate(
             zip(explained_variance_ratio, cumulative_variance_ratio), start=1
         ):
             print(
                 f"PC{idx}: {var_ratio:.4f} ({var_ratio * 100:.2f}%), "
-                f"累计: {cum_var_ratio:.4f} ({cum_var_ratio * 100:.2f}%)"
+                f"Cumulative: {cum_var_ratio:.4f} ({cum_var_ratio * 100:.2f}%)"
             )
 
-        print("\n主成分贡献分析:")
+        print("\nPrincipal component contribution analysis:")
         for idx in range(len(explained_variance_ratio)):
             loadings = self.pca.components_[idx]
             feature_loadings = sorted(
                 zip(feature_columns, loadings), key=lambda item: abs(item[1]), reverse=True
             )
-            print(f"\nPC{idx + 1} 贡献度前 5 的特征:")
+            print(f"\nTop 5 features contributing to PC{idx + 1}:")
             for feature, loading in feature_loadings[:5]:
                 print(f"  {feature}: {loading:.4f}")
 
         return X_pca, feature_columns, explained_variance_ratio
 
     def analyze_correlations(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
-        """分析气象与污染指标的 Pearson 相关性。"""
-        print("分析相关性...")
+        """Analyze Pearson correlations between meteorological and pollution indicators."""
+        print("Analyzing correlations...")
 
         if data.empty:
-            print("错误: 无可用于相关性分析的数据")
+            print("Error: No data available for correlation analysis")
             return None
 
         numeric_columns = data.select_dtypes(include=[np.number]).columns
@@ -679,14 +724,14 @@ class BeijingPCAAnalyzerNC:
 
         if pollution_features and meteo_features:
             print(
-                f"检测到 {len(pollution_features)} 个污染指标与 "
-                f"{len(meteo_features)} 个气象因子"
+                f"Detected {len(pollution_features)} pollution indicators and "
+                f"{len(meteo_features)} meteorological factors"
             )
             for pollution_feature in pollution_features:
                 correlations = correlation_matrix[pollution_feature][meteo_features].abs()
                 correlations = correlations.dropna()
                 top_correlations = correlations.nlargest(5)
-                print(f"\n与 {pollution_feature} 最相关的气象因子:")
+                print(f"\nMeteorological factors most correlated with {pollution_feature}:")
                 for meteo_feature, corr in top_correlations.items():
                     print(f"  {meteo_feature}: {corr:.3f}")
 
@@ -697,9 +742,9 @@ class BeijingPCAAnalyzerNC:
         correlation_matrix: Optional[pd.DataFrame],
         save_path: str = "beijing_correlation_heatmap_nc.png",
     ) -> None:
-        """绘制相关性热力图。"""
+        """Plot correlation heatmap."""
         if correlation_matrix is None:
-            print("错误: 无相关性数据可用于绘图")
+            print("Error: No correlation data available for plotting")
             return
 
         plt.style.use("default")
@@ -714,14 +759,14 @@ class BeijingPCAAnalyzerNC:
             cmap="RdYlBu_r",
             center=0,
             square=True,
-            cbar_kws={"shrink": 0.8, "aspect": 50, "label": "相关系数"},
+            cbar_kws={"shrink": 0.8, "aspect": 50, "label": "Correlation Coefficient"},
             linewidths=0.2,
             linecolor="white",
             ax=ax,
         )
 
         plt.title(
-            "北京气象因子与污染指标相关性热力图 (NC 数据)",
+            "Beijing Meteorological Factors and Pollution Indicators Correlation Heatmap (NC Data)",
             fontsize=22,
             fontweight="bold",
             pad=50,
@@ -737,7 +782,7 @@ class BeijingPCAAnalyzerNC:
         )
         plt.close(fig)
 
-        print(f"相关性热力图已保存至: {save_path}")
+        print(f"Correlation heatmap saved to: {save_path}")
 
     def plot_pca_results(
         self,
@@ -746,9 +791,9 @@ class BeijingPCAAnalyzerNC:
         explained_variance_ratio: Optional[np.ndarray],
         save_path: str = "beijing_pca_results_nc.png",
     ) -> None:
-        """绘制 PCA 结果图。"""
+        """Plot PCA results."""
         if X_pca is None or explained_variance_ratio is None:
-            print("错误: 无 PCA 结果可用于绘制")
+            print("Error: No PCA results available for plotting")
             return
 
         plt.style.use("default")
@@ -764,10 +809,10 @@ class BeijingPCAAnalyzerNC:
             edgecolors="white",
             linewidth=0.5,
         )
-        axes[0, 0].set_xlabel("第一主成分 (PC1)", fontsize=14, fontweight="bold")
-        axes[0, 0].set_ylabel("第二主成分 (PC2)", fontsize=14, fontweight="bold")
+        axes[0, 0].set_xlabel("First Principal Component (PC1)", fontsize=14, fontweight="bold")
+        axes[0, 0].set_ylabel("Second Principal Component (PC2)", fontsize=14, fontweight="bold")
         axes[0, 0].set_title(
-            "PCA 主成分散点图 (NC 数据)", fontsize=16, fontweight="bold", pad=20
+            "PCA Principal Component Scatter Plot (NC Data)", fontsize=16, fontweight="bold", pad=20
         )
         axes[0, 0].grid(True, alpha=0.3, linestyle="--")
         axes[0, 0].spines["top"].set_visible(False)
@@ -781,10 +826,10 @@ class BeijingPCAAnalyzerNC:
             edgecolor="white",
             linewidth=1,
         )
-        axes[0, 1].set_xlabel("主成分", fontsize=12, fontweight="bold")
-        axes[0, 1].set_ylabel("方差贡献率", fontsize=12, fontweight="bold")
+        axes[0, 1].set_xlabel("Principal Component", fontsize=12, fontweight="bold")
+        axes[0, 1].set_ylabel("Variance Contribution Ratio", fontsize=12, fontweight="bold")
         axes[0, 1].set_title(
-            "各主成分方差贡献率 (NC 数据)", fontsize=14, fontweight="bold", pad=15
+            "Variance Contribution Ratio of Each Principal Component (NC Data)", fontsize=14, fontweight="bold", pad=15
         )
         axes[0, 1].grid(True, alpha=0.3, linestyle="--", axis="y")
         axes[0, 1].spines["top"].set_visible(False)
@@ -812,10 +857,10 @@ class BeijingPCAAnalyzerNC:
             markeredgecolor=colors[2],
             markeredgewidth=2,
         )
-        axes[1, 0].set_xlabel("主成分数量", fontsize=12, fontweight="bold")
-        axes[1, 0].set_ylabel("累计方差贡献率", fontsize=12, fontweight="bold")
+        axes[1, 0].set_xlabel("Number of Principal Components", fontsize=12, fontweight="bold")
+        axes[1, 0].set_ylabel("Cumulative Variance Contribution Ratio", fontsize=12, fontweight="bold")
         axes[1, 0].set_title(
-            "累计方差贡献率 (NC 数据)", fontsize=14, fontweight="bold", pad=15
+            "Cumulative Variance Contribution Ratio (NC Data)", fontsize=14, fontweight="bold", pad=15
         )
         axes[1, 0].grid(True, alpha=0.3, linestyle="--")
         axes[1, 0].spines["top"].set_visible(False)
@@ -851,9 +896,9 @@ class BeijingPCAAnalyzerNC:
             )
             axes[1, 1].set_yticks(range(len(top_features)))
             axes[1, 1].set_yticklabels(top_features, fontsize=10)
-            axes[1, 1].set_xlabel("特征重要性 (绝对值)", fontsize=12, fontweight="bold")
+            axes[1, 1].set_xlabel("Feature Importance (Absolute Value)", fontsize=12, fontweight="bold")
             axes[1, 1].set_title(
-                "第一主成分特征重要性 (NC 数据)", fontsize=14, fontweight="bold", pad=15
+                "First Principal Component Feature Importance (NC Data)", fontsize=14, fontweight="bold", pad=15
             )
             axes[1, 1].grid(True, alpha=0.3, linestyle="--", axis="x")
             axes[1, 1].spines["top"].set_visible(False)
@@ -880,7 +925,7 @@ class BeijingPCAAnalyzerNC:
         )
         plt.close(fig)
 
-        print(f"PCA 结果图已保存至: {save_path}")
+        print(f"PCA results plot saved to: {save_path}")
 
     def generate_analysis_report(
         self,
@@ -890,19 +935,19 @@ class BeijingPCAAnalyzerNC:
         feature_names: List[str],
         explained_variance_ratio: Optional[np.ndarray],
     ) -> None:
-        """生成分析报告。"""
+        """Generate analysis report."""
         print("\n" + "=" * 80)
-        print("北京多气象因子污染变化 PCA 分析报告 (NC 数据)")
+        print("Beijing Multi-Meteorological Factor Pollution Variation PCA Analysis Report (NC Data)")
         print("=" * 80)
 
         if data.empty:
-            print("错误: 无数据用于生成报告")
+            print("Error: No data available for report generation")
             return
 
-        print("\n1. 数据概览:")
-        print(f"   - 数据形状: {data.shape}")
-        print(f"   - 特征数量: {len(feature_names)}")
-        print(f"   - 样本数量: {len(data)}")
+        print("\n1. Data Overview:")
+        print(f"   - Data shape: {data.shape}")
+        print(f"   - Number of features: {len(feature_names)}")
+        print(f"   - Number of samples: {len(data)}")
 
         meteo_features = [
             col for col in feature_names if any(x in col for x in self.meteo_columns.keys())
@@ -913,28 +958,28 @@ class BeijingPCAAnalyzerNC:
             if any(x in col.lower() for x in ["pm25", "pm10", "aqi", "so2", "co", "o3", "no2"])
         ]
 
-        print("\n2. 特征分类:")
-        print(f"   - 气象因子数量: {len(meteo_features)}")
-        print(f"   - 污染指标数量: {len(pollution_features)}")
+        print("\n2. Feature Classification:")
+        print(f"   - Number of meteorological factors: {len(meteo_features)}")
+        print(f"   - Number of pollution indicators: {len(pollution_features)}")
 
-        print("\n3. 气象因子示例:")
+        print("\n3. Meteorological Factor Examples:")
         for feature in meteo_features[:10]:
             print(f"   - {feature}")
         if len(meteo_features) > 10:
-            print(f"   ... 以及其他 {len(meteo_features) - 10} 个气象因子")
+            print(f"   ... and {len(meteo_features) - 10} more meteorological factors")
 
-        print("\n4. 污染指标:")
+        print("\n4. Pollution Indicators:")
         for feature in pollution_features:
             print(f"   - {feature}")
 
         if correlation_matrix is not None:
-            print("\n5. Pearson 相关性分析:")
+            print("\n5. Pearson Correlation Analysis:")
             correlations = correlation_matrix.values
             correlations = correlations[~np.isnan(correlations)]
             correlations = correlations[np.abs(correlations) > 0]
-            print(f"   - 相关性总数: {len(correlations)}")
-            print(f"   - 平均相关系数: {np.mean(correlations):.4f}")
-            print(f"   - 标准差: {np.std(correlations):.4f}")
+            print(f"   - Total number of correlations: {len(correlations)}")
+            print(f"   - Mean correlation coefficient: {np.mean(correlations):.4f}")
+            print(f"   - Standard deviation: {np.std(correlations):.4f}")
             if pollution_features and meteo_features:
                 for pollution_feature in pollution_features:
                     corr_values = (
@@ -943,22 +988,22 @@ class BeijingPCAAnalyzerNC:
                         .dropna()
                     )
                     top_correlations = corr_values.nlargest(3)
-                    print(f"   {pollution_feature} 相关性最强的气象因子:")
+                    print(f"   Meteorological factors most correlated with {pollution_feature}:")
                     for meteo_feature, corr in top_correlations.items():
                         print(f"     - {meteo_feature}: {corr:.3f}")
 
         if X_pca is not None and explained_variance_ratio is not None:
-            print("\n6. PCA 分析结果:")
+            print("\n6. PCA Analysis Results:")
             for idx, var_ratio in enumerate(explained_variance_ratio, start=1):
                 print(
-                    f"   - PC{idx} 方差贡献率: {var_ratio:.4f} ({var_ratio * 100:.2f}%)"
+                    f"   - PC{idx} variance contribution ratio: {var_ratio:.4f} ({var_ratio * 100:.2f}%)"
                 )
             print(
-                f"   - 累计方差贡献率: {np.sum(explained_variance_ratio):.4f} "
+                f"   - Cumulative variance contribution ratio: {np.sum(explained_variance_ratio):.4f} "
                 f"({np.sum(explained_variance_ratio) * 100:.2f}%)"
             )
             if len(explained_variance_ratio) >= 2 and self.pca is not None:
-                print("\n7. 主成分物理含义 (前 3 个主成分):")
+                print("\n7. Physical Meaning of Principal Components (First 3 Principal Components):")
                 for idx in range(min(3, len(explained_variance_ratio))):
                     loadings = self.pca.components_[idx]
                     feature_loadings = sorted(
@@ -966,26 +1011,26 @@ class BeijingPCAAnalyzerNC:
                         key=lambda item: abs(item[1]),
                         reverse=True,
                     )
-                    print(f"   PC{idx + 1} 贡献度前 5 的特征:")
+                    print(f"   Top 5 features contributing to PC{idx + 1}:")
                     for feature, loading in feature_loadings[:5]:
                         print(f"     - {feature}: {loading:.4f}")
 
-        print("\n8. 主要发现:")
-        print("   - 多个气象因子共同作用于污染水平变化，PCA 有助于揭示潜在模式")
-        print("   - 温度、湿度、风速与边界层高度对污染物扩散影响显著")
-        print("   - 降水与辐射通量可能与污染削减相关，需要结合主成分进一步解释")
+        print("\n8. Key Findings:")
+        print("   - Multiple meteorological factors jointly affect pollution level changes, PCA helps reveal underlying patterns")
+        print("   - Temperature, humidity, wind speed, and boundary layer height significantly affect pollutant dispersion")
+        print("   - Precipitation and radiation flux may be related to pollution reduction, requiring further interpretation with principal components")
         print("=" * 80)
 
     def run_analysis(self) -> None:
-        """运行完整分析流程。"""
-        print("北京多气象因子污染变化 PCA 分析 (NC 数据)")
+        """Run complete analysis pipeline."""
+        print("Beijing Multi-Meteorological Factor Pollution Variation PCA Analysis (NC Data)")
         print("=" * 60)
 
         try:
             self.load_data()
             combined_data = self.prepare_combined_data()
             if combined_data.empty:
-                print("错误: 无法准备数据，请检查源文件")
+                print("Error: Unable to prepare data, please check source files")
                 return
 
             X_pca, feature_names, explained_variance_ratio = self.perform_pca_analysis(
@@ -1004,22 +1049,22 @@ class BeijingPCAAnalyzerNC:
                 explained_variance_ratio,
             )
         finally:
-            print("\n清理缓存目录...")
+            print("\nClearing cache directory...")
             self.cache.clear_cache()
-            print("分析流程结束。")
+            print("Analysis pipeline completed.")
 
 
 def main() -> None:
-    """主函数，配置数据路径并执行分析。"""
-    meteo_data_dir = r"E:\DATA Science\ERA5-Beijing-NC"
-    pollution_data_dir = r"E:\DATA Science\Benchmark\all(AQI+PM2.5+PM10)"
-    extra_pollution_data_dir = r"E:\DATA Science\Benchmark\extra(SO2+NO2+CO+O3)"
+    """Main function, configure data paths and execute analysis."""
+    meteo_data_dir = "/root/autodl-tmp/ERA5-Beijing-NC"
+    pollution_data_dir = "/root/autodl-tmp/Benchmark/all(AQI+PM2.5+PM10)"
+    extra_pollution_data_dir = "/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)"
 
-    print("数据目录确认:")
-    print(f"气象数据目录 (NC): {meteo_data_dir}")
-    print(f"污染数据目录 (CSV): {pollution_data_dir}")
-    print(f"额外污染数据目录 (CSV): {extra_pollution_data_dir}")
-    print("如路径有误，请修改 main() 中的配置。")
+    print("Data directory confirmation:")
+    print(f"Meteorological data directory (NC): {meteo_data_dir}")
+    print(f"Pollution data directory (CSV): {pollution_data_dir}")
+    print(f"Additional pollution data directory (CSV): {extra_pollution_data_dir}")
+    print("If paths are incorrect, please modify the configuration in main().")
 
     analyzer = BeijingPCAAnalyzerNC(
         meteo_data_dir, pollution_data_dir, extra_pollution_data_dir

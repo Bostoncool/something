@@ -1,19 +1,3 @@
-"""
-Beijing PM2.5 Concentration Prediction - LightGBM Model
-Using LightGBM gradient boosting decision tree for time series prediction
-
-Features:
-- Efficient gradient boosting algorithm
-- Supports categorical features
-- Built-in feature importance
-- Early stopping mechanism to prevent overfitting
-- Bayesian optimization hyperparameters
-
-Data sources:
-- Pollution data: Benchmark dataset (PM2.5, PM10, SO2, NO2, CO, O3)
-- Meteorological data: ERA5 reanalysis data
-"""
-
 import os
 import pandas as pd
 import numpy as np
