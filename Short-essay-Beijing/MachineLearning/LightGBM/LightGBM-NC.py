@@ -35,20 +35,31 @@ import lightgbm as lgb
 # 检测GPU可用性（强制要求GPU）
 def check_gpu_availability():
     """检查LightGBM GPU支持是否可用，如果不可用则直接退出"""
-    print("\n检测GPU加速支持...")
-    print("要求: 必须使用GPU加速，CPU模式将被拒绝")
+    import subprocess
+    import sys
     
     try:
-        # 尝试创建一个小数据集来测试GPU
+        # 检查CUDA驱动
+        result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            print("❌ GPU不可用: nvidia-smi执行失败")
+            sys.exit(1)
+    except Exception as e:
+        print(f"❌ GPU不可用: {e}")
+        sys.exit(1)
+    
+    # 测试LightGBM GPU功能
+    try:
         test_X = np.random.rand(100, 10).astype(np.float32)
         test_y = np.random.rand(100).astype(np.float32)
         
-        # 创建Dataset时传递GPU参数
         gpu_params = {
             'device': 'gpu',
             'gpu_platform_id': 0,
             'gpu_device_id': 0,
-            'max_bin': 63  # GPU优化参数
+            'max_bin': 255,
+            'force_col_wise': True,
+            'gpu_page_size': 2048
         }
         test_data = lgb.Dataset(test_X, label=test_y, params=gpu_params)
         
@@ -58,53 +69,20 @@ def check_gpu_availability():
             'gpu_platform_id': 0,
             'gpu_device_id': 0,
             'num_gpu': 1,
-            'max_bin': 63,  # GPU优化：减少bin数量可提高GPU利用率
+            'max_bin': 255,
+            'tree_learner': 'data',
+            'force_col_wise': True,
+            'gpu_page_size': 2048,
             'verbose': -1
         }
         
-        # 尝试训练一个非常小的模型来测试GPU
-        try:
-            lgb.train(test_params, test_data, num_boost_round=1, verbose_eval=False)
-            print("✓ GPU加速可用，将使用GPU进行训练")
-            print("  设备: RTX 5090 (32GB)")
-            print("  GPU优化参数已启用")
-            return True
-        except Exception as e:
-            error_msg = str(e).lower()
-            print("\n" + "=" * 80)
-            print("❌ 错误: GPU不可用或未正确配置!")
-            print("=" * 80)
-            print(f"\n错误详情: {e}")
-            print("\n可能的原因:")
-            print("1. LightGBM未安装GPU版本")
-            print("2. CUDA驱动或CUDA工具包未正确安装")
-            print("3. GPU设备不可访问")
-            print("\n解决方案:")
-            print("1. 安装支持GPU的LightGBM:")
-            print("   方法1（推荐，使用conda）:")
-            print("   conda install -c conda-forge lightgbm")
-            print("   方法2（使用pip + 环境变量）:")
-            print("   LIGHTGBM_GPU=1 pip install lightgbm")
-            print("   方法3（从源码编译）:")
-            print("   git clone --recursive https://github.com/microsoft/LightGBM")
-            print("   cd LightGBM && mkdir build && cd build")
-            print("   cmake -DUSE_GPU=1 .. && make -j4")
-            print("   cd ../python-package && python setup.py install")
-            print("2. 确保CUDA已正确安装:")
-            print("   nvidia-smi  # 检查GPU是否可见")
-            print("   nvcc --version  # 检查CUDA版本")
-            print("\n程序将退出，请修复GPU配置后重试。")
-            print("=" * 80)
-            import sys
-            sys.exit(1)
+        lgb.train(test_params, test_data, num_boost_round=1, callbacks=[lgb.log_evaluation(period=0)])
+        print("✓ GPU加速可用")
+        return True
+        
     except Exception as e:
-        print("\n" + "=" * 80)
-        print("❌ 错误: GPU检测失败!")
-        print("=" * 80)
-        print(f"\n错误详情: {e}")
-        print("\n程序将退出，请修复GPU配置后重试。")
-        print("=" * 80)
-        import sys
+        print(f"❌ GPU训练测试失败: {e}")
+        print("请检查LightGBM GPU支持是否正确安装")
         sys.exit(1)
 
 GPU_AVAILABLE = check_gpu_availability()
@@ -119,9 +97,56 @@ else:
     BAYESIAN_OPT_AVAILABLE = False
     BayesianOptimization = None
 
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
-plt.rcParams['axes.unicode_minus'] = False
-plt.rcParams['figure.dpi'] = 100
+# 配置matplotlib中文字体
+def setup_chinese_font():
+    """自动检测并配置中文字体"""
+    import matplotlib.font_manager as fm
+    
+    # 常见的中文字体列表（按优先级排序）
+    chinese_font_candidates = [
+        'SimHei', 'Microsoft YaHei', 'Arial Unicode MS',  # Windows
+        'Noto Sans CJK SC', 'Noto Sans CJK TC', 'Noto Sans CJK',  # Linux/通用
+        'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei',  # Linux
+        'Droid Sans Fallback', 'Source Han Sans SC',  # Android/Adobe
+        'STHeiti', 'STSong', 'STKaiti',  # macOS
+        'DejaVu Sans'  # 后备字体（支持基本中文）
+    ]
+    
+    # 获取所有可用字体
+    available_fonts = [f.name for f in fm.fontManager.ttflist]
+    
+    # 查找第一个可用的中文字体
+    selected_font = None
+    for font in chinese_font_candidates:
+        if font in available_fonts:
+            selected_font = font
+            break
+    
+    # 如果没有找到，尝试模糊匹配
+    if selected_font is None:
+        for font in chinese_font_candidates:
+            for available in available_fonts:
+                if font.lower() in available.lower() or available.lower() in font.lower():
+                    selected_font = available
+                    break
+            if selected_font:
+                break
+    
+    # 配置字体
+    if selected_font:
+        plt.rcParams['font.sans-serif'] = [selected_font] + chinese_font_candidates
+        print(f"✓ 已配置中文字体: {selected_font}")
+    else:
+        # 使用DejaVu Sans作为后备（支持基本Unicode字符）
+        plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial', 'sans-serif']
+        print("⚠️  未找到中文字体，使用DejaVu Sans（可能无法正确显示所有中文）")
+        print("   建议安装中文字体: sudo apt-get install fonts-noto-cjk")
+    
+    plt.rcParams['axes.unicode_minus'] = False
+    plt.rcParams['figure.dpi'] = 100
+
+# 执行字体配置
+setup_chinese_font()
 
 np.random.seed(42)
 
@@ -173,18 +198,15 @@ def daterange(start, end):
 def build_file_path_dict(base_path, prefix):
     """预先构建文件路径字典，避免每次遍历文件系统"""
     file_dict = {}
-    print(f"  正在构建 {prefix} 文件路径字典...")
     for root, _, files in os.walk(base_path):
         for filename in files:
             if filename.startswith(prefix) and filename.endswith('.csv'):
-                # 从文件名中提取日期，格式: prefix_YYYYMMDD.csv
                 try:
                     date_str = filename.replace(f"{prefix}_", "").replace(".csv", "")
                     if len(date_str) == 8 and date_str.isdigit():
                         file_dict[date_str] = os.path.join(root, filename)
                 except Exception:
                     continue
-    print(f"  找到 {len(file_dict)} 个 {prefix} 文件")
     return file_dict
 
 def read_pollution_day(args):
@@ -233,11 +255,7 @@ def read_pollution_day(args):
         return None
 
 def read_all_pollution():
-    print("\nLoading pollution data...")
-    print(f"Using {MAX_WORKERS} parallel worker processes")
-    
-    # 预先构建文件路径字典，避免每次遍历文件系统
-    print("Building file path dictionaries...")
+    print("\n加载污染数据...")
     file_dict_all = build_file_path_dict(pollution_all_path, 'beijing_all')
     file_dict_extra = build_file_path_dict(pollution_extra_path, 'beijing_extra')
     
@@ -265,12 +283,10 @@ def read_all_pollution():
                     print(f"  Processed {i}/{len(futures)} days ({i/len(futures)*100:.1f}%)")
     
     if pollution_dfs:
-        print(f"  Successfully read {len(pollution_dfs)}/{len(dates)} days of data")
-        print("  Merging data...")
         df_poll_all = pd.concat(pollution_dfs)
         df_poll_all.ffill(inplace=True)
         df_poll_all.fillna(df_poll_all.mean(), inplace=True)
-        print(f"Pollution data loading complete, shape: {df_poll_all.shape}")
+        print(f"✓ 污染数据加载完成: {df_poll_all.shape}")
         return df_poll_all
     return pd.DataFrame()
 
@@ -278,7 +294,6 @@ def read_era5_month(args):
     """读取单月ERA5气象数据，使用多进程"""
     year, month, era5_path_val, era5_vars_list, beijing_lats_val, beijing_lons_val = args
     month_str = f"{year}{month:02d}"
-    # 优先按文件名包含 YYYYMM 的方式匹配；若找不到则回退到全量 *.nc，再按时间窗口筛选
     all_files = glob.glob(os.path.join(era5_path_val, "**", f"*{month_str}*.nc"), recursive=True)
     fallback_used = False
     if not all_files:
@@ -300,7 +315,6 @@ def read_era5_month(args):
             with Dataset(file_path, mode='r') as nc_file:
                 available_vars = [v for v in era5_vars_list if v in nc_file.variables]
             if not available_vars:
-                print(f"[WARN] {os.path.basename(file_path)} 不含目标变量({len(era5_vars_list)} 列表)，跳过")
                 continue
             with xr.open_dataset(file_path, engine="netcdf4", decode_times=True) as ds:
                 rename_map = {}
@@ -333,17 +347,14 @@ def read_era5_month(args):
 
                 ds_subset = ds[available_vars]
                 if "time" not in ds_subset.coords:
-                    print(f"[WARN] {os.path.basename(file_path)} 缺少时间坐标，跳过")
                     continue
                 ds_subset = ds_subset.sortby('time')
 
                 # 若使用了回退（全量 *.nc），则需要在数据内部按月份筛选
                 if fallback_used:
-                    # 仅保留当月数据窗口
                     try:
                         ds_subset = ds_subset.sel(time=slice(month_start, month_end))
-                    except Exception as e:
-                        print(f"[WARN] {os.path.basename(file_path)} 时间筛选失败：{e}")
+                    except Exception:
                         continue
                     if ds_subset.sizes.get('time', 0) == 0:
                         # 文件不含目标月份数据
@@ -364,9 +375,7 @@ def read_era5_month(args):
                     # 可能时间窗口或重采样为空
                     continue
                 monthly_datasets.append(ds_daily.load())
-                print(f"  [+] {os.path.basename(file_path)} -> {year}-{month:02d} 天数: {ds_daily.sizes.get('time', 0)}, 变量: {len(ds_daily.data_vars)}")
-        except Exception as e:
-            print(f"[ERROR] 读取 {os.path.basename(file_path)} 失败：{type(e).__name__}: {e}")
+        except Exception:
             continue
     
     if not monthly_datasets:
@@ -378,21 +387,10 @@ def read_era5_month(args):
     df_month = df_month.groupby(df_month.index).mean()
     if df_month.empty:
         return None
-    print(f"  Successfully read: {year}-{month:02d}, days: {len(df_month)}, variables: {len(df_month.columns)}")
     return df_month
 
 def read_all_era5():
-    print("\nLoading meteorological data...")
-    print(f"Using {MAX_WORKERS} parallel worker processes")
-    print(f"Meteorological data directory: {era5_path}")
-    print(f"Checking if directory exists: {os.path.exists(era5_path)}")
-    
-    if os.path.exists(era5_path):
-        all_nc = glob.glob(os.path.join(era5_path, "**", "*.nc"), recursive=True)
-        print(f"Found {len(all_nc)} NetCDF files")
-        if all_nc:
-            print(f"Example files: {[os.path.basename(f) for f in all_nc[:5]]}")
-    
+    print("\n加载气象数据...")
     era5_dfs = []
     years = range(2015, 2025)
     months = range(1, 13)
@@ -400,8 +398,6 @@ def read_all_era5():
     month_tasks = [(year, month, era5_path, era5_vars, beijing_lats, beijing_lons) 
                    for year in years for month in months 
                    if not (year == 2024 and month > 12)]
-    total_months = len(month_tasks)
-    print(f"Attempting to load {total_months} months of data...")
     
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(read_era5_month, task): task 
@@ -420,85 +416,40 @@ def read_all_era5():
                 result = future.result()
                 if result is not None and not result.empty:
                     era5_dfs.append(result)
-                    successful_reads += 1
-                if i % 20 == 0 or i == len(futures):
-                    print(f"  Progress: {i}/{len(futures)} months (Success: {successful_reads}, {i/len(futures)*100:.1f}%)")
-        
-        print(f"  Total successfully read: {successful_reads}/{len(futures)} months")
     
     if era5_dfs:
-        print("\nMerging meteorological data...")
         df_era5_all = pd.concat(era5_dfs, axis=0)
-        
-        print("  Deduplicating...")
         df_era5_all = df_era5_all[~df_era5_all.index.duplicated(keep='first')]
-        
-        print("  Sorting...")
         df_era5_all.sort_index(inplace=True)
-        
-        print(f"Shape after merge: {df_era5_all.shape}")
-        print(f"Time range: {df_era5_all.index.min()} to {df_era5_all.index.max()}")
-        print(f"Available variables: {list(df_era5_all.columns[:10])}..." if len(df_era5_all.columns) > 10 else f"Available variables: {list(df_era5_all.columns)}")
-        
-        print("  Handling missing values...")
-        initial_na = df_era5_all.isna().sum().sum()
         df_era5_all.ffill(inplace=True)
         df_era5_all.bfill(inplace=True)
         df_era5_all.fillna(df_era5_all.mean(), inplace=True)
-        final_na = df_era5_all.isna().sum().sum()
-        
-        print(f"Missing value handling: {initial_na} -> {final_na}")
-        print(f"Meteorological data loading complete, shape: {df_era5_all.shape}")
-        
+        print(f"✓ 气象数据加载完成: {df_era5_all.shape}")
         return df_era5_all
     else:
-        print("\n❌ Error: No meteorological data files loaded successfully!")
-        print("Possible reasons:")
-        print("1. File naming format does not match (Expected format: *YYYYMM*.nc)")
-        print("2. File content format is incorrect (Missing time coordinate)")
-        print("3. File path is incorrect")
+        print("❌ 错误: 未能加载气象数据文件")
         return pd.DataFrame()
 
 print("\n" + "=" * 80)
-print("Step 1: Data Loading and Preprocessing")
+print("Step 1: 数据加载和预处理")
 print("=" * 80)
 
 df_era5 = read_all_era5()
 df_pollution = read_all_pollution()
 
-print("\nData loading check:")
-print(f"  Pollution data shape: {df_pollution.shape}")
-print(f"  Meteorological data shape: {df_era5.shape}")
-
-if df_pollution.empty:
-    print("\n⚠️ Warning: Pollution data is empty! Please check data path and files.")
-    import sys
-    sys.exit(1)
-
-if df_era5.empty:
-    print("\n⚠️ Warning: Meteorological data is empty! Please check data path and files.")
+if df_pollution.empty or df_era5.empty:
+    print("❌ 错误: 数据加载失败")
     import sys
     sys.exit(1)
 
 df_pollution.index = pd.to_datetime(df_pollution.index)
 df_era5.index = pd.to_datetime(df_era5.index)
-
-print(f"  Pollution data time range: {df_pollution.index.min()} to {df_pollution.index.max()}")
-print(f"  Meteorological data time range: {df_era5.index.min()} to {df_era5.index.max()}")
-
-print("\nMerging data...")
 df_combined = df_pollution.join(df_era5, how='inner')
 
 if df_combined.empty:
-    print("\n❌ Error: Data is empty after merging!")
-    print("   Possible reason: No overlapping date indices between pollution and meteorological data.")
-    print(f"   Pollution data has {len(df_pollution)} rows")
-    print(f"   Meteorological data has {len(df_era5)} rows")
-    print(f"   After merge: {len(df_combined)} rows")
+    print("❌ 错误: 数据合并后为空")
     import sys
     sys.exit(1)
-
-print("\nCreating features...")
 def create_features(df):
     df_copy = df.copy()
     
@@ -565,73 +516,28 @@ def create_features(df):
 
 df_combined = create_features(df_combined)
 
-print("\nCleaning data...")
 df_combined.replace([np.inf, -np.inf], np.nan, inplace=True)
-
-initial_rows = len(df_combined)
 df_combined.dropna(inplace=True)
-final_rows = len(df_combined)
-print(f"Removed {initial_rows - final_rows} rows containing missing values")
-
-print(f"\nData shape after merge: {df_combined.shape}")
-print(f"Time range: {df_combined.index.min().date()} to {df_combined.index.max().date()}")
-print(f"Number of samples: {len(df_combined)}")
-print(f"Number of features: {df_combined.shape[1]}")
-
-print(f"\nFeature list (top 20):")
-for i, col in enumerate(df_combined.columns[:20], 1):
-    print(f"  {i}. {col}")
-if len(df_combined.columns) > 20:
-    print(f"  ... and {len(df_combined.columns) - 20} more features")
 
 print("\n" + "=" * 80)
-print("Step 2: Feature Selection and Data Preparation")
+print("Step 2: 特征选择和数据准备")
 print("=" * 80)
 
 target = 'PM2.5'
-
 exclude_cols = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3', 'year']
-
 numeric_features = [col for col in df_combined.select_dtypes(include=[np.number]).columns 
                     if col not in exclude_cols]
-
-print(f"\nNumber of selected features: {len(numeric_features)}")
-print(f"Target variable: {target}")
 
 X = df_combined[numeric_features].copy()
 y = df_combined[target].copy()
 
-print(f"\nFeature matrix shape: {X.shape}")
-print(f"Target variable shape: {y.shape}")
-
 if len(X) == 0 or len(y) == 0:
-    print("\n" + "=" * 80)
-    print("❌ Error: No available data!")
-    print("=" * 80)
-    print("\nPossible reasons:")
-    print("1. Data path is incorrect, unable to find data files")
-    print("2. Pollution or meteorological data loading failed")
-    print("3. No overlapping indices after data merge (check if date ranges match)")
-    print("4. All rows deleted during data cleaning process")
-    print("\nPlease check:")
-    print(f"- Pollution data path: {pollution_all_path}")
-    print(f"- Meteorological data path: {era5_path}")
-    print(f"- Date range: {start_date.date()} to {end_date.date()}")
-    print(f"\nPollution data shape: {df_pollution.shape}")
-    print(f"Meteorological data shape: {df_era5.shape}")
-    print(f"Data shape after merge: {df_combined.shape}")
+    print("❌ 错误: 无可用数据")
     import sys
     sys.exit(1)
 
-print(f"\nPM2.5 Statistics:")
-print(f"  Mean: {y.mean():.2f} μg/m³")
-print(f"  Std Dev: {y.std():.2f} μg/m³")
-print(f"  Min: {y.min():.2f} μg/m³")
-print(f"  Max: {y.max():.2f} μg/m³")
-print(f"  Median: {y.median():.2f} μg/m³")
-
 print("\n" + "=" * 80)
-print("Step 3: Dataset Split")
+print("Step 3: 数据集划分")
 print("=" * 80)
 
 n_samples = len(X)
@@ -645,83 +551,50 @@ X_test = X.iloc[train_size + val_size:]
 y_train = y.iloc[:train_size]
 y_val = y.iloc[train_size:train_size + val_size]
 y_test = y.iloc[train_size + val_size:]
-
-print(f"\nTraining set: {len(X_train)} samples ({len(X_train)/n_samples*100:.1f}%)")
-print(f"  Time range: {X_train.index.min().date()} to {X_train.index.max().date()}")
-print(f"  PM2.5: {y_train.mean():.2f} ± {y_train.std():.2f} μg/m³")
-
-print(f"\nValidation set: {len(X_val)} samples ({len(X_val)/n_samples*100:.1f}%)")
-print(f"  Time range: {X_val.index.min().date()} to {X_val.index.max().date()}")
-print(f"  PM2.5: {y_val.mean():.2f} ± {y_val.std():.2f} μg/m³")
-
-print(f"\nTest set: {len(X_test)} samples ({len(X_test)/n_samples*100:.1f}%)")
-print(f"  Time range: {X_test.index.min().date()} to {X_test.index.max().date()}")
-print(f"  PM2.5: {y_test.mean():.2f} ± {y_test.std():.2f} μg/m³")
-
-# 准备GPU优化的数据：转换为numpy数组并确保float32格式
-print("\n准备GPU优化的数据集...")
 X_train_gpu = X_train.values.astype(np.float32)
 X_val_gpu = X_val.values.astype(np.float32)
 y_train_gpu = y_train.values.astype(np.float32)
 y_val_gpu = y_val.values.astype(np.float32)
 
-# GPU优化的Dataset参数
 gpu_dataset_params = {
     'device': 'gpu',
     'gpu_platform_id': 0,
     'gpu_device_id': 0,
-    'max_bin': 63  # GPU优化：减少bin数量可提高GPU利用率
+    'max_bin': 255,
+    'feature_pre_filter': False,
+    'force_col_wise': True,
+    'gpu_page_size': 2048
 }
 
-# 创建Dataset时传递GPU参数
-lgb_train = lgb.Dataset(
-    X_train_gpu, 
-    label=y_train_gpu, 
-    feature_name=list(X_train.columns),
-    params=gpu_dataset_params
-)
-lgb_val = lgb.Dataset(
-    X_val_gpu, 
-    label=y_val_gpu, 
-    reference=lgb_train, 
-    feature_name=list(X_val.columns),
-    params=gpu_dataset_params
-)
-print("✓ GPU数据集准备完成")
+lgb_train = lgb.Dataset(X_train_gpu, label=y_train_gpu, feature_name=list(X_train.columns), params=gpu_dataset_params)
+lgb_val = lgb.Dataset(X_val_gpu, label=y_val_gpu, reference=lgb_train, feature_name=list(X_val.columns), params=gpu_dataset_params)
 
 print("\n" + "=" * 80)
-print("Step 4: Training LightGBM Basic Model")
+print("Step 4: 训练LightGBM基础模型")
 print("=" * 80)
 
 params_basic = {
     'objective': 'regression',
     'metric': 'rmse',
     'boosting_type': 'gbdt',
-    'num_leaves': 31,
+    'num_leaves': 63,
     'learning_rate': 0.05,
     'feature_fraction': 0.8,
     'bagging_fraction': 0.8,
     'bagging_freq': 5,
     'verbose': -1,
     'seed': 42,
-    # GPU优化参数
     'device': 'gpu',
     'gpu_platform_id': 0,
     'gpu_device_id': 0,
     'num_gpu': 1,
-    'max_bin': 63,  # GPU优化：减少bin数量可提高GPU利用率
-    'gpu_use_dp': False,  # 使用单精度浮点数，提高速度
-    'tree_learner': 'serial'  # GPU模式下使用串行学习器
+    'max_bin': 255,
+    'gpu_use_dp': False,
+    'tree_learner': 'data',
+    'force_col_wise': True,
+    'gpu_page_size': 2048,
+    'num_threads': 0
 }
-
-print("\n使用GPU加速训练基础模型")
-print("GPU优化参数已启用")
-
-print("\nBasic model parameters:")
-for key, value in params_basic.items():
-    print(f"  {key}: {value}")
-
-print("\nStarting training of basic model...")
 evals_result_basic = {}
 model_basic = lgb.train(
     params_basic,
@@ -736,10 +609,7 @@ model_basic = lgb.train(
     ]
 )
 
-print(f"\n✓ Basic model training complete")
-print(f"  Best iteration: {model_basic.best_iteration}")
-print(f"  Training set RMSE: {evals_result_basic['train']['rmse'][model_basic.best_iteration-1]:.4f}")
-print(f"  Validation set RMSE: {evals_result_basic['valid']['rmse'][model_basic.best_iteration-1]:.4f}")
+print(f"✓ 基础模型训练完成 (最佳迭代: {model_basic.best_iteration})")
 
 # 预测时也需要使用numpy数组格式
 y_train_pred_basic = model_basic.predict(X_train_gpu, num_iteration=model_basic.best_iteration)
@@ -765,15 +635,12 @@ results_basic.append(evaluate_model(y_val, y_val_pred_basic, 'Validation'))
 results_basic.append(evaluate_model(y_test, y_test_pred_basic, 'Test'))
 
 results_basic_df = pd.DataFrame(results_basic)
-print("\nBasic model performance:")
-print(results_basic_df.to_string(index=False))
 
 print("\n" + "=" * 80)
-print("Step 5: Hyperparameter Optimization")
+print("Step 5: 超参数优化")
 print("=" * 80)
 
 if BAYESIAN_OPT_AVAILABLE:
-    print("\nUsing Bayesian optimization for hyperparameter search...")
     
     def lgb_evaluate(num_leaves, max_depth, learning_rate, feature_fraction, 
                      bagging_fraction, min_child_samples):
@@ -793,15 +660,17 @@ if BAYESIAN_OPT_AVAILABLE:
             'seed': 42
         }
         
-        # GPU优化参数
         params.update({
             'device': 'gpu',
             'gpu_platform_id': 0,
             'gpu_device_id': 0,
             'num_gpu': 1,
-            'max_bin': 63,
+            'max_bin': 255,
             'gpu_use_dp': False,
-            'tree_learner': 'serial'
+            'tree_learner': 'data',
+            'force_col_wise': True,
+            'gpu_page_size': 2048,
+            'num_threads': 0
         })
         
         # 使用GPU优化的数据集
@@ -855,14 +724,7 @@ if BAYESIAN_OPT_AVAILABLE:
     best_params['max_depth'] = int(best_params['max_depth'])
     best_params['min_child_samples'] = int(best_params['min_child_samples'])
     
-    print(f"\nBest parameters:")
-    for key, value in best_params.items():
-        print(f"  {key}: {value}")
-    print(f"  Best validation RMSE: {-optimizer.max['target']:.4f}")
-    
 else:
-    print("\nUsing Grid search for hyperparameter optimization...")
-    print(f"Using {min(MAX_WORKERS, 4)} parallel worker threads")
     
     param_grid = {
         'num_leaves': [31, 50, 70],
@@ -872,8 +734,6 @@ else:
     }
     
     from itertools import product
-    total_combinations = int(np.prod([len(v) for v in param_grid.values()]))
-    print(f"Total {total_combinations} parameter combinations")
     
     def evaluate_params(combo):
         params_test = {
@@ -891,15 +751,17 @@ else:
             'seed': 42
         }
         
-        # GPU优化参数
         params_test.update({
             'device': 'gpu',
             'gpu_platform_id': 0,
             'gpu_device_id': 0,
             'num_gpu': 1,
-            'max_bin': 63,
+            'max_bin': 255,
             'gpu_use_dp': False,
-            'tree_learner': 'serial'
+            'tree_learner': 'data',
+            'force_col_wise': True,
+            'gpu_page_size': 2048,
+            'num_threads': 0
         })
         
         # 使用GPU优化的数据集
@@ -961,49 +823,36 @@ else:
                         'learning_rate': combo[2],
                         'feature_fraction': combo[3]
                     }
-                if i % 10 == 0 or i == len(futures):
-                    print(f"  Tested {i}/{total_combinations} combinations, current best RMSE: {best_rmse:.4f}")
-    
-    print(f"\nBest parameters:")
-    for key, value in best_params.items():
-        print(f"  {key}: {value}")
-    print(f"  Best validation RMSE: {best_rmse:.4f}")
 
 print("\n" + "=" * 80)
-print("Step 6: Training Optimized Model with Best Parameters")
+print("Step 6: 使用最佳参数训练优化模型")
 print("=" * 80)
 
 params_optimized = {
     'objective': 'regression',
     'metric': 'rmse',
     'boosting_type': 'gbdt',
-    'num_leaves': best_params.get('num_leaves', 50),
+    'num_leaves': max(best_params.get('num_leaves', 50), 63),
     'max_depth': best_params.get('max_depth', 7),
     'learning_rate': best_params.get('learning_rate', 0.05),
     'feature_fraction': best_params.get('feature_fraction', 0.8),
     'bagging_fraction': best_params.get('bagging_fraction', 0.8),
     'bagging_freq': 5,
     'min_child_samples': best_params.get('min_child_samples', 20),
+    'feature_pre_filter': False,
     'verbose': -1,
     'seed': 42,
-    # GPU优化参数
     'device': 'gpu',
     'gpu_platform_id': 0,
     'gpu_device_id': 0,
     'num_gpu': 1,
-    'max_bin': 63,  # GPU优化：减少bin数量可提高GPU利用率
-    'gpu_use_dp': False,  # 使用单精度浮点数，提高速度
-    'tree_learner': 'serial'  # GPU模式下使用串行学习器
+    'max_bin': 255,
+    'gpu_use_dp': False,
+    'tree_learner': 'data',
+    'force_col_wise': True,
+    'gpu_page_size': 2048,
+    'num_threads': 0
 }
-
-print("\n使用GPU加速训练优化模型")
-print("GPU优化参数已启用")
-
-print("\nOptimized model parameters:")
-for key, value in params_optimized.items():
-    print(f"  {key}: {value}")
-
-print("\nStarting training of optimized model...")
 evals_result_opt = {}
 model_optimized = lgb.train(
     params_optimized,
@@ -1018,10 +867,7 @@ model_optimized = lgb.train(
     ]
 )
 
-print(f"\n✓ Optimized model training complete")
-print(f"  Best iteration: {model_optimized.best_iteration}")
-print(f"  Training set RMSE: {evals_result_opt['train']['rmse'][model_optimized.best_iteration-1]:.4f}")
-print(f"  Validation set RMSE: {evals_result_opt['valid']['rmse'][model_optimized.best_iteration-1]:.4f}")
+print(f"✓ 优化模型训练完成 (最佳迭代: {model_optimized.best_iteration})")
 
 # 预测时也需要使用numpy数组格式
 y_train_pred_opt = model_optimized.predict(X_train_gpu, num_iteration=model_optimized.best_iteration)
@@ -1034,24 +880,18 @@ results_opt.append(evaluate_model(y_val, y_val_pred_opt, 'Validation'))
 results_opt.append(evaluate_model(y_test, y_test_pred_opt, 'Test'))
 
 results_opt_df = pd.DataFrame(results_opt)
-print("\nOptimized model performance:")
-print(results_opt_df.to_string(index=False))
 
 print("\n" + "=" * 80)
-print("Step 7: Model Performance Comparison")
+print("Step 7: 模型性能比较")
 print("=" * 80)
 
 results_basic_df['Model'] = 'LightGBM_Basic'
 results_opt_df['Model'] = 'LightGBM_Optimized'
 all_results = pd.concat([results_basic_df, results_opt_df])
-
 all_results = all_results[['Model', 'Dataset', 'R²', 'RMSE', 'MAE', 'MAPE']]
 
-print("\nAll models performance comparison:")
-print(all_results.to_string(index=False))
-
 test_results = all_results[all_results['Dataset'] == 'Test'].sort_values('R²', ascending=False)
-print("\nTest set performance ranking:")
+print("\n测试集性能:")
 print(test_results.to_string(index=False))
 
 basic_test_r2 = results_basic_df[results_basic_df['Dataset'] == 'Test']['R²'].values[0]
@@ -1067,7 +907,7 @@ print(f"  R² improvement: {r2_improvement:.2f}%")
 print(f"  RMSE reduction: {rmse_improvement:.2f}%")
 
 print("\n" + "=" * 80)
-print("Step 8: Feature Importance Analysis")
+print("Step 8: 特征重要性分析")
 print("=" * 80)
 
 feature_importance = pd.DataFrame({
@@ -1083,11 +923,8 @@ feature_importance['Importance_Gain_Norm'] = (feature_importance['Importance_Gai
 
 feature_importance = feature_importance.sort_values('Importance_Gain', ascending=False)
 
-print(f"\nTop 20 important features (by Gain):")
-print(feature_importance.head(20)[['Feature', 'Importance_Gain_Norm']].to_string(index=False))
-
 print("\n" + "=" * 80)
-print("Step 9: Generate Visualization Charts")
+print("Step 9: 生成可视化图表")
 print("=" * 80)
 
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
@@ -1297,7 +1134,7 @@ plt.savefig(output_dir / 'error_distribution.png', dpi=300, bbox_inches='tight')
 plt.close()
 
 print("\n" + "=" * 80)
-print("Step 10: Save Results")
+print("Step 10: 保存结果")
 print("=" * 80)
 
 all_results.to_csv(output_dir / 'model_performance.csv', index=False, encoding='utf-8-sig')
@@ -1321,40 +1158,16 @@ with open(model_dir / 'lightgbm_optimized.pkl', 'wb') as f:
     pickle.dump(model_optimized, f)
 
 print("\n" + "=" * 80)
-print("Analysis Complete!")
+print("分析完成!")
 print("=" * 80)
 
-print("\nGenerated files:")
-print("\nCSV Files:")
-print("  - model_performance.csv       Model performance comparison")
-print("  - feature_importance.csv      Feature importance")
-print("  - best_parameters.csv         Best parameters")
-print("  - predictions.csv             Prediction results")
-
-print("\nChart Files:")
-print("  - training_curves.png         Training curves")
-print("  - prediction_scatter.png      Predicted vs Actual scatter plot")
-print("  - timeseries_comparison.png   Time series comparison")
-print("  - residuals_analysis.png      Residual analysis")
-print("  - feature_importance.png      Feature importance plot")
-print("  - model_comparison.png        Model performance comparison")
-print("  - error_distribution.png      Error distribution")
-
-print("\nModel Files:")
-print("  - lightgbm_optimized.txt      LightGBM model (text format)")
-print("  - lightgbm_optimized.pkl      LightGBM model (pickle format)")
-
 best_model = test_results.iloc[0]
-print(f"\nBest model: {best_model['Model']}")
-print(f"  R² Score: {best_model['R²']:.4f}")
+print(f"\n最佳模型: {best_model['Model']}")
+print(f"  R²: {best_model['R²']:.4f}")
 print(f"  RMSE: {best_model['RMSE']:.2f} μg/m³")
 print(f"  MAE: {best_model['MAE']:.2f} μg/m³")
 print(f"  MAPE: {best_model['MAPE']:.2f}%")
 
-print("\nTop 5 Most Important Features:")
+print("\n前5个最重要特征:")
 for i, row in feature_importance.head(5).iterrows():
     print(f"  {row['Feature']}: {row['Importance_Gain_Norm']:.2f}%")
-
-print("\n" + "=" * 80)
-print("LightGBM PM2.5 Concentration Prediction Complete!")
-print("=" * 80)

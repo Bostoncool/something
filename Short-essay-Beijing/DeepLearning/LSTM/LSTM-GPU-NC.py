@@ -1,4 +1,6 @@
 import os
+import sys
+import subprocess
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -111,18 +113,17 @@ era5_vars = [
 ]
 
 # LSTM specific configuration - GPU optimized version
-SEQUENCE_LENGTHS = [7, 14, 30]  # Multiple sequence lengths for comparison
-# GPU优化：增大batch size以提升GPU利用率（根据GPU内存调整，建议256-512）
-BATCH_SIZE = 256  # GPU optimization: Increased from 128 to 256 for better GPU utilization
+SEQUENCE_LENGTHS = [7, 14, 30]
+BATCH_SIZE = 256
 EPOCHS = 100
 EARLY_STOP_PATIENCE = 20
 
 # GPU optimization configuration
-USE_AMP = True  # Use mixed precision training
-NUM_WORKERS = 8  # GPU优化：增加worker数量以提升数据加载速度（从4增加到8）
-PIN_MEMORY = True  # Pin memory for GPU transfer acceleration
-PREFETCH_FACTOR = 4  # GPU优化：预取4个batch，减少GPU等待时间
-USE_COMPILE = True  # GPU优化：使用torch.compile加速（PyTorch 2.0+）
+USE_AMP = True
+NUM_WORKERS = 8
+PIN_MEMORY = True
+PREFETCH_FACTOR = 4
+USE_COMPILE = True
 
 print(f"Data time range: {start_date.date()} to {end_date.date()}")
 print(f"Target variable: PM2.5 concentration")
@@ -153,7 +154,6 @@ def get_gpu_utilization():
     if not torch.cuda.is_available():
         return None
     try:
-        import subprocess
         result = subprocess.run(
             ['nvidia-smi', '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
             capture_output=True, text=True, timeout=2
@@ -193,18 +193,7 @@ def find_file(base_path, date_str, prefix):
     return None
 
 def read_pollution_day(date, pollution_all_path_local=None, pollution_extra_path_local=None, pollutants_list=None, file_map_all=None, file_map_extra=None):
-    """
-    读取单日污染数据
-    
-    参数:
-        date: 日期对象
-        pollution_all_path_local: 污染数据all路径（用于多进程）
-        pollution_extra_path_local: 污染数据extra路径（用于多进程）
-        pollutants_list: 污染物列表（用于多进程）
-        file_map_all: all文件的路径映射字典（优化：避免重复遍历目录）
-        file_map_extra: extra文件的路径映射字典（优化：避免重复遍历目录）
-    """
-    # 使用传入的参数，如果没有则使用全局变量（单进程模式）
+    """Read single day pollution data"""
     if pollution_all_path_local is None:
         pollution_all_path_local = pollution_all_path
     if pollution_extra_path_local is None:
@@ -214,7 +203,6 @@ def read_pollution_day(date, pollution_all_path_local=None, pollution_extra_path
     
     date_str = date.strftime('%Y%m%d')
     
-    # 优化：如果提供了文件映射，直接查找；否则使用原来的方法
     if file_map_all is not None and file_map_extra is not None:
         filename_all = f"beijing_all_{date_str}.csv"
         filename_extra = f"beijing_extra_{date_str}.csv"
@@ -250,11 +238,7 @@ def read_pollution_day(date, pollution_all_path_local=None, pollution_extra_path
         return None
 
 def build_file_map(base_path, prefix):
-    """
-    构建文件路径映射，避免重复遍历目录
-    
-    返回: {filename: full_path} 字典
-    """
+    """Build file path mapping to avoid repeated directory traversal"""
     file_map = {}
     filename_pattern = f"{prefix}_"
     for root, _, files in os.walk(base_path):
@@ -264,32 +248,20 @@ def build_file_map(base_path, prefix):
     return file_map
 
 def read_all_pollution():
-    """
-    读取所有污染数据（使用多进程）
-    
-    性能优化：
-    1. 使用多进程替代多线程（避免GIL限制）
-    2. 预先构建文件路径映射（避免重复遍历目录）
-    3. 传递必要的参数到子进程
-    """
+    """Read all pollution data using multiprocessing"""
     print("\nLoading pollution data...")
-    print(f"Using {MAX_WORKERS} parallel worker processes (multiprocessing)")
-    print("Building file path mapping (optimization)...")
     
-    # 优化：预先构建文件路径映射，避免每个任务都遍历目录
     file_map_all = build_file_map(pollution_all_path, 'beijing_all')
     file_map_extra = build_file_map(pollution_extra_path, 'beijing_extra')
-    print(f"  Found {len(file_map_all)} 'all' files and {len(file_map_extra)} 'extra' files")
+    print(f"Found {len(file_map_all)} 'all' files and {len(file_map_extra)} 'extra' files")
     
     dates = list(daterange(start_date, end_date))
     pollution_dfs = []
     
-    # 准备参数，确保可以在多进程间传递
     pollution_all_path_local = pollution_all_path
     pollution_extra_path_local = pollution_extra_path
     pollutants_list = list(pollutants)
     
-    # 使用多进程替代多线程（避免GIL限制，提高CPU密集型任务性能）
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(read_pollution_day, date, pollution_all_path_local, 
                                    pollution_extra_path_local, pollutants_list, 
@@ -320,18 +292,7 @@ def read_all_pollution():
     return pd.DataFrame()
 
 def read_single_nc_file(file_path, era5_vars_list=None, beijing_lats_array=None, beijing_lons_array=None):
-    """
-    读取单个NetCDF文件，提取变量数据
-    
-    参数:
-        file_path: NetCDF文件路径
-        era5_vars_list: ERA5变量列表（用于多进程）
-        beijing_lats_array: 北京纬度范围（用于多进程）
-        beijing_lons_array: 北京经度范围（用于多进程）
-    
-    返回: (变量名列表, DataFrame) 或 None
-    """
-    # 使用传入的参数，如果没有则使用全局变量（单进程模式）
+    """Read single NetCDF file and extract variable data"""
     if era5_vars_list is None:
         era5_vars_list = era5_vars
     if beijing_lats_array is None:
@@ -340,28 +301,21 @@ def read_single_nc_file(file_path, era5_vars_list=None, beijing_lats_array=None,
         beijing_lons_array = beijing_lons
     
     try:
-        # 首先检查文件包含哪些目标变量
         with NetCDFDataset(file_path, mode='r') as nc_file:
             file_vars = list(nc_file.variables.keys())
-            # 找到文件中包含的目标变量
             available_vars = [v for v in era5_vars_list if v in file_vars]
             
-            # 如果没有目标变量，检查是否有其他数据变量（排除坐标变量）
             if not available_vars:
-                # 排除常见的坐标和元数据变量
                 coord_vars = ['time', 'latitude', 'longitude', 'lat', 'lon', 
                              'expver', 'surface', 'number', 'valid_time', 
                              'forecast_time', 'verification_time', 'time1', 'time2']
                 data_vars = [v for v in file_vars if v not in coord_vars]
                 if data_vars:
-                    # 使用第一个数据变量（可能是目标变量但名称不同）
                     available_vars = data_vars[:1]
                 else:
                     return None
         
-        # 读取数据
         with xr.open_dataset(file_path, engine="netcdf4", decode_times=True) as ds:
-            # 重命名坐标变量以统一格式
             rename_map = {}
             for tkey in ("valid_time", "forecast_time", "verification_time", "time1", "time2"):
                 if tkey in ds.coords and "time" not in ds.coords:
@@ -373,13 +327,11 @@ def read_single_nc_file(file_path, era5_vars_list=None, beijing_lats_array=None,
             if rename_map:
                 ds = ds.rename(rename_map)
             
-            # 尝试解码时间
             try:
                 ds = xr.decode_cf(ds)
             except Exception:
                 pass
             
-            # 删除不需要的坐标变量
             drop_vars = []
             for coord in ("expver", "surface"):
                 if coord in ds:
@@ -387,34 +339,27 @@ def read_single_nc_file(file_path, era5_vars_list=None, beijing_lats_array=None,
             if drop_vars:
                 ds = ds.drop_vars(drop_vars)
             
-            # 处理ensemble维度
             if "number" in ds.dims:
                 ds = ds.mean(dim="number", skipna=True)
             
-            # 检查是否有时间坐标
             if "time" not in ds.coords:
                 return None
             
-            # 选择目标变量（如果文件中有多个变量，只选择第一个匹配的）
             var_to_read = available_vars[0] if available_vars else None
             if var_to_read and var_to_read not in ds.data_vars:
                 return None
             
-            # 选择变量
             if var_to_read:
                 ds_subset = ds[[var_to_read]]
             else:
-                # 如果没有匹配的变量，使用第一个数据变量
                 data_vars_list = list(ds.data_vars)
                 if not data_vars_list:
                     return None
                 var_to_read = data_vars_list[0]
                 ds_subset = ds[[var_to_read]]
             
-            # 排序时间
             ds_subset = ds_subset.sortby('time')
             
-            # 空间选择：北京区域
             if 'latitude' in ds_subset.coords and 'longitude' in ds_subset.coords:
                 lat_values = ds_subset['latitude']
                 if len(lat_values) > 0:
@@ -429,40 +374,24 @@ def read_single_nc_file(file_path, era5_vars_list=None, beijing_lats_array=None,
                     if 'latitude' in ds_subset.dims and 'longitude' in ds_subset.dims:
                         ds_subset = ds_subset.mean(dim=['latitude', 'longitude'], skipna=True)
             
-            # 重采样到日数据
             ds_daily = ds_subset.resample(time='1D').mean(keep_attrs=False)
             ds_daily = ds_daily.dropna('time', how='all')
             
             if ds_daily.sizes.get('time', 0) == 0:
                 return None
             
-            # 转换为DataFrame
             df = ds_daily.to_dataframe()
             df.index = pd.to_datetime(df.index)
             
-            # 返回变量名和DataFrame
             return (var_to_read, df)
             
     except Exception as exc:
         return None
 
 def read_all_era5():
-    """
-    递归读取所有ERA5 NetCDF文件，按变量分组，然后按时间对齐合并
-    
-    新策略：
-    1. 递归搜索所有.nc文件
-    2. 并行读取每个文件，提取变量名和数据
-    3. 按变量名分组
-    4. 对每个变量按时间对齐合并
-    5. 最后合并所有变量
-    """
+    """Read all ERA5 NetCDF files recursively, group by variable, then merge by time"""
     print("\nLoading meteorological data...")
-    print(f"Using {MAX_WORKERS} parallel worker processes (multiprocessing for NetCDF)")
-    print(f"Meteorological data directory: {era5_path}")
-    print(f"Directory exists: {os.path.exists(era5_path)}")
     
-    # 递归搜索所有.nc文件
     if not os.path.exists(era5_path):
         print(f"Error: Directory {era5_path} does not exist!")
         return pd.DataFrame()
@@ -474,14 +403,9 @@ def read_all_era5():
         print("Error: No NetCDF files found!")
         return pd.DataFrame()
     
-    if all_nc_files:
-        print(f"Sample files: {[os.path.basename(f) for f in all_nc_files[:5]]}")
-    
-    # 并行读取所有文件（使用多进程，因为netcdf4不是线程安全的）
-    print(f"\nReading {len(all_nc_files)} files in parallel using multiprocessing...")
+    print(f"Reading {len(all_nc_files)} files in parallel...")
     file_results = {}
     
-    # 准备参数，确保可以在多进程间传递
     era5_vars_list = list(era5_vars)
     beijing_lats_array = np.array(beijing_lats)
     beijing_lons_array = np.array(beijing_lons)
@@ -520,84 +444,64 @@ def read_all_era5():
                 if i % 100 == 0 or i == len(futures):
                     print(f"  Progress: {i}/{len(futures)} files (success: {successful_reads}, failed: {failed_reads}, {i/len(futures)*100:.1f}%)")
     
-    print(f"\nReading complete: {successful_reads} successful, {failed_reads} failed")
+    print(f"Reading complete: {successful_reads} successful, {failed_reads} failed")
     print(f"Found {len(file_results)} unique variables")
     
     if not file_results:
         print("Error: No data was successfully read!")
         return pd.DataFrame()
     
-    # 按变量分组，对每个变量按时间对齐合并
     print("\nMerging data by variable...")
     variable_dfs = {}
     
     for var_name, df_list in file_results.items():
-        print(f"  Processing variable '{var_name}': {len(df_list)} files")
+        print(f"Processing variable '{var_name}': {len(df_list)} files")
         
-        # 合并该变量的所有DataFrame
         if len(df_list) == 1:
             var_df = df_list[0].copy()
         else:
             var_df = pd.concat(df_list, axis=0)
         
-        # 去除重复索引（保留第一个）
         var_df = var_df[~var_df.index.duplicated(keep='first')]
-        
-        # 按时间排序
         var_df.sort_index(inplace=True)
         
-        # 确保列名是变量名（处理可能的列名不一致）
         if len(var_df.columns) == 1:
             var_df.columns = [var_name]
         elif var_name not in var_df.columns:
-            # 如果变量名不在列中，使用第一列并重命名
             first_col = var_df.columns[0]
             var_df = var_df[[first_col]].copy()
             var_df.columns = [var_name]
         
         variable_dfs[var_name] = var_df
-        print(f"    -> Time range: {var_df.index.min()} to {var_df.index.max()}, {len(var_df)} days")
+        print(f"  Time range: {var_df.index.min()} to {var_df.index.max()}, {len(var_df)} days")
     
-    # 合并所有变量（按时间对齐）
     print("\nMerging all variables by time...")
     if len(variable_dfs) == 1:
         df_era5_all = list(variable_dfs.values())[0]
     else:
-        # 使用outer join按时间对齐所有变量
-        # 从第一个变量开始
         var_names_list = list(variable_dfs.keys())
         df_era5_all = variable_dfs[var_names_list[0]].copy()
         
-        # 依次合并其他变量
         for var_name in var_names_list[1:]:
             var_df = variable_dfs[var_name]
             df_era5_all = df_era5_all.join(var_df, how='outer', rsuffix='_dup')
-            # 如果出现重复列名，保留原始列
             if f'{var_name}_dup' in df_era5_all.columns:
                 df_era5_all[f'{var_name}'] = df_era5_all[f'{var_name}'].fillna(df_era5_all[f'{var_name}_dup'])
                 df_era5_all.drop(columns=[f'{var_name}_dup'], inplace=True)
     
     print(f"Merged shape: {df_era5_all.shape}")
     print(f"Time range: {df_era5_all.index.min()} to {df_era5_all.index.max()}")
-    print(f"Variables: {list(df_era5_all.columns)}")
     
-    # 去除重复索引
-    print("  Removing duplicates...")
     df_era5_all = df_era5_all[~df_era5_all.index.duplicated(keep='first')]
-    
-    # 排序
-    print("  Sorting...")
     df_era5_all.sort_index(inplace=True)
     
-    # 处理缺失值
-    print("  Handling missing values...")
     initial_na = df_era5_all.isna().sum().sum()
     df_era5_all.ffill(inplace=True)
     df_era5_all.bfill(inplace=True)
     df_era5_all.fillna(df_era5_all.mean(), inplace=True)
     final_na = df_era5_all.isna().sum().sum()
     
-    print(f"Missing value handling: {initial_na} -> {final_na}")
+    print(f"Missing values: {initial_na} -> {final_na}")
     print(f"Meteorological data loading complete, shape: {df_era5_all.shape}")
     
     return df_era5_all
@@ -743,12 +647,10 @@ def prepare_data_for_lstm(X, y, lookback, train_ratio=0.7, val_ratio=0.15):
     X_test_tensor = torch.FloatTensor(X_test_scaled)
     y_test_tensor = torch.FloatTensor(y_test_scaled)
     
-    # Create DataLoaders (GPU optimized configuration)
     train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
     val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
     test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
     
-    # GPU优化：添加prefetch_factor以预取数据，减少GPU等待时间
     train_loader = DataLoader(
         train_dataset, 
         batch_size=BATCH_SIZE, 
@@ -883,7 +785,6 @@ def train_model(model, train_loader, val_loader, epochs, learning_rate, patience
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device, non_blocking=True), y_batch.to(device, non_blocking=True)
             
-            # GPU优化：使用set_to_none=True提升性能
             optimizer.zero_grad(set_to_none=True)
             
             # Mixed precision training
@@ -1060,7 +961,6 @@ print(f"  Meteorological data shape: {df_era5.shape}")
 
 if df_pollution.empty or df_era5.empty:
     print("\nError: Data loading failed!")
-    import sys
     sys.exit(1)
 
 # Ensure index is datetime type
@@ -1076,7 +976,6 @@ df_combined = df_pollution.join(df_era5, how='inner')
 
 if df_combined.empty:
     print("\nError: Data is empty after merging!")
-    import sys
     sys.exit(1)
 
 # Create features

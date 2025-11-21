@@ -4,6 +4,8 @@ import warnings
 import calendar
 import pickle
 import multiprocessing
+import contextlib
+import joblib
 from pathlib import Path
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -41,6 +43,62 @@ plt.rcParams["figure.dpi"] = 100
 # 使用numpy的新随机数生成器API（避免弃用警告）
 # 注意：XGBoost使用random_state参数控制随机性，这里设置全局种子主要用于其他随机操作
 np.random.default_rng(RANDOM_SEED)
+
+
+class XGBoostProgressBar(xgb.callback.TrainingCallback):
+    def __init__(self, total_rounds, description="Training"):
+        self.total_rounds = total_rounds
+        self.description = description
+        self.pbar = None
+
+    def before_training(self, model):
+        if TQDM_AVAILABLE:
+            self.pbar = tqdm(total=self.total_rounds, desc=self.description, unit="iter")
+        return model
+
+    def after_iteration(self, model, epoch, evals_log):
+        if self.pbar:
+            self.pbar.update(1)
+            if evals_log:
+                postfix = {}
+                for dataset, metrics in evals_log.items():
+                    for metric, values in metrics.items():
+                        if values:
+                            # Simplify dataset names for display
+                            if dataset == "validation_0":
+                                ds_name = "Train"
+                            elif dataset == "validation_1":
+                                ds_name = "Val"
+                            else:
+                                ds_name = dataset
+                            postfix[f"{ds_name}-{metric}"] = f"{values[-1]:.4f}"
+                self.pbar.set_postfix(postfix)
+        return False
+
+    def after_training(self, model):
+        if self.pbar:
+            self.pbar.close()
+        return model
+
+
+@contextlib.contextmanager
+def tqdm_joblib(tqdm_object):
+    """Context manager to patch joblib to report into tqdm progress bar class instance"""
+    class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def __call__(self, *args, **kwargs):
+            tqdm_object.update(n=self.batch_size)
+            return super().__call__(*args, **kwargs)
+
+    old_batch_callback = joblib.parallel.BatchCompletionCallBack
+    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+    try:
+        yield tqdm_object
+    finally:
+        joblib.parallel.BatchCompletionCallBack = old_batch_callback
+        tqdm_object.close()
 
 
 def daterange(start: datetime, end: datetime):
@@ -828,6 +886,39 @@ def save_results(
     predictions_df.to_csv(output_dir / "predictions.csv", index=False, encoding="utf-8-sig")
 
     model_optimized.save_model(str(model_dir / "xgboost_optimized.txt"))
+    
+    # 清除回调函数以避免pickle错误
+    # 回调函数中的tqdm进度条包含文件句柄（TextIOWrapper），无法被pickle
+    def clear_callbacks_from_model(model):
+        """递归清除模型中的回调函数和进度条对象"""
+        if hasattr(model, 'callbacks'):
+            model.callbacks = None
+        
+        # 清除模型属性中可能包含的回调对象
+        if hasattr(model, '__dict__'):
+            for key, value in list(model.__dict__.items()):
+                if value is None:
+                    continue
+                # 如果是列表或元组，检查其中的元素
+                if isinstance(value, (list, tuple)):
+                    for i, item in enumerate(value):
+                        if hasattr(item, '__class__'):
+                            class_name = item.__class__.__name__
+                            if 'XGBoostProgressBar' in class_name or 'ProgressBar' in class_name:
+                                # 清除进度条对象中的文件句柄
+                                if hasattr(item, 'pbar') and item.pbar is not None:
+                                    item.pbar = None
+                # 如果是回调对象本身
+                elif hasattr(value, '__class__'):
+                    class_name = value.__class__.__name__
+                    if 'XGBoostProgressBar' in class_name or 'ProgressBar' in class_name:
+                        if hasattr(value, 'pbar') and value.pbar is not None:
+                            value.pbar = None
+    
+    # 清除回调函数
+    clear_callbacks_from_model(model_optimized)
+    
+    # 保存模型
     with open(model_dir / "xgboost_optimized.pkl", "wb") as file:
         pickle.dump(model_optimized, file)
 
@@ -838,6 +929,7 @@ def main():
     print("=" * 80)
 
     print("\nConfiguring parameters...")
+    print("Using GPU acceleration (device='cuda', tree_method='hist')")
 
     pollution_all_path = '/root/autodl-tmp/Benchmark/all(AQI+PM2.5+PM10)'
     pollution_extra_path = '/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)'
@@ -1032,6 +1124,8 @@ def main():
         "random_state": RANDOM_SEED,
         "n_jobs": MAX_WORKERS,
         "eval_metric": "rmse",
+        "device": "cuda",
+        "tree_method": "hist",
     }
 
     print("\nBasic model parameters:")
@@ -1039,13 +1133,21 @@ def main():
         print(f"  {key}: {value}")
 
     print("\nStarting basic model training...")
-    model_basic = xgb.XGBRegressor(**params_basic, early_stopping_rounds=50)
+    model_basic = xgb.XGBRegressor(
+        **params_basic,
+        early_stopping_rounds=50,
+        callbacks=[
+            XGBoostProgressBar(
+                params_basic["n_estimators"], description="Basic Model Training"
+            )
+        ],
+    )
     evals_result_basic: dict = {}
     model_basic.fit(
         X_train,
         y_train,
         eval_set=[(X_train, y_train), (X_val, y_val)],
-        verbose=50,
+        verbose=False,
     )
     # Get training history
     evals_result_basic = model_basic.evals_result()
@@ -1089,16 +1191,31 @@ def main():
             objective="reg:squarederror",
             random_state=RANDOM_SEED,
             n_jobs=MAX_WORKERS,
+            device="cuda",
+            tree_method="hist",
         )
         grid_search = GridSearchCV(
             estimator=base_model,
             param_grid=param_grid,
             cv=3,
             scoring="neg_mean_squared_error",
-            verbose=2,
+            verbose=0 if TQDM_AVAILABLE else 2,
             n_jobs=min(4, MAX_WORKERS),
         )
-        grid_search.fit(X_train, y_train)
+        
+        if TQDM_AVAILABLE:
+            # Calculate total fits for progress bar
+            n_candidates = 1
+            for v in param_grid.values():
+                n_candidates *= len(v)
+            n_fits = n_candidates * 3  # cv=3
+            print(f"  Total fits to perform: {n_fits}")
+
+            with tqdm_joblib(tqdm(desc="Grid Search", total=n_fits, unit="fit")):
+                grid_search.fit(X_train, y_train)
+        else:
+            grid_search.fit(X_train, y_train)
+
         best_params = grid_search.best_params_
         print("\nBest parameter combination:")
         for param, value in best_params.items():
@@ -1110,14 +1227,25 @@ def main():
             "random_state": RANDOM_SEED,
             "n_jobs": MAX_WORKERS,
             "eval_metric": "rmse",
+            "device": "cuda",
+            "tree_method": "hist",
         }
-        model_optimized = xgb.XGBRegressor(**params_optimized, early_stopping_rounds=50)
+        model_optimized = xgb.XGBRegressor(
+            **params_optimized,
+            early_stopping_rounds=50,
+            callbacks=[
+                XGBoostProgressBar(
+                    params_optimized["n_estimators"],
+                    description="Optimized Model Training",
+                )
+            ],
+        )
         evals_result_opt: dict = {}
         model_optimized.fit(
             X_train,
             y_train,
             eval_set=[(X_train, y_train), (X_val, y_val)],
-            verbose=50,
+            verbose=False,
         )
         # Get training history
         evals_result_opt = model_optimized.evals_result()

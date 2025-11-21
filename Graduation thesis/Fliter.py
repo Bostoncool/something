@@ -5,15 +5,6 @@ from pathlib import Path
 
 
 def extract_year_from_filename(filename):
-    """
-    Extract year from filename
-    
-    Parameters:
-        filename: Filename string
-        
-    Returns:
-        year: Year string (YYYY), returns None if extraction fails
-    """
     # Remove file extension
     name_without_ext = filename.replace('.csv', '')
     

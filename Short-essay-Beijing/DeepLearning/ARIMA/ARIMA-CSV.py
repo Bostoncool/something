@@ -1,19 +1,3 @@
-"""
-Beijing PM2.5 Concentration Prediction - ARIMA Model
-Using ARIMA/SARIMA time series models for univariate prediction
-
-Features:
-- Pure time series approach (using only PM2.5 historical values)
-- SARIMA supports seasonal analysis
-- auto_arima automatic parameter optimization
-- Complete residual diagnostics
-- ACF/PACF analysis
-- ADF stationarity test
-
-Data Sources:
-- Pollution data: Benchmark dataset (PM2.5 concentration)
-"""
-
 import os
 import pandas as pd
 import numpy as np

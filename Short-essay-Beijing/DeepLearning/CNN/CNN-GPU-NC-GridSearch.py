@@ -8,61 +8,44 @@ import pickle
 from pathlib import Path
 import glob
 import multiprocessing
-from multiprocessing import Pool, Manager
-import calendar
+from multiprocessing import Pool
+import time
 
 import xarray as xr
-from netCDF4 import Dataset as NetCDFDataset
 
-warnings.filterwarnings('ignore')
-
-# PyTorch related
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-# Get CPU core count
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from sklearn.preprocessing import StandardScaler
+from itertools import product
+
+warnings.filterwarnings('ignore')
+
 CPU_COUNT = multiprocessing.cpu_count()
 MAX_WORKERS = max(4, CPU_COUNT - 1)
 
-# Set multiprocessing start method (for compatibility)
-# On Linux, 'fork' is default and works well
-# On Windows, 'spawn' is required
 if hasattr(multiprocessing, 'set_start_method'):
     try:
-        # Try to use fork on Linux (faster), fallback to spawn if needed
-        if os.name != 'nt':  # Not Windows
+        if os.name != 'nt':
             multiprocessing.set_start_method('fork', force=True)
-        else:  # Windows
+        else:
             multiprocessing.set_start_method('spawn', force=True)
     except RuntimeError:
-        # Start method already set, ignore
         pass
 
-# Try to import tqdm progress bar
 try:
     from tqdm import tqdm
     TQDM_AVAILABLE = True
 except ImportError:
     TQDM_AVAILABLE = False
-    print("Note: tqdm not installed, progress display will use simplified version.")
-    print("      Use 'pip install tqdm' to get better progress bar display.")
 
-# Machine learning libraries
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-from sklearn.preprocessing import StandardScaler
-
-# Grid search for hyperparameter optimization
-from itertools import product
-
-# Set English fonts
 plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'sans-serif']
 plt.rcParams['axes.unicode_minus'] = False
 plt.rcParams['figure.dpi'] = 100
 
-# Set random seed
 np.random.seed(42)
 torch.manual_seed(42)
 if torch.cuda.is_available():
@@ -72,72 +55,42 @@ print("=" * 80)
 print("Beijing PM2.5 Concentration Prediction - 2D CNN Model")
 print("=" * 80)
 
-# ============================== Part 1: Configuration and Path Setup ==============================
-print("\nConfiguring parameters...")
-
-# Data paths
 pollution_all_path = '/root/autodl-tmp/Benchmark/all(AQI+PM2.5+PM10)'
 pollution_extra_path = '/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)'
 era5_path = '/root/autodl-tmp/ERA5-Beijing-NC'
 
-# Output path
 output_dir = Path('./output')
 output_dir.mkdir(exist_ok=True)
 
-# Model save path
 model_dir = Path('./models')
 model_dir.mkdir(exist_ok=True)
 
-# Date range
 start_date = datetime(2015, 1, 1)
 end_date = datetime(2024, 12, 31)
 
-# Beijing geographic range
 beijing_lats = np.arange(39.0, 41.25, 0.25)
 beijing_lons = np.arange(115.0, 117.25, 0.25)
 
-# Pollutant list
 pollutants = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3']
 
-# ERA5 variables
-era5_vars = [
-    'd2m', 't2m', 'u10', 'v10', 'u100', 'v100',  # Temperature, wind speed
-    'blh', 'sp', 'tcwv',  # Boundary layer height, pressure, water vapor
-    'tp', 'avg_tprate',  # Precipitation
-    'tisr', 'str',  # Radiation
-    'cvh', 'cvl',  # Cloud cover
-    'mn2t', 'sd', 'lsm'  # Others
-]
+WINDOW_SIZE = 30
 
-# CNN specific parameters
-WINDOW_SIZE = 30  # Use past 30 days data
-
-# GPU优化配置 - RTX 5090 (32GB)
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 PIN_MEMORY = DEVICE.type == 'cuda'
 NON_BLOCKING = PIN_MEMORY
 
-# 数据加载优化
-DATALOADER_WORKERS = min(16, MAX_WORKERS) if DEVICE.type == 'cuda' else 0  # 增加workers
-PERSISTENT_WORKERS = DATALOADER_WORKERS > 0  # 保持workers存活，减少重启开销
-PREFETCH_FACTOR = 4 if DATALOADER_WORKERS > 0 else 2  # 预取更多批次
+DATALOADER_WORKERS = min(16, MAX_WORKERS) if DEVICE.type == 'cuda' else 0
+PERSISTENT_WORKERS = DATALOADER_WORKERS > 0
+PREFETCH_FACTOR = 4 if DATALOADER_WORKERS > 0 else 2
 
-# 混合精度训练（AMP）- 显著提升训练速度并减少显存占用
 USE_AMP = True if DEVICE.type == 'cuda' else False
 
-# 动态batch size - 根据GPU显存自动调整
 def get_optimal_batch_size(model_class, window_size, num_features, device, 
                            min_batch=64, max_batch=512, step=32):
-    """
-    自动确定最优batch size，充分利用GPU显存
-    """
     if device.type != 'cuda':
         return 32
     
-    print(f"\n正在测试最优batch size (范围: {min_batch}-{max_batch})...")
     torch.cuda.empty_cache()
-    
-    # 创建测试模型
     test_model = model_class(
         window_size=window_size,
         num_features=num_features,
@@ -148,159 +101,101 @@ def get_optimal_batch_size(model_class, window_size, num_features, device,
     ).to(device)
     test_model.train()
     
-    # 创建测试数据
     test_X = torch.randn(1, window_size, num_features, dtype=torch.float32).to(device)
     test_y = torch.randn(1, dtype=torch.float32).to(device)
     
     optimal_batch = min_batch
     current_batch = min_batch
-    
-    # 创建临时optimizer用于测试（需要用于scaler.step）
     test_optimizer = optim.Adam(test_model.parameters(), lr=0.001)
-    
-    # 使用混合精度测试
     scaler = torch.cuda.amp.GradScaler() if USE_AMP else None
     
     while current_batch <= max_batch:
         try:
             torch.cuda.empty_cache()
             test_model.zero_grad()
-            
-            # 测试当前batch size
             batch_X = test_X.repeat(current_batch, 1, 1)
             batch_y = test_y.repeat(current_batch)
             
-            # 前向传播和反向传播
             if USE_AMP:
                 with torch.cuda.amp.autocast():
                     y_pred = test_model(batch_X)
                     loss = nn.MSELoss()(y_pred, batch_y)
                 scaler.scale(loss).backward()
-                scaler.step(test_optimizer)  # 必须先调用step
-                scaler.update()  # 然后才能update
+                scaler.step(test_optimizer)
+                scaler.update()
             else:
                 y_pred = test_model(batch_X)
                 loss = nn.MSELoss()(y_pred, batch_y)
                 loss.backward()
                 test_optimizer.step()
             
-            # 如果成功，更新最优batch
             optimal_batch = current_batch
-            memory_used = torch.cuda.memory_allocated(device) / 1024**3
-            print(f"  Batch size {current_batch:3d}: ✓ 通过 (显存: {memory_used:.2f} GB)")
-            
-            # 增加batch size
             current_batch += step
-            
-            # 清理
             del batch_X, batch_y, y_pred, loss
             
         except RuntimeError as e:
             if "out of memory" in str(e):
-                print(f"  Batch size {current_batch:3d}: ✗ 显存不足")
                 torch.cuda.empty_cache()
-                # 清理当前失败的batch
                 test_model.zero_grad()
                 if scaler:
-                    scaler.update()  # 确保scaler状态正确
+                    scaler.update()
                 break
             else:
-                # 清理并重新抛出异常
                 test_model.zero_grad()
                 if scaler:
                     scaler.update()
                 raise e
     
-    # 使用90%的最大可用batch作为安全值
     optimal_batch = int(optimal_batch * 0.9)
     if optimal_batch < min_batch:
         optimal_batch = min_batch
     
-    # 清理资源
     del test_model, test_X, test_y, test_optimizer
     if scaler:
         del scaler
     torch.cuda.empty_cache()
     
-    print(f"✓ 最优batch size: {optimal_batch}")
     return optimal_batch
 
-# 初始batch size，将在模型创建后自动调整
-BATCH_SIZE = 128  # 初始值，会根据GPU显存自动优化
+BATCH_SIZE = 128
 
 if DEVICE.type == 'cuda':
     torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False  # 允许非确定性操作以提升性能
-    # 启用TensorFloat-32 (TF32) 加速（RTX 30系列及以上）
+    torch.backends.cudnn.deterministic = False
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-print(f"Data time range: {start_date.date()} to {end_date.date()}")
-print(f"Target variable: PM2.5 concentration")
-print(f"Time window size: {WINDOW_SIZE} days")
-print(f"Initial batch size: {BATCH_SIZE} (将自动优化)")
 print(f"Device: {DEVICE}")
 if DEVICE.type == 'cuda':
     print(f"CUDA device: {torch.cuda.get_device_name(0)}")
-    capability = torch.cuda.get_device_capability(0)
-    print(f"CUDA capability: {capability[0]}.{capability[1]}")
-    total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
-    print(f"GPU memory: {total_memory:.2f} GB")
-print(f"Output directory: {output_dir}")
-print(f"Model save directory: {model_dir}")
-print(f"CPU cores: {CPU_COUNT}, parallel workers: {MAX_WORKERS}")
-print(f"Dataloader workers: {DATALOADER_WORKERS}, pin_memory: {PIN_MEMORY}")
-print(f"Persistent workers: {PERSISTENT_WORKERS}, prefetch_factor: {PREFETCH_FACTOR}")
-print(f"Mixed precision training (AMP): {'Enabled' if USE_AMP else 'Disabled'}")
-if DEVICE.type == 'cuda':
-    print(f"TF32 acceleration: Enabled")
-
-# ============================== Part 2: Data Loading Functions ==============================
 def daterange(start, end):
     """Generate date sequence"""
     for n in range(int((end - start).days) + 1):
         yield start + timedelta(n)
 
 def build_file_index(base_path, prefix):
-    """
-    Build file index for pollution data to avoid repeated directory traversal.
-    Returns a dictionary mapping date_str to file_path.
-    """
     file_index = {}
-    print(f"  Building index for {prefix} files in {base_path}...")
-    count = 0
     for root, _, files in os.walk(base_path):
         for filename in files:
             if filename.startswith(prefix) and filename.endswith('.csv'):
-                # Extract date from filename: prefix_YYYYMMDD.csv
                 try:
                     date_str = filename.replace(f"{prefix}_", "").replace(".csv", "")
                     if len(date_str) == 8 and date_str.isdigit():
                         file_path = os.path.join(root, filename)
                         file_index[date_str] = file_path
-                        count += 1
                 except Exception:
                     continue
-    print(f"  Found {count} files for {prefix}")
     return file_index
 
 def read_pollution_day(args):
-    """
-    Read single day pollution data (multiprocessing compatible).
-    Args: (date, file_index_all, file_index_extra, pollution_all_path, pollution_extra_path, pollutants)
-    """
     date, file_index_all, file_index_extra, pollution_all_path, pollution_extra_path, pollutants = args
-    
     date_str = date.strftime('%Y%m%d')
     
-    # Use index to find files directly
     all_file = file_index_all.get(date_str)
     extra_file = file_index_extra.get(date_str)
     
     if not all_file or not extra_file:
         return None
-    
-    # Verify files exist
     if not os.path.exists(all_file) or not os.path.exists(extra_file):
         return None
     
@@ -308,58 +203,36 @@ def read_pollution_day(args):
         df_all = pd.read_csv(all_file, encoding='utf-8', on_bad_lines='skip')
         df_extra = pd.read_csv(extra_file, encoding='utf-8', on_bad_lines='skip')
         
-        # Filter out 24-hour average and AQI
         df_all = df_all[~df_all['type'].str.contains('_24h|AQI', na=False)]
         df_extra = df_extra[~df_extra['type'].str.contains('_24h', na=False)]
         
-        # Merge
         df_poll = pd.concat([df_all, df_extra], ignore_index=True)
-        
-        # Convert to long format
         df_poll = df_poll.melt(id_vars=['date', 'hour', 'type'], 
                                 var_name='station', value_name='value')
         df_poll['value'] = pd.to_numeric(df_poll['value'], errors='coerce')
-        
-        # Remove negative values and outliers
         df_poll = df_poll[df_poll['value'] >= 0]
         
-        # Aggregate by date and type (average all stations)
         df_daily = df_poll.groupby(['date', 'type'])['value'].mean().reset_index()
-        
-        # Convert to wide format
         df_daily = df_daily.pivot(index='date', columns='type', values='value')
-        
-        # Convert index to datetime format
         df_daily.index = pd.to_datetime(df_daily.index, format='%Y%m%d', errors='coerce')
-        
-        # Keep only required pollutants
         df_daily = df_daily[[col for col in pollutants if col in df_daily.columns]]
         
         return df_daily
-    except Exception as e:
+    except Exception:
         return None
 
 def read_all_pollution():
-    """Read all pollution data using multiprocessing"""
     print("\nLoading pollution data...")
-    print(f"Using {MAX_WORKERS} parallel workers")
-    
-    # Build file indices first (only once)
-    print("Building file indices...")
     file_index_all = build_file_index(pollution_all_path, 'beijing_all')
     file_index_extra = build_file_index(pollution_extra_path, 'beijing_extra')
     
     dates = list(daterange(start_date, end_date))
-    
-    # Prepare arguments for multiprocessing
     args_list = [
         (date, file_index_all, file_index_extra, pollution_all_path, pollution_extra_path, pollutants)
         for date in dates
     ]
     
     pollution_dfs = []
-    
-    # Use multiprocessing Pool
     with Pool(processes=MAX_WORKERS) as pool:
         if TQDM_AVAILABLE:
             results = list(tqdm(
@@ -370,42 +243,24 @@ def read_all_pollution():
             ))
         else:
             results = pool.map(read_pollution_day, args_list)
-            for i, result in enumerate(results, 1):
-                if i % 500 == 0 or i == len(results):
-                    print(f"  Processed {i}/{len(results)} days ({i/len(results)*100:.1f}%)")
         
-        # Collect valid results
         for result in results:
             if result is not None:
                 pollution_dfs.append(result)
     
     if pollution_dfs:
-        print(f"  Successfully read {len(pollution_dfs)}/{len(dates)} days of data")
-        print("  Merging data...")
         df_poll_all = pd.concat(pollution_dfs)
         df_poll_all.ffill(inplace=True)
         df_poll_all.fillna(df_poll_all.mean(), inplace=True)
-        print(f"Pollution data loading complete, shape: {df_poll_all.shape}")
+        print(f"Pollution data loaded: {df_poll_all.shape}")
         return df_poll_all
     return pd.DataFrame()
 
 def read_single_era5_file(args):
-    """
-    Read a single ERA5 NetCDF file and extract all data variables (multiprocessing compatible).
-    Each file may contain only one variable.
-    
-    Args:
-        args: tuple of (file_path, beijing_lat_min, beijing_lat_max, beijing_lon_min, beijing_lon_max)
-    
-    Returns:
-        dict: {variable_name: xr.Dataset} or None if failed
-    """
     file_path, beijing_lat_min, beijing_lat_max, beijing_lon_min, beijing_lon_max = args
     
     try:
-        # Use context manager to ensure file is properly closed
         with xr.open_dataset(file_path, engine="netcdf4", decode_times=True) as ds:
-            # Rename coordinates for consistency
             rename_map = {}
             for tkey in ("valid_time", "forecast_time", "verification_time", "time1", "time2"):
                 if tkey in ds.coords and "time" not in ds.coords:
@@ -417,13 +272,11 @@ def read_single_era5_file(args):
             if rename_map:
                 ds = ds.rename(rename_map)
             
-            # Decode CF conventions
             try:
                 ds = xr.decode_cf(ds)
             except Exception:
                 pass
             
-            # Drop coordinate variables that are not needed
             drop_vars = []
             for coord in ("expver", "surface"):
                 if coord in ds:
@@ -431,23 +284,18 @@ def read_single_era5_file(args):
             if drop_vars:
                 ds = ds.drop_vars(drop_vars)
             
-            # Handle ensemble dimension
             if "number" in ds.dims:
                 ds = ds.mean(dim="number", skipna=True)
             
-            # Check if time coordinate exists
             if "time" not in ds.coords:
                 return None
             
-            # Get all data variables (exclude coordinates)
             data_vars = [v for v in ds.data_vars if v not in drop_vars]
             if not data_vars:
                 return None
             
-            # Sort by time
             ds = ds.sortby('time')
             
-            # Spatial subsetting for Beijing region
             if 'latitude' in ds.coords and 'longitude' in ds.coords:
                 lat_values = ds['latitude']
                 if len(lat_values) > 0:
@@ -459,31 +307,26 @@ def read_single_era5_file(args):
                         latitude=lat_slice,
                         longitude=slice(beijing_lon_min, beijing_lon_max)
                     )
-                    # Average over spatial dimensions
                     if 'latitude' in ds.dims and 'longitude' in ds.dims:
                         ds = ds.mean(dim=['latitude', 'longitude'], skipna=True)
             
-            # Resample to daily
             ds_daily = ds.resample(time='1D').mean(keep_attrs=False)
             ds_daily = ds_daily.dropna('time', how='all')
             
             if ds_daily.sizes.get('time', 0) == 0:
                 return None
             
-            # Load data into memory
             ds_daily = ds_daily.load()
             
-            # Return dictionary with variable name as key
             result = {}
             for var in data_vars:
                 if var in ds_daily.data_vars:
-                    # Create a dataset with just this variable
                     var_ds = ds_daily[[var]]
                     result[var] = var_ds
             
             return result if result else None
             
-    except Exception as exc:
+    except Exception:
         return None
 
 def read_all_era5():
@@ -737,12 +580,12 @@ print(f"  Pollution data shape: {df_pollution.shape}")
 print(f"  Meteorological data shape: {df_era5.shape}")
 
 if df_pollution.empty:
-    print("\n⚠️ Warning: Pollution data is empty! Please check data path and files.")
+    print("\nWarning: Pollution data is empty! Please check data path and files.")
     import sys
     sys.exit(1)
 
 if df_era5.empty:
-    print("\n⚠️ Warning: Meteorological data is empty! Please check data path and files.")
+    print("\nWarning: Meteorological data is empty! Please check data path and files.")
     import sys
     sys.exit(1)
 
@@ -758,7 +601,7 @@ print("\nMerging data...")
 df_combined = df_pollution.join(df_era5, how='inner')
 
 if df_combined.empty:
-    print("\n❌ Error: Data is empty after merging!")
+    print("\nError: Data is empty after merging!")
     import sys
     sys.exit(1)
 
@@ -919,7 +762,7 @@ train_loader = DataLoader(
     pin_memory=PIN_MEMORY,
     persistent_workers=PERSISTENT_WORKERS,
     prefetch_factor=PREFETCH_FACTOR if DATALOADER_WORKERS > 0 else None,
-    drop_last=False  # 保留最后一个不完整的batch
+    drop_last=False
 )
 val_loader = DataLoader(
     val_dataset,
@@ -1149,14 +992,12 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
     best_model_state = None
     best_epoch = 0
     
-    # Create GradScaler for mixed precision
     scaler = torch.cuda.amp.GradScaler() if use_amp else None
     
-    print(f"\n开始训练 {num_epochs} 个epoch...")
+    print(f"\nTraining {num_epochs} epochs...")
     if use_amp:
-        print("  混合精度训练 (AMP): 已启用")
+        print("  Mixed precision training (AMP): Enabled")
     
-    import time
     start_time = time.time()
     
     for epoch in range(num_epochs):
@@ -1173,7 +1014,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
         if verbose and (epoch + 1) % 10 == 0:
             print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Time: {epoch_time:.2f}s")
         
-        # Early stopping check
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_model_state = model.state_dict().copy()
@@ -1183,17 +1023,16 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
             patience_counter += 1
         
         if patience_counter >= patience:
-            print(f"\n早停触发于 epoch {epoch+1}")
+            print(f"\nEarly stopping triggered at epoch {epoch+1}")
             break
     
     total_time = time.time() - start_time
     
-    # Restore best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
     
-    print(f"训练完成! 最佳模型在 epoch {best_epoch}, 验证损失: {best_val_loss:.4f}")
-    print(f"总训练时间: {total_time:.2f}s ({total_time/60:.2f} 分钟)")
+    print(f"Training complete! Best model at epoch {best_epoch}, validation loss: {best_val_loss:.4f}")
+    print(f"Total training time: {total_time:.2f}s ({total_time/60:.2f} minutes)")
     
     return train_losses, val_losses, best_epoch
 
@@ -1255,20 +1094,19 @@ print(f"\nModel parameter statistics:")
 print(f"  Total parameters: {total_params:,}")
 print(f"  Trainable parameters: {trainable_params:,}")
 
-# 自动优化batch size（仅在GPU上）
+# Optimize batch size for GPU
 if DEVICE.type == 'cuda':
     print("\n" + "=" * 80)
-    print("自动优化Batch Size以充分利用GPU显存")
+    print("Optimizing Batch Size for GPU Memory")
     print("=" * 80)
     optimal_batch_size = get_optimal_batch_size(
         PM25CNN2D, WINDOW_SIZE, num_features, DEVICE
     )
     
     if optimal_batch_size != BATCH_SIZE:
-        print(f"\n更新batch size: {BATCH_SIZE} -> {optimal_batch_size}")
+        print(f"\nUpdating batch size: {BATCH_SIZE} -> {optimal_batch_size}")
         BATCH_SIZE = optimal_batch_size
         
-        # 重新创建DataLoader with optimized batch size
         train_loader = DataLoader(
             train_dataset,
             batch_size=BATCH_SIZE,
@@ -1299,17 +1137,16 @@ if DEVICE.type == 'cuda':
             prefetch_factor=PREFETCH_FACTOR if DATALOADER_WORKERS > 0 else None,
             drop_last=False
         )
-        print(f"DataLoader已更新，新的batch size: {BATCH_SIZE}")
-        print(f"  训练批次数: {len(train_loader)}")
-        print(f"  验证批次数: {len(val_loader)}")
-        print(f"  测试批次数: {len(test_loader)}")
+        print(f"DataLoader updated, new batch size: {BATCH_SIZE}")
+        print(f"  Training batches: {len(train_loader)}")
+        print(f"  Validation batches: {len(val_loader)}")
+        print(f"  Test batches: {len(test_loader)}")
 
-# PyTorch 2.0+ 编译优化（可选，进一步提升性能）
-USE_COMPILE = False  # 设置为True以启用torch.compile（需要PyTorch 2.0+）
+USE_COMPILE = False
 if USE_COMPILE and hasattr(torch, 'compile'):
-    print("\n启用PyTorch编译优化 (torch.compile)...")
+    print("\nEnabling PyTorch compilation optimization (torch.compile)...")
     model_basic = torch.compile(model_basic, mode='reduce-overhead')
-    print("✓ 模型编译完成")
+    print("Model compilation complete")
 
 # Define loss function and optimizer
 criterion = nn.MSELoss()
@@ -1362,7 +1199,7 @@ print("\n" + "=" * 80)
 print("Step 6: Hyperparameter Optimization (Grid Search)")
 print("=" * 80)
 
-# 定义网格搜索参数空间
+# Define grid search parameter space
 param_grid = {
     'num_conv_layers': [2, 3, 4],
     'base_filters': [32, 64],
@@ -1371,34 +1208,29 @@ param_grid = {
     'dropout_rate': [0.2, 0.3, 0.4]
 }
 
-# 计算总组合数
 total_combinations = int(np.prod([len(v) for v in param_grid.values()]))
-print(f"\n网格搜索配置:")
-print(f"  总参数组合数: {total_combinations}")
-print(f"\n参数搜索空间:")
+print(f"\nGrid search configuration:")
+print(f"  Total parameter combinations: {total_combinations}")
+print(f"\nParameter search space:")
 for key, values in param_grid.items():
     print(f"  {key}: {values}")
 
-# 存储所有尝试的结果
 grid_search_results = []
 best_val_loss_grid = float('inf')
 best_params = {}
 
-# 清理GPU缓存
 if DEVICE.type == 'cuda':
     torch.cuda.empty_cache()
 
-import time
 grid_search_start_time = time.time()
 
-print(f"\n开始网格搜索...")
+print(f"\nStarting grid search...")
 print("=" * 80)
 
-# 使用tqdm显示进度（如果可用）
 if TQDM_AVAILABLE:
     param_combinations = list(product(*param_grid.values()))
     iterator = tqdm(enumerate(param_combinations, 1), total=total_combinations, 
-                    desc="网格搜索进度", unit="组合")
+                    desc="Grid search progress", unit="combination")
 else:
     param_combinations = list(product(*param_grid.values()))
     iterator = enumerate(param_combinations, 1)
@@ -1407,16 +1239,14 @@ for i, combo in iterator:
     params_test = dict(zip(param_grid.keys(), combo))
     
     if not TQDM_AVAILABLE:
-        print(f"\n[{i}/{total_combinations}] 测试参数组合:")
+        print(f"\n[{i}/{total_combinations}] Testing parameter combination:")
         for key, value in params_test.items():
             print(f"  {key}: {value}")
     
     try:
-        # 清理GPU缓存
         if DEVICE.type == 'cuda':
             torch.cuda.empty_cache()
         
-        # 创建模型
         model_temp = PM25CNN2D(
             window_size=WINDOW_SIZE,
             num_features=num_features,
@@ -1426,10 +1256,8 @@ for i, combo in iterator:
             dropout_rate=params_test['dropout_rate']
         ).to(DEVICE)
         
-        # 创建优化器
         optimizer_temp = optim.Adam(model_temp.parameters(), lr=params_test['learning_rate'])
         
-        # 训练模型（使用较少的epochs进行快速搜索）
         train_start_time = time.time()
         _, _, best_epoch_temp = train_model(
             model_temp, train_loader, val_loader, criterion, optimizer_temp,
@@ -1437,32 +1265,27 @@ for i, combo in iterator:
         )
         train_time = time.time() - train_start_time
         
-        # 评估模型
         val_loss, _, _ = validate(model_temp, val_loader, criterion, DEVICE, USE_AMP)
         
-        # 记录结果
         result_entry = params_test.copy()
         result_entry['val_loss'] = val_loss
         result_entry['best_epoch'] = best_epoch_temp
         result_entry['train_time'] = train_time
         grid_search_results.append(result_entry)
         
-        # 更新最佳参数
         if val_loss < best_val_loss_grid:
             best_val_loss_grid = val_loss
             best_params = params_test.copy()
             if not TQDM_AVAILABLE:
-                print(f"  ✓ 新的最佳验证损失: {val_loss:.4f} (Epoch {best_epoch_temp}, 训练时间: {train_time:.1f}s)")
+                print(f"  New best validation loss: {val_loss:.4f} (Epoch {best_epoch_temp}, Time: {train_time:.1f}s)")
         else:
             if not TQDM_AVAILABLE:
-                print(f"  验证损失: {val_loss:.4f} (Epoch {best_epoch_temp}, 训练时间: {train_time:.1f}s)")
+                print(f"  Validation loss: {val_loss:.4f} (Epoch {best_epoch_temp}, Time: {train_time:.1f}s)")
         
-        # 清理模型
         del model_temp, optimizer_temp
         
     except Exception as e:
-        print(f"\n  ✗ 参数组合 {i} 训练失败: {type(e).__name__}: {e}")
-        # 记录失败的结果
+        print(f"\n  Parameter combination {i} failed: {type(e).__name__}: {e}")
         result_entry = params_test.copy()
         result_entry['val_loss'] = float('inf')
         result_entry['best_epoch'] = 0
@@ -1473,31 +1296,28 @@ for i, combo in iterator:
 
 grid_search_total_time = time.time() - grid_search_start_time
 
-# 保存网格搜索结果
 grid_search_df = pd.DataFrame(grid_search_results)
 grid_search_df = grid_search_df.sort_values('val_loss', ascending=True)
 grid_search_df.to_csv(output_dir / 'grid_search_results.csv', index=False, encoding='utf-8-sig')
-print(f"\n✓ 网格搜索结果已保存: grid_search_results.csv")
+print(f"\nGrid search results saved: grid_search_results.csv")
 
-# 显示最佳参数
 print("\n" + "=" * 80)
-print("网格搜索完成!")
+print("Grid search complete!")
 print("=" * 80)
-print(f"\n最佳参数组合:")
+print(f"\nBest parameter combination:")
 for key, value in best_params.items():
     print(f"  {key}: {value}")
-print(f"  最佳验证损失: {best_val_loss_grid:.4f}")
-print(f"  总搜索时间: {grid_search_total_time:.2f}s ({grid_search_total_time/60:.2f} 分钟)")
-print(f"  平均每个组合训练时间: {grid_search_total_time/total_combinations:.2f}s")
+print(f"  Best validation loss: {best_val_loss_grid:.4f}")
+print(f"  Total search time: {grid_search_total_time:.2f}s ({grid_search_total_time/60:.2f} minutes)")
+print(f"  Average time per combination: {grid_search_total_time/total_combinations:.2f}s")
 
-# 显示Top 5最佳结果
-print(f"\nTop 5 最佳参数组合:")
+print(f"\nTop 5 best parameter combinations:")
 top5_results = grid_search_df.head(5)
 for idx, (_, row) in enumerate(top5_results.iterrows(), 1):
-    print(f"\n  排名 {idx}:")
-    print(f"    验证损失: {row['val_loss']:.4f}")
-    print(f"    最佳Epoch: {row['best_epoch']}")
-    print(f"    训练时间: {row['train_time']:.1f}s")
+    print(f"\n  Rank {idx}:")
+    print(f"    Validation loss: {row['val_loss']:.4f}")
+    print(f"    Best epoch: {row['best_epoch']}")
+    print(f"    Training time: {row['train_time']:.1f}s")
     for key in param_grid.keys():
         print(f"    {key}: {row[key]}")
 
@@ -1668,7 +1488,7 @@ print("\n" + "=" * 80)
 print("Step 10: Generating Visualization Charts")
 print("=" * 80)
 
-# 14.1 Training process curves
+# Training process curves
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
 # Basic model
@@ -1698,7 +1518,7 @@ plt.savefig(output_dir / 'training_curves.png', dpi=300, bbox_inches='tight')
 print("Saved: training_curves.png")
 plt.close()
 
-# 14.2 Prediction vs actual scatter plots
+# Prediction vs actual scatter plots
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
 models_data = [
@@ -1740,7 +1560,7 @@ plt.savefig(output_dir / 'prediction_scatter.png', dpi=300, bbox_inches='tight')
 print("Saved: prediction_scatter.png")
 plt.close()
 
-# 14.3 Time series prediction comparison
+# Time series prediction comparison
 fig, axes = plt.subplots(2, 1, figsize=(18, 10))
 
 # Test set index
@@ -1780,7 +1600,7 @@ plt.savefig(output_dir / 'timeseries_comparison.png', dpi=300, bbox_inches='tigh
 print("Saved: timeseries_comparison.png")
 plt.close()
 
-# 14.4 Residual analysis
+# Residual analysis
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
 for idx, (model_name, y_pred, y_true, dataset) in enumerate(models_data):
@@ -1804,7 +1624,7 @@ plt.savefig(output_dir / 'residuals_analysis.png', dpi=300, bbox_inches='tight')
 print("Saved: residuals_analysis.png")
 plt.close()
 
-# 14.5 Feature importance plot
+# Feature importance plot
 fig, ax = plt.subplots(1, 1, figsize=(12, 10))
 
 top_n = 20
@@ -1823,7 +1643,7 @@ plt.savefig(output_dir / 'feature_importance.png', dpi=300, bbox_inches='tight')
 print("Saved: feature_importance.png")
 plt.close()
 
-# 14.6 Model performance comparison bar charts
+# Model performance comparison bar charts
 fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
 test_results_plot = all_results[all_results['Dataset'] == 'Test']
@@ -1860,7 +1680,7 @@ plt.savefig(output_dir / 'model_comparison.png', dpi=300, bbox_inches='tight')
 print("Saved: model_comparison.png")
 plt.close()
 
-# 14.7 Error distribution histograms
+# Error distribution histograms
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
 errors_basic = y_test_actual_basic - y_test_pred_basic

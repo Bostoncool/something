@@ -8,11 +8,9 @@ import pickle
 from pathlib import Path
 import glob
 import multiprocessing
-from multiprocessing import Pool, Manager
-import calendar
+from multiprocessing import Pool
 
 import xarray as xr
-from netCDF4 import Dataset as NetCDFDataset
 
 warnings.filterwarnings('ignore')
 
@@ -118,32 +116,29 @@ era5_vars = [
 # CNN specific parameters
 WINDOW_SIZE = 30  # Use past 30 days data
 
-# GPU优化配置 - RTX 5090 (32GB)
+# GPU configuration
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 PIN_MEMORY = DEVICE.type == 'cuda'
 NON_BLOCKING = PIN_MEMORY
 
-# 数据加载优化
-DATALOADER_WORKERS = min(16, MAX_WORKERS) if DEVICE.type == 'cuda' else 0  # 增加workers
-PERSISTENT_WORKERS = DATALOADER_WORKERS > 0  # 保持workers存活，减少重启开销
-PREFETCH_FACTOR = 4 if DATALOADER_WORKERS > 0 else 2  # 预取更多批次
+# Data loading optimization
+DATALOADER_WORKERS = min(16, MAX_WORKERS) if DEVICE.type == 'cuda' else 0
+PERSISTENT_WORKERS = DATALOADER_WORKERS > 0
+PREFETCH_FACTOR = 4 if DATALOADER_WORKERS > 0 else 2
 
-# 混合精度训练（AMP）- 显著提升训练速度并减少显存占用
+# Mixed precision training (AMP)
 USE_AMP = True if DEVICE.type == 'cuda' else False
 
-# 动态batch size - 根据GPU显存自动调整
+# Dynamic batch size optimization
 def get_optimal_batch_size(model_class, window_size, num_features, device, 
                            min_batch=64, max_batch=512, step=32):
-    """
-    自动确定最优batch size，充分利用GPU显存
-    """
+    """Automatically determine optimal batch size for GPU memory"""
     if device.type != 'cuda':
         return 32
     
-    print(f"\n正在测试最优batch size (范围: {min_batch}-{max_batch})...")
+    print(f"\nTesting optimal batch size (range: {min_batch}-{max_batch})...")
     torch.cuda.empty_cache()
     
-    # 创建测试模型
     test_model = model_class(
         window_size=window_size,
         num_features=num_features,
@@ -154,112 +149,84 @@ def get_optimal_batch_size(model_class, window_size, num_features, device,
     ).to(device)
     test_model.train()
     
-    # 创建测试数据
     test_X = torch.randn(1, window_size, num_features, dtype=torch.float32).to(device)
     test_y = torch.randn(1, dtype=torch.float32).to(device)
     
     optimal_batch = min_batch
     current_batch = min_batch
-    
-    # 创建临时optimizer用于测试（需要用于scaler.step）
     test_optimizer = optim.Adam(test_model.parameters(), lr=0.001)
-    
-    # 使用混合精度测试
     scaler = torch.cuda.amp.GradScaler() if USE_AMP else None
     
     while current_batch <= max_batch:
         try:
             torch.cuda.empty_cache()
             test_model.zero_grad()
-            
-            # 测试当前batch size
             batch_X = test_X.repeat(current_batch, 1, 1)
             batch_y = test_y.repeat(current_batch)
             
-            # 前向传播和反向传播
             if USE_AMP:
                 with torch.cuda.amp.autocast():
                     y_pred = test_model(batch_X)
                     loss = nn.MSELoss()(y_pred, batch_y)
                 scaler.scale(loss).backward()
-                scaler.step(test_optimizer)  # 必须先调用step
-                scaler.update()  # 然后才能update
+                scaler.step(test_optimizer)
+                scaler.update()
             else:
                 y_pred = test_model(batch_X)
                 loss = nn.MSELoss()(y_pred, batch_y)
                 loss.backward()
                 test_optimizer.step()
             
-            # 如果成功，更新最优batch
             optimal_batch = current_batch
             memory_used = torch.cuda.memory_allocated(device) / 1024**3
-            print(f"  Batch size {current_batch:3d}: ✓ 通过 (显存: {memory_used:.2f} GB)")
-            
-            # 增加batch size
+            print(f"  Batch size {current_batch:3d}: OK (Memory: {memory_used:.2f} GB)")
             current_batch += step
-            
-            # 清理
             del batch_X, batch_y, y_pred, loss
             
         except RuntimeError as e:
             if "out of memory" in str(e):
-                print(f"  Batch size {current_batch:3d}: ✗ 显存不足")
+                print(f"  Batch size {current_batch:3d}: Out of memory")
                 torch.cuda.empty_cache()
-                # 清理当前失败的batch
                 test_model.zero_grad()
                 if scaler:
-                    scaler.update()  # 确保scaler状态正确
+                    scaler.update()
                 break
             else:
-                # 清理并重新抛出异常
                 test_model.zero_grad()
                 if scaler:
                     scaler.update()
                 raise e
     
-    # 使用90%的最大可用batch作为安全值
     optimal_batch = int(optimal_batch * 0.9)
     if optimal_batch < min_batch:
         optimal_batch = min_batch
     
-    # 清理资源
     del test_model, test_X, test_y, test_optimizer
     if scaler:
         del scaler
     torch.cuda.empty_cache()
     
-    print(f"✓ 最优batch size: {optimal_batch}")
+    print(f"Optimal batch size: {optimal_batch}")
     return optimal_batch
 
-# 初始batch size，将在模型创建后自动调整
-BATCH_SIZE = 128  # 初始值，会根据GPU显存自动优化
+BATCH_SIZE = 128
 
 if DEVICE.type == 'cuda':
     torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False  # 允许非确定性操作以提升性能
-    # 启用TensorFloat-32 (TF32) 加速（RTX 30系列及以上）
+    torch.backends.cudnn.deterministic = False
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
 print(f"Data time range: {start_date.date()} to {end_date.date()}")
 print(f"Target variable: PM2.5 concentration")
 print(f"Time window size: {WINDOW_SIZE} days")
-print(f"Initial batch size: {BATCH_SIZE} (将自动优化)")
+print(f"Initial batch size: {BATCH_SIZE}")
 print(f"Device: {DEVICE}")
 if DEVICE.type == 'cuda':
     print(f"CUDA device: {torch.cuda.get_device_name(0)}")
-    capability = torch.cuda.get_device_capability(0)
-    print(f"CUDA capability: {capability[0]}.{capability[1]}")
     total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
     print(f"GPU memory: {total_memory:.2f} GB")
-print(f"Output directory: {output_dir}")
-print(f"Model save directory: {model_dir}")
-print(f"CPU cores: {CPU_COUNT}, parallel workers: {MAX_WORKERS}")
-print(f"Dataloader workers: {DATALOADER_WORKERS}, pin_memory: {PIN_MEMORY}")
-print(f"Persistent workers: {PERSISTENT_WORKERS}, prefetch_factor: {PREFETCH_FACTOR}")
 print(f"Mixed precision training (AMP): {'Enabled' if USE_AMP else 'Disabled'}")
-if DEVICE.type == 'cuda':
-    print(f"TF32 acceleration: Enabled")
 
 # ============================== Part 2: Data Loading Functions ==============================
 def daterange(start, end):
@@ -736,19 +703,16 @@ print("=" * 80)
 df_era5 = read_all_era5()
 df_pollution = read_all_pollution()
 
-
-# Check data loading
-print("\nData loading check:")
-print(f"  Pollution data shape: {df_pollution.shape}")
-print(f"  Meteorological data shape: {df_era5.shape}")
+print(f"\nPollution data shape: {df_pollution.shape}")
+print(f"Meteorological data shape: {df_era5.shape}")
 
 if df_pollution.empty:
-    print("\n⚠️ Warning: Pollution data is empty! Please check data path and files.")
+    print("\nWarning: Pollution data is empty! Please check data path and files.")
     import sys
     sys.exit(1)
 
 if df_era5.empty:
-    print("\n⚠️ Warning: Meteorological data is empty! Please check data path and files.")
+    print("\nWarning: Meteorological data is empty! Please check data path and files.")
     import sys
     sys.exit(1)
 
@@ -756,24 +720,17 @@ if df_era5.empty:
 df_pollution.index = pd.to_datetime(df_pollution.index)
 df_era5.index = pd.to_datetime(df_era5.index)
 
-print(f"  Pollution data time range: {df_pollution.index.min()} to {df_pollution.index.max()}")
-print(f"  Meteorological data time range: {df_era5.index.min()} to {df_era5.index.max()}")
+print(f"Pollution data time range: {df_pollution.index.min()} to {df_pollution.index.max()}")
+print(f"Meteorological data time range: {df_era5.index.min()} to {df_era5.index.max()}")
 
-# Merge data
-print("\nMerging data...")
 df_combined = df_pollution.join(df_era5, how='inner')
 
 if df_combined.empty:
-    print("\n❌ Error: Data is empty after merging!")
+    print("\nError: Data is empty after merging!")
     import sys
     sys.exit(1)
 
-# Create features
-print("\nCreating features...")
 df_combined = create_features(df_combined)
-
-# Clean data
-print("\nCleaning data...")
 df_combined.replace([np.inf, -np.inf], np.nan, inplace=True)
 initial_rows = len(df_combined)
 df_combined.dropna(inplace=True)
@@ -782,14 +739,7 @@ print(f"Removed {initial_rows - final_rows} rows containing missing values")
 
 print(f"\nMerged data shape: {df_combined.shape}")
 print(f"Time range: {df_combined.index.min().date()} to {df_combined.index.max().date()}")
-print(f"Number of samples: {len(df_combined)}")
-print(f"Number of features: {df_combined.shape[1]}")
-
-print(f"\nFeature list (first 20):")
-for i, col in enumerate(df_combined.columns[:20], 1):
-    print(f"  {i}. {col}")
-if len(df_combined.columns) > 20:
-    print(f"  ... and {len(df_combined.columns) - 20} more features")
+print(f"Number of samples: {len(df_combined)}, Number of features: {df_combined.shape[1]}")
 
 # ============================== Part 5: CNN Data Preparation ==============================
 print("\n" + "=" * 80)
@@ -809,24 +759,14 @@ numeric_features = [col for col in df_combined.select_dtypes(include=[np.number]
 print(f"\nNumber of selected features: {len(numeric_features)}")
 print(f"Target variable: {target}")
 
-# Prepare data
 X_raw = df_combined[numeric_features].values
 y_raw = df_combined[target].values
 
-print(f"\nRaw data shape:")
-print(f"  X: {X_raw.shape}")
-print(f"  y: {y_raw.shape}")
-
-# Standardize features
 scaler_X = StandardScaler()
 scaler_y = StandardScaler()
 
 X_scaled = scaler_X.fit_transform(X_raw)
 y_scaled = scaler_y.fit_transform(y_raw.reshape(-1, 1)).flatten()
-
-print(f"\nStandardized data shape:")
-print(f"  X: {X_scaled.shape}")
-print(f"  y: {y_scaled.shape}")
 
 # Create sliding window dataset
 def create_sliding_windows(X, y, window_size):
@@ -857,21 +797,13 @@ def create_sliding_windows(X, y, window_size):
 
 print(f"\nCreating {WINDOW_SIZE} day sliding windows...")
 X_windows, y_windows = create_sliding_windows(X_scaled, y_scaled, WINDOW_SIZE)
+print(f"Sliding window data shape: X={X_windows.shape}, y={y_windows.shape}")
 
-print(f"Sliding window data shape:")
-print(f"  X_windows: {X_windows.shape}  # [num_samples, time_steps, num_features]")
-print(f"  y_windows: {y_windows.shape}")
-
-# Save feature names and date index (for subsequent analysis)
 feature_names = numeric_features
 date_index = df_combined.index[WINDOW_SIZE-1:]
 
-print(f"\nPM2.5 Statistics:")
-print(f"  Mean: {y_raw.mean():.2f} μg/m³")
-print(f"  Std Dev: {y_raw.std():.2f} μg/m³")
-print(f"  Min: {y_raw.min():.2f} μg/m³")
-print(f"  Max: {y_raw.max():.2f} μg/m³")
-print(f"  Median: {np.median(y_raw):.2f} μg/m³")
+print(f"\nPM2.5 Statistics: Mean={y_raw.mean():.2f}, Std={y_raw.std():.2f}, "
+      f"Min={y_raw.min():.2f}, Max={y_raw.max():.2f}, Median={np.median(y_raw):.2f} μg/m³")
 
 # ============================== Part 6: PyTorch Dataset and DataLoader ==============================
 print("\n" + "=" * 80)
@@ -903,16 +835,10 @@ y_train = y_windows[:train_size]
 y_val = y_windows[train_size:train_size + val_size]
 y_test = y_windows[train_size + val_size:]
 
-print(f"\nTraining set: {len(X_train)} samples ({len(X_train)/n_samples*100:.1f}%)")
-print(f"  Time range: {date_index[0].date()} to {date_index[train_size-1].date()}")
+print(f"\nDataset split: Train={len(X_train)} ({len(X_train)/n_samples*100:.1f}%), "
+      f"Val={len(X_val)} ({len(X_val)/n_samples*100:.1f}%), "
+      f"Test={len(X_test)} ({len(X_test)/n_samples*100:.1f}%)")
 
-print(f"\nValidation set: {len(X_val)} samples ({len(X_val)/n_samples*100:.1f}%)")
-print(f"  Time range: {date_index[train_size].date()} to {date_index[train_size+val_size-1].date()}")
-
-print(f"\nTest set: {len(X_test)} samples ({len(X_test)/n_samples*100:.1f}%)")
-print(f"  Time range: {date_index[train_size+val_size].date()} to {date_index[-1].date()}")
-
-# Create datasets and data loaders
 train_dataset = TimeSeriesDataset(X_train, y_train)
 val_dataset = TimeSeriesDataset(X_val, y_val)
 test_dataset = TimeSeriesDataset(X_test, y_test)
@@ -925,7 +851,7 @@ train_loader = DataLoader(
     pin_memory=PIN_MEMORY,
     persistent_workers=PERSISTENT_WORKERS,
     prefetch_factor=PREFETCH_FACTOR if DATALOADER_WORKERS > 0 else None,
-    drop_last=False  # 保留最后一个不完整的batch
+    drop_last=False
 )
 val_loader = DataLoader(
     val_dataset,
@@ -948,10 +874,7 @@ test_loader = DataLoader(
     drop_last=False
 )
 
-print(f"\nData loaders created:")
-print(f"  Training batches: {len(train_loader)}")
-print(f"  Validation batches: {len(val_loader)}")
-print(f"  Test batches: {len(test_loader)}")
+print(f"Data loaders: Train={len(train_loader)}, Val={len(val_loader)}, Test={len(test_loader)} batches")
 
 # ============================== Part 7: 2D CNN Model Definition ==============================
 print("\n" + "=" * 80)
@@ -1046,9 +969,7 @@ class PM25CNN2D(nn.Module):
         return x.squeeze()
 
 num_features = X_train.shape[2]
-print(f"\nModel input dimensions:")
-print(f"  Window size: {WINDOW_SIZE}")
-print(f"  Number of features: {num_features}")
+print(f"\nModel input: Window size={WINDOW_SIZE}, Features={num_features}")
 
 # ============================== Part 8: Training and Evaluation Functions ==============================
 def train_epoch(model, dataloader, criterion, optimizer, device, scaler=None):
@@ -1155,12 +1076,11 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
     best_model_state = None
     best_epoch = 0
     
-    # Create GradScaler for mixed precision
     scaler = torch.cuda.amp.GradScaler() if use_amp else None
     
-    print(f"\n开始训练 {num_epochs} 个epoch...")
+    print(f"\nTraining {num_epochs} epochs...")
     if use_amp:
-        print("  混合精度训练 (AMP): 已启用")
+        print("  Mixed precision training (AMP): Enabled")
     
     import time
     start_time = time.time()
@@ -1179,7 +1099,6 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
         if verbose and (epoch + 1) % 10 == 0:
             print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Time: {epoch_time:.2f}s")
         
-        # Early stopping check
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_model_state = model.state_dict().copy()
@@ -1189,17 +1108,16 @@ def train_model(model, train_loader, val_loader, criterion, optimizer,
             patience_counter += 1
         
         if patience_counter >= patience:
-            print(f"\n早停触发于 epoch {epoch+1}")
+            print(f"\nEarly stopping at epoch {epoch+1}")
             break
     
     total_time = time.time() - start_time
     
-    # Restore best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
     
-    print(f"训练完成! 最佳模型在 epoch {best_epoch}, 验证损失: {best_val_loss:.4f}")
-    print(f"总训练时间: {total_time:.2f}s ({total_time/60:.2f} 分钟)")
+    print(f"Training complete! Best model at epoch {best_epoch}, validation loss: {best_val_loss:.4f}")
+    print(f"Total training time: {total_time:.2f}s ({total_time/60:.2f} minutes)")
     
     return train_losses, val_losses, best_epoch
 
@@ -1229,7 +1147,6 @@ print("\n" + "=" * 80)
 print("Step 5: Training Basic CNN Model")
 print("=" * 80)
 
-# Basic model parameters
 basic_params = {
     'num_conv_layers': 3,
     'base_filters': 32,
@@ -1240,11 +1157,6 @@ basic_params = {
     'patience': 20
 }
 
-print("\nBasic model parameters:")
-for key, value in basic_params.items():
-    print(f"  {key}: {value}")
-
-# Create basic model
 model_basic = PM25CNN2D(
     window_size=WINDOW_SIZE,
     num_features=num_features,
@@ -1254,27 +1166,21 @@ model_basic = PM25CNN2D(
     dropout_rate=basic_params['dropout_rate']
 ).to(DEVICE)
 
-# Count model parameters
 total_params = sum(p.numel() for p in model_basic.parameters())
 trainable_params = sum(p.numel() for p in model_basic.parameters() if p.requires_grad)
-print(f"\nModel parameter statistics:")
-print(f"  Total parameters: {total_params:,}")
-print(f"  Trainable parameters: {trainable_params:,}")
+print(f"\nModel parameters: Total={total_params:,}, Trainable={trainable_params:,}")
 
-# 自动优化batch size（仅在GPU上）
+# Optimize batch size for GPU
 if DEVICE.type == 'cuda':
-    print("\n" + "=" * 80)
-    print("自动优化Batch Size以充分利用GPU显存")
-    print("=" * 80)
+    print("\nOptimizing batch size for GPU memory...")
     optimal_batch_size = get_optimal_batch_size(
         PM25CNN2D, WINDOW_SIZE, num_features, DEVICE
     )
     
     if optimal_batch_size != BATCH_SIZE:
-        print(f"\n更新batch size: {BATCH_SIZE} -> {optimal_batch_size}")
+        print(f"Updating batch size: {BATCH_SIZE} -> {optimal_batch_size}")
         BATCH_SIZE = optimal_batch_size
         
-        # 重新创建DataLoader with optimized batch size
         train_loader = DataLoader(
             train_dataset,
             batch_size=BATCH_SIZE,
@@ -1305,17 +1211,13 @@ if DEVICE.type == 'cuda':
             prefetch_factor=PREFETCH_FACTOR if DATALOADER_WORKERS > 0 else None,
             drop_last=False
         )
-        print(f"DataLoader已更新，新的batch size: {BATCH_SIZE}")
-        print(f"  训练批次数: {len(train_loader)}")
-        print(f"  验证批次数: {len(val_loader)}")
-        print(f"  测试批次数: {len(test_loader)}")
+        print(f"DataLoader updated, new batch size: {BATCH_SIZE}")
 
-# PyTorch 2.0+ 编译优化（可选，进一步提升性能）
-USE_COMPILE = False  # 设置为True以启用torch.compile（需要PyTorch 2.0+）
+USE_COMPILE = False
 if USE_COMPILE and hasattr(torch, 'compile'):
-    print("\n启用PyTorch编译优化 (torch.compile)...")
+    print("\nEnabling PyTorch compilation optimization...")
     model_basic = torch.compile(model_basic, mode='reduce-overhead')
-    print("✓ 模型编译完成")
+    print("Model compilation complete")
 
 # Define loss function and optimizer
 criterion = nn.MSELoss()
@@ -1331,12 +1233,10 @@ train_losses_basic, val_losses_basic, best_epoch_basic = train_model(
     use_amp=USE_AMP
 )
 
-print(f"\n✓ Basic model training complete")
-print(f"  Best epoch: {best_epoch_basic}")
-print(f"  Final training loss: {train_losses_basic[best_epoch_basic-1]:.4f}")
-print(f"  Final validation loss: {val_losses_basic[best_epoch_basic-1]:.4f}")
+print(f"\nBasic model training complete - Best epoch: {best_epoch_basic}, "
+      f"Train loss: {train_losses_basic[best_epoch_basic-1]:.4f}, "
+      f"Val loss: {val_losses_basic[best_epoch_basic-1]:.4f}")
 
-# Evaluate basic model
 print("\nEvaluating basic model...")
 
 _, y_train_pred_basic_scaled, y_train_actual_scaled = validate(model_basic, train_loader, criterion, DEVICE, USE_AMP)
@@ -1490,7 +1390,6 @@ print("\nOptimized model parameters:")
 for key, value in best_params.items():
     print(f"  {key}: {value}")
 
-# Create optimized model
 model_optimized = PM25CNN2D(
     window_size=WINDOW_SIZE,
     num_features=num_features,
@@ -1502,18 +1401,15 @@ model_optimized = PM25CNN2D(
 
 optimizer_opt = optim.Adam(model_optimized.parameters(), lr=best_params['learning_rate'])
 
-# Train optimized model
 train_losses_opt, val_losses_opt, best_epoch_opt = train_model(
     model_optimized, train_loader, val_loader, criterion, optimizer_opt,
     num_epochs=300, device=DEVICE, patience=30, verbose=True, use_amp=USE_AMP
 )
 
-print(f"\n✓ Optimized model training complete")
-print(f"  Best epoch: {best_epoch_opt}")
-print(f"  Final training loss: {train_losses_opt[best_epoch_opt-1]:.4f}")
-print(f"  Final validation loss: {val_losses_opt[best_epoch_opt-1]:.4f}")
+print(f"\nOptimized model training complete - Best epoch: {best_epoch_opt}, "
+      f"Train loss: {train_losses_opt[best_epoch_opt-1]:.4f}, "
+      f"Val loss: {val_losses_opt[best_epoch_opt-1]:.4f}")
 
-# Evaluate optimized model
 print("\nEvaluating optimized model...")
 
 _, y_train_pred_opt_scaled, _ = validate(model_optimized, train_loader, criterion, DEVICE, USE_AMP)
@@ -1627,20 +1523,17 @@ feature_importance_scores = compute_gradient_importance(
     model_optimized, X_train, DEVICE, num_samples=500
 )
 
-# Normalize importance scores
 feature_importance_scores_norm = (feature_importance_scores / feature_importance_scores.sum()) * 100
 
-# Create feature importance DataFrame
 feature_importance = pd.DataFrame({
     'Feature': feature_names,
     'Importance': feature_importance_scores,
     'Importance_Norm': feature_importance_scores_norm
 })
 
-# Sort
 feature_importance = feature_importance.sort_values('Importance', ascending=False)
 
-print(f"\nTop 20 important features:")
+print("\nTop 20 important features:")
 print(feature_importance.head(20)[['Feature', 'Importance_Norm']].to_string(index=False))
 
 # ============================== Part 14: Visualization ==============================
@@ -1648,7 +1541,7 @@ print("\n" + "=" * 80)
 print("Step 10: Generating Visualization Charts")
 print("=" * 80)
 
-# 14.1 Training process curves
+# Training process curves
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
 # Basic model
@@ -1678,7 +1571,7 @@ plt.savefig(output_dir / 'training_curves.png', dpi=300, bbox_inches='tight')
 print("Saved: training_curves.png")
 plt.close()
 
-# 14.2 Prediction vs actual scatter plots
+# Prediction vs actual scatter plots
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
 models_data = [
@@ -1720,10 +1613,9 @@ plt.savefig(output_dir / 'prediction_scatter.png', dpi=300, bbox_inches='tight')
 print("Saved: prediction_scatter.png")
 plt.close()
 
-# 14.3 Time series prediction comparison
+# Time series prediction comparison
 fig, axes = plt.subplots(2, 1, figsize=(18, 10))
 
-# Test set index
 test_date_index = date_index[train_size+val_size:]
 
 # Plot last 300 points
@@ -1760,7 +1652,7 @@ plt.savefig(output_dir / 'timeseries_comparison.png', dpi=300, bbox_inches='tigh
 print("Saved: timeseries_comparison.png")
 plt.close()
 
-# 14.4 Residual analysis
+# Residual analysis
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
 for idx, (model_name, y_pred, y_true, dataset) in enumerate(models_data):
@@ -1784,7 +1676,7 @@ plt.savefig(output_dir / 'residuals_analysis.png', dpi=300, bbox_inches='tight')
 print("Saved: residuals_analysis.png")
 plt.close()
 
-# 14.5 Feature importance plot
+# Feature importance plot
 fig, ax = plt.subplots(1, 1, figsize=(12, 10))
 
 top_n = 20
@@ -1803,7 +1695,7 @@ plt.savefig(output_dir / 'feature_importance.png', dpi=300, bbox_inches='tight')
 print("Saved: feature_importance.png")
 plt.close()
 
-# 14.6 Model performance comparison bar charts
+# Model performance comparison bar charts
 fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
 test_results_plot = all_results[all_results['Dataset'] == 'Test']
@@ -1840,7 +1732,7 @@ plt.savefig(output_dir / 'model_comparison.png', dpi=300, bbox_inches='tight')
 print("Saved: model_comparison.png")
 plt.close()
 
-# 14.7 Error distribution histograms
+# Error distribution histograms
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
 errors_basic = y_test_actual_basic - y_test_pred_basic
@@ -1874,20 +1766,16 @@ print("\n" + "=" * 80)
 print("Step 11: Saving Results")
 print("=" * 80)
 
-# Save model performance
 all_results.to_csv(output_dir / 'model_performance.csv', index=False, encoding='utf-8-sig')
 print("Saved: model_performance.csv")
 
-# Save feature importance
 feature_importance.to_csv(output_dir / 'feature_importance.csv', index=False, encoding='utf-8-sig')
 print("Saved: feature_importance.csv")
 
-# Save best parameters
 best_params_df = pd.DataFrame([best_params])
 best_params_df.to_csv(output_dir / 'best_parameters.csv', index=False, encoding='utf-8-sig')
 print("Saved: best_parameters.csv")
 
-# Save predictions
 predictions_df = pd.DataFrame({
     'Date': test_date_index,
     'Actual': y_test_actual_basic,
@@ -1899,7 +1787,6 @@ predictions_df = pd.DataFrame({
 predictions_df.to_csv(output_dir / 'predictions.csv', index=False, encoding='utf-8-sig')
 print("Saved: predictions.csv")
 
-# Save model (PyTorch format)
 torch.save({
     'model_state_dict': model_optimized.state_dict(),
     'optimizer_state_dict': optimizer_opt.state_dict(),
@@ -1913,7 +1800,6 @@ torch.save({
 }, model_dir / 'cnn_optimized.pth')
 print("Saved: cnn_optimized.pth")
 
-# Save model architecture information
 model_info = {
     'window_size': WINDOW_SIZE,
     'num_features': num_features,
@@ -1931,27 +1817,6 @@ print("\n" + "=" * 80)
 print("Analysis Complete!")
 print("=" * 80)
 
-print("\nGenerated files:")
-print("\nCSV files:")
-print("  - model_performance.csv       Model performance comparison")
-print("  - feature_importance.csv      Feature importance")
-print("  - best_parameters.csv         Best parameters")
-print("  - predictions.csv             Prediction results")
-
-print("\nChart files:")
-print("  - training_curves.png         Training process curves")
-print("  - prediction_scatter.png      Prediction vs actual scatter plots")
-print("  - timeseries_comparison.png   Time series comparison")
-print("  - residuals_analysis.png      Residual analysis")
-print("  - feature_importance.png      Feature importance plot")
-print("  - model_comparison.png        Model performance comparison")
-print("  - error_distribution.png      Error distribution")
-
-print("\nModel files:")
-print("  - cnn_optimized.pth           CNN model (PyTorch format)")
-print("  - model_info.pkl              Model information")
-
-# Best model information
 best_model = test_results.iloc[0]
 print(f"\nBest model: {best_model['Model']}")
 print(f"  R² Score: {best_model['R²']:.4f}")
@@ -1963,11 +1828,8 @@ print("\nTop 5 most important features:")
 for i, (idx, row) in enumerate(feature_importance.head(5).iterrows(), 1):
     print(f"  {i}. {row['Feature']}: {row['Importance_Norm']:.2f}%")
 
-print(f"\nModel architecture:")
-print(f"  Time window: {WINDOW_SIZE} days")
-print(f"  Number of features: {num_features}")
-print(f"  Total parameters: {total_params:,}")
-print(f"  Trainable parameters: {trainable_params:,}")
+print(f"\nModel architecture: Window={WINDOW_SIZE} days, Features={num_features}, "
+      f"Parameters={total_params:,}")
 
 print("\n" + "=" * 80)
 print("CNN PM2.5 Concentration Prediction Complete!")

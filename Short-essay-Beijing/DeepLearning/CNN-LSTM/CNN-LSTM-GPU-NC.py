@@ -3,13 +3,12 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import warnings
 import pickle
 from pathlib import Path
 import glob
 import multiprocessing
-from itertools import product
 import time
 
 
@@ -123,20 +122,16 @@ era5_vars = [
 # Sequence lengths (multi-window comparison)
 sequence_lengths = [7, 14, 30]
 
-# GPU optimization parameters (optimized for RTX 5090 32GB)
-# 自动检测最优batch size（根据GPU显存）
+# GPU optimization parameters
 def get_optimal_batch_size(model_class, input_size, seq_length, device, 
                            min_batch=256, max_batch=2048, step=128):
-    """
-    自动确定最优batch size，充分利用RTX 5090的32GB显存
-    """
+    """Automatically determine optimal batch size based on GPU memory"""
     if device.type != 'cuda':
         return 64
     
-    print(f"\n正在测试最优batch size (范围: {min_batch}-{max_batch})...")
+    print(f"Testing optimal batch size (range: {min_batch}-{max_batch})...")
     torch.cuda.empty_cache()
     
-    # 创建测试模型
     test_model = model_class(
         input_size=input_size,
         hidden_size=64,
@@ -147,14 +142,12 @@ def get_optimal_batch_size(model_class, input_size, seq_length, device,
     ).to(device)
     test_model.train()
     
-    # 创建测试数据
     test_X = torch.randn(1, seq_length, input_size, dtype=torch.float32).to(device)
     test_y = torch.randn(1, dtype=torch.float32).to(device)
     
     optimal_batch = min_batch
     current_batch = min_batch
     
-    # 创建临时optimizer和scaler
     test_optimizer = optim.Adam(test_model.parameters(), lr=0.001)
     scaler = GradScaler()
     
@@ -163,11 +156,9 @@ def get_optimal_batch_size(model_class, input_size, seq_length, device,
             torch.cuda.empty_cache()
             test_model.zero_grad()
             
-            # 测试当前batch size
             batch_X = test_X.repeat(current_batch, 1, 1)
             batch_y = test_y.repeat(current_batch)
             
-            # 混合精度前向和反向传播
             with autocast():
                 y_pred = test_model(batch_X)
                 loss = nn.MSELoss()(y_pred, batch_y)
@@ -176,70 +167,42 @@ def get_optimal_batch_size(model_class, input_size, seq_length, device,
             scaler.step(test_optimizer)
             scaler.update()
             
-            # 如果成功，更新最优batch
             optimal_batch = current_batch
             memory_used = torch.cuda.memory_allocated(device) / 1024**3
-            print(f"  Batch size {current_batch:4d}: ✓ 通过 (显存: {memory_used:.2f} GB)")
+            print(f"  Batch size {current_batch:4d}: OK (Memory: {memory_used:.2f} GB)")
             
-            # 增加batch size
             current_batch += step
-            
-            # 清理
             del batch_X, batch_y, y_pred, loss
             
         except RuntimeError as e:
             if "out of memory" in str(e):
-                print(f"  Batch size {current_batch:4d}: ✗ 显存不足")
+                print(f"  Batch size {current_batch:4d}: Out of memory")
                 torch.cuda.empty_cache()
                 break
             else:
                 raise e
     
-    # 使用85%的最大可用batch作为安全值
     optimal_batch = int(optimal_batch * 0.85)
     if optimal_batch < min_batch:
         optimal_batch = min_batch
     
-    # 清理资源
     del test_model, test_X, test_y, test_optimizer, scaler
     torch.cuda.empty_cache()
     
-    print(f"✓ 最优batch size: {optimal_batch}")
+    print(f"Optimal batch size: {optimal_batch}")
     return optimal_batch
 
-# 初始batch size（将在模型创建后自动优化）
-BATCH_SIZE = 512 if torch.cuda.is_available() else 64  # RTX 5090初始值更大
-
-# 数据加载优化（充分利用25核CPU）
-NUM_WORKERS = min(16, MAX_WORKERS) if torch.cuda.is_available() else 4  # 增加workers
-PIN_MEMORY = torch.cuda.is_available()  # Pinned memory for faster transfer
+BATCH_SIZE = 512 if torch.cuda.is_available() else 64
+NUM_WORKERS = min(16, MAX_WORKERS) if torch.cuda.is_available() else 4
+PIN_MEMORY = torch.cuda.is_available()
 PERSISTENT_WORKERS = True if torch.cuda.is_available() and NUM_WORKERS > 0 else False
-PREFETCH_FACTOR = 4 if NUM_WORKERS > 0 else 2  # 预取更多批次，减少GPU等待
+PREFETCH_FACTOR = 4 if NUM_WORKERS > 0 else 2
 
-# PyTorch性能优化设置
 if torch.cuda.is_available():
-    # 启用TensorFloat-32 (TF32) 加速（RTX 30系列及以上，包括5090）
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    # 自动选择最优卷积算法
     torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False  # 允许非确定性操作以提升性能
-
-print(f"Data time range: {start_date.date()} to {end_date.date()}")
-print(f"Target variable: PM2.5 concentration")
-print(f"Sequence lengths: {sequence_lengths} days")
-print(f"Output directory: {output_dir}")
-print(f"Model save directory: {model_dir}")
-print(f"CPU cores: {CPU_COUNT}, parallel workers: {MAX_WORKERS}")
-print(f"\nGPU optimization parameters (RTX 5090 32GB):")
-print(f"  Initial batch size: {BATCH_SIZE} (将自动优化)")
-print(f"  Data loading processes: {NUM_WORKERS}")
-print(f"  Pin Memory: {PIN_MEMORY}")
-print(f"  Persistent workers: {PERSISTENT_WORKERS}")
-print(f"  Prefetch factor: {PREFETCH_FACTOR}")
-if torch.cuda.is_available():
-    print(f"  TF32 acceleration: Enabled")
-    print(f"  cuDNN benchmark: Enabled")
+    torch.backends.cudnn.deterministic = False
 
 # ============================== Part 2: Data Loading Functions ==============================
 def daterange(start, end):
@@ -345,31 +308,26 @@ def read_all_pollution():
     return pd.DataFrame()
 
 def read_single_era5_file(args):
-    """读取单个ERA5 NetCDF文件，提取变量和时间序列数据（多进程兼容）
+    """Read single ERA5 NetCDF file and extract variables (multiprocessing compatible)
     
     Args:
         args: tuple of (file_path, era5_vars_list, beijing_lats_array, beijing_lons_array)
     """
     file_path, era5_vars_list, beijing_lats_array, beijing_lons_array = args
     try:
-        # 首先检查文件包含哪些变量
         with NetCDFDataset(file_path, mode='r') as nc_file:
             file_vars = list(nc_file.variables.keys())
-            # 过滤掉坐标变量和维度变量
             data_vars = [v for v in file_vars 
                         if v not in ['time', 'latitude', 'longitude', 'lat', 'lon', 
                                     'expver', 'surface', 'number', 'valid_time', 
                                     'forecast_time', 'verification_time', 'time1', 'time2']]
             
-            # 只保留我们需要的变量
             available_vars = [v for v in data_vars if v in era5_vars_list]
             
             if not available_vars:
                 return None, None
         
-        # 读取数据集
         with xr.open_dataset(file_path, engine="netcdf4", decode_times=True) as ds:
-            # 重命名坐标
             rename_map = {}
             for tkey in ("valid_time", "forecast_time", "verification_time", "time1", "time2"):
                 if tkey in ds.coords and "time" not in ds.coords:
@@ -381,13 +339,11 @@ def read_single_era5_file(args):
             if rename_map:
                 ds = ds.rename(rename_map)
             
-            # 解码时间
             try:
                 ds = xr.decode_cf(ds)
             except Exception:
                 pass
             
-            # 删除不需要的坐标
             drop_vars = []
             for coord in ("expver", "surface"):
                 if coord in ds:
@@ -395,19 +351,15 @@ def read_single_era5_file(args):
             if drop_vars:
                 ds = ds.drop_vars(drop_vars)
             
-            # 处理ensemble维度
             if "number" in ds.dims:
                 ds = ds.mean(dim="number", skipna=True)
             
-            # 检查时间坐标
             if "time" not in ds.coords:
                 return None, None
             
-            # 选择需要的变量（每个文件可能只有一个变量）
             ds_subset = ds[available_vars]
             ds_subset = ds_subset.sortby('time')
             
-            # 空间选择（北京区域）
             if 'latitude' in ds_subset.coords and 'longitude' in ds_subset.coords:
                 lat_values = ds_subset['latitude']
                 if len(lat_values) > 0:
@@ -422,62 +374,49 @@ def read_single_era5_file(args):
                     if 'latitude' in ds_subset.dims and 'longitude' in ds_subset.dims:
                         ds_subset = ds_subset.mean(dim=['latitude', 'longitude'], skipna=True)
             
-            # 重采样到日数据
             ds_daily = ds_subset.resample(time='1D').mean(keep_attrs=False)
             ds_daily = ds_daily.dropna('time', how='all')
             
             if ds_daily.sizes.get('time', 0) == 0:
                 return None, None
             
-            # 转换为DataFrame
             df = ds_daily.to_dataframe()
             df.index = pd.to_datetime(df.index)
             
-            # 确保DataFrame只有一列，且列名为变量名
             if len(available_vars) == 1:
                 var_name = available_vars[0]
-                # 如果DataFrame有多列，只保留变量列
                 if var_name in df.columns:
                     df = df[[var_name]]
                 elif len(df.columns) == 1:
-                    # 如果只有一列但不是变量名，重命名
                     df.columns = [var_name]
                 return var_name, df
             else:
-                # 多个变量（理论上不应该发生，但保留兼容性）
                 return available_vars, df
             
     except Exception as exc:
         return None, None
 
 def read_all_era5():
-    """递归读取所有ERA5 NetCDF文件，按变量分组并按时间对齐（使用多进程避免netcdf4线程安全问题）"""
-    print("\n加载气象数据...")
-    print(f"使用 {MAX_WORKERS} 个并行进程（multiprocessing，避免netcdf4线程安全问题）")
-    print(f"气象数据目录: {era5_path}")
-    print(f"目录是否存在: {os.path.exists(era5_path)}")
+    """Read all ERA5 NetCDF files recursively, group by variables and align by time"""
+    print("\nLoading meteorological data...")
+    print(f"Using {MAX_WORKERS} parallel processes")
+    print(f"Data directory: {era5_path}")
     
     if not os.path.exists(era5_path):
-        print(f"\n❌ 错误: 目录不存在: {era5_path}")
+        print(f"Error: Directory does not exist: {era5_path}")
         return pd.DataFrame()
     
-    # 递归搜索所有.nc文件
-    print("\n递归搜索所有NetCDF文件...")
+    print("Searching for NetCDF files...")
     all_nc_files = glob.glob(os.path.join(era5_path, "**", "*.nc"), recursive=True)
-    print(f"找到 {len(all_nc_files)} 个NetCDF文件")
+    print(f"Found {len(all_nc_files)} NetCDF files")
     
     if not all_nc_files:
-        print("\n❌ 错误: 未找到任何NetCDF文件!")
+        print("Error: No NetCDF files found!")
         return pd.DataFrame()
     
-    if len(all_nc_files) > 0:
-        print(f"示例文件: {[os.path.basename(f) for f in all_nc_files[:5]]}")
+    print(f"Reading {len(all_nc_files)} files in parallel...")
+    file_data_dict = {}
     
-    # 并行读取所有文件（使用多进程避免netcdf4线程安全问题）
-    print(f"\n开始并行读取 {len(all_nc_files)} 个文件（多进程模式）...")
-    file_data_dict = {}  # {variable_name: list of DataFrames}
-    
-    # 准备多进程参数（包含全局变量）
     args_list = [(file_path, era5_vars, beijing_lats, beijing_lons) 
                  for file_path in all_nc_files]
     
@@ -490,18 +429,16 @@ def read_all_era5():
         
         if TQDM_AVAILABLE:
             for future in tqdm(as_completed(futures), total=len(futures), 
-                             desc="读取气象数据文件", unit="文件"):
+                             desc="Reading ERA5 files", unit="file"):
                 file_path = futures[future]
                 var_name, df_result = future.result()
                 
                 if var_name is not None and df_result is not None and not df_result.empty:
                     successful_reads += 1
-                    # 如果返回的是单个变量名
                     if isinstance(var_name, str):
                         if var_name not in file_data_dict:
                             file_data_dict[var_name] = []
                         file_data_dict[var_name].append(df_result)
-                    # 如果返回的是变量列表（理论上不应该发生，但保留兼容性）
                     elif isinstance(var_name, list):
                         for v in var_name:
                             if v not in file_data_dict:
@@ -529,49 +466,37 @@ def read_all_era5():
                     failed_reads += 1
                 
                 if i % 100 == 0 or i == len(futures):
-                    print(f"  进度: {i}/{len(futures)} 文件 (成功: {successful_reads}, 失败: {failed_reads}, {i/len(futures)*100:.1f}%)")
+                    print(f"  Progress: {i}/{len(futures)} files (Success: {successful_reads}, Failed: {failed_reads})")
     
-    print(f"\n文件读取完成:")
-    print(f"  成功读取: {successful_reads}/{len(all_nc_files)} 文件")
-    print(f"  失败: {failed_reads} 文件")
-    print(f"  发现的变量: {list(file_data_dict.keys())}")
+    print(f"File reading complete: {successful_reads}/{len(all_nc_files)} successful")
+    print(f"Variables found: {list(file_data_dict.keys())}")
     
     if not file_data_dict:
-        print("\n❌ 错误: 没有成功读取任何数据!")
+        print("Error: No data successfully read!")
         return pd.DataFrame()
     
-    # 按变量合并数据
-    print("\n按变量合并数据...")
+    print("Merging data by variables...")
     variable_dfs = {}
     
     for var_name, df_list in file_data_dict.items():
-        print(f"  合并变量 '{var_name}': {len(df_list)} 个文件...")
         if len(df_list) == 1:
             var_df = df_list[0]
         else:
-            # 合并多个DataFrame
             var_df = pd.concat(df_list, axis=0)
-            # 对相同时间点的值取平均值（如果有多个文件覆盖相同时间段）
             var_df = var_df.groupby(var_df.index).mean()
             var_df.sort_index(inplace=True)
         
-        # 确保列名为变量名
         if var_df.shape[1] == 1:
             var_df.columns = [var_name]
         else:
-            # 如果有多列，取平均值（理论上不应该发生）
             var_df = var_df.mean(axis=1).to_frame(name=var_name)
         
         variable_dfs[var_name] = var_df
-        print(f"    变量 '{var_name}' 时间范围: {var_df.index.min()} 到 {var_df.index.max()}, 共 {len(var_df)} 天")
     
-    # 按时间对齐所有变量
-    print("\n按时间对齐所有变量...")
     if not variable_dfs:
-        print("❌ 错误: 没有可用的变量数据!")
+        print("Error: No variable data available!")
         return pd.DataFrame()
     
-    # 使用outer join合并所有变量
     df_era5_all = None
     for var_name, var_df in variable_dfs.items():
         if df_era5_all is None:
@@ -579,33 +504,22 @@ def read_all_era5():
         else:
             df_era5_all = df_era5_all.join(var_df, how='outer')
     
-    print(f"合并后形状: {df_era5_all.shape}")
-    print(f"时间范围: {df_era5_all.index.min()} 到 {df_era5_all.index.max()}")
-    print(f"变量列表: {list(df_era5_all.columns)}")
+    print(f"Merged shape: {df_era5_all.shape}")
+    print(f"Time range: {df_era5_all.index.min()} to {df_era5_all.index.max()}")
     
-    # 处理缺失值
-    print("\n处理缺失值...")
-    initial_na = df_era5_all.isna().sum().sum()
-    print(f"  初始缺失值数量: {initial_na}")
-    
-    # 按列填充缺失值
+    print("Handling missing values...")
     df_era5_all.ffill(inplace=True)
     df_era5_all.bfill(inplace=True)
     df_era5_all.fillna(df_era5_all.mean(), inplace=True)
     
-    final_na = df_era5_all.isna().sum().sum()
-    print(f"  处理后缺失值数量: {final_na}")
-    
-    # 只保留时间范围内的数据
     df_era5_all = df_era5_all[
         (df_era5_all.index >= start_date) & 
         (df_era5_all.index <= end_date)
     ]
     
-    print(f"\n气象数据加载完成!")
-    print(f"  最终形状: {df_era5_all.shape}")
-    print(f"  时间范围: {df_era5_all.index.min()} 到 {df_era5_all.index.max()}")
-    print(f"  变量数量: {len(df_era5_all.columns)}")
+    print(f"Meteorological data loading complete!")
+    print(f"Final shape: {df_era5_all.shape}")
+    print(f"Variables: {len(df_era5_all.columns)}")
     
     return df_era5_all
 
@@ -786,32 +700,25 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, num_epoch
         for X_batch, y_batch in train_iterator:
             X_batch, y_batch = X_batch.to(device, non_blocking=True), y_batch.to(device, non_blocking=True)
             
-            optimizer.zero_grad(set_to_none=True)  # More efficient gradient clearing
+            optimizer.zero_grad(set_to_none=True)
             
-            # Mixed precision forward pass
             if use_amp:
                 with autocast():
                     outputs = model(X_batch)
                     loss = criterion(outputs, y_batch)
                 
-                # Mixed precision backward pass
                 scaler.scale(loss).backward()
-                
-                # Gradient clipping (prevent gradient explosion) - 在unscale后立即裁剪
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                # Standard training (CPU mode)
                 outputs = model(X_batch)
                 loss = criterion(outputs, y_batch)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
             
-            # 使用detach()避免保留计算图，减少内存占用
             train_loss += loss.detach().item() * X_batch.size(0)
             batch_count += 1
         
@@ -1134,20 +1041,15 @@ for seq_length in sequence_lengths:
     
     model_basic = CNNLSTMAttention(**basic_params).to(device)
     
-    # 自动优化batch size（仅在GPU上）
     if device.type == 'cuda':
-        print("\n" + "─"*80)
-        print("自动优化Batch Size以充分利用RTX 5090显存")
-        print("─"*80)
         optimal_batch_size = get_optimal_batch_size(
             CNNLSTMAttention, input_size, seq_length, device
         )
         
         if optimal_batch_size != BATCH_SIZE:
-            print(f"\n更新batch size: {BATCH_SIZE} -> {optimal_batch_size}")
+            print(f"Updating batch size: {BATCH_SIZE} -> {optimal_batch_size}")
             BATCH_SIZE = optimal_batch_size
             
-            # 重新创建DataLoader with optimized batch size
             train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
                                       pin_memory=PIN_MEMORY, num_workers=NUM_WORKERS, 
                                       persistent_workers=PERSISTENT_WORKERS if NUM_WORKERS > 0 else False,
@@ -1160,21 +1062,16 @@ for seq_length in sequence_lengths:
                                      pin_memory=PIN_MEMORY, num_workers=NUM_WORKERS,
                                      persistent_workers=PERSISTENT_WORKERS if NUM_WORKERS > 0 else False,
                                      prefetch_factor=PREFETCH_FACTOR if NUM_WORKERS > 0 else None)
-            print(f"DataLoader已更新，新的batch size: {BATCH_SIZE}")
-            print(f"  训练批次数: {len(train_loader)}")
-            print(f"  验证批次数: {len(val_loader)}")
-            print(f"  测试批次数: {len(test_loader)}")
+            print(f"DataLoader updated, batch size: {BATCH_SIZE}")
     
-    # PyTorch 2.0+ 编译优化（可选，进一步提升性能）
-    use_compile = True  # 启用torch.compile加速（需要PyTorch 2.0+）
+    use_compile = True
     if use_compile and hasattr(torch, 'compile') and device.type == 'cuda':
-        print("\n启用PyTorch编译优化 (torch.compile)...")
         try:
             model_basic = torch.compile(model_basic, mode='reduce-overhead')
-            print("✓ 模型编译完成，预计性能提升20-30%")
+            print("Model compilation completed")
         except Exception as e:
-            print(f"⚠️  编译失败，使用标准模式: {e}")
-            USE_COMPILE = False
+            print(f"Compilation failed, using standard mode: {e}")
+            use_compile = False
     
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model_basic.parameters(), lr=0.001)
