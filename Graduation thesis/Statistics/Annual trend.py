@@ -1,12 +1,3 @@
-"""
-China PM2.5 Spatiotemporal Variation Analysis (2000-2023) - Optimized Version
-Optimizations:
-1. open_mfdataset parallel lazy loading
-2. Numba fast pixel-wise regression / Mann-Kendall
-3. Memory-safe chunking
-4. Original function interface unchanged
-"""
-
 # ---------------- 0. Environment ----------------
 import os
 import numpy as np
