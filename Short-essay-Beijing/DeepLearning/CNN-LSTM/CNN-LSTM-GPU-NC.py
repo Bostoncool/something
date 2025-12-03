@@ -23,6 +23,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.cuda.amp import autocast, GradScaler
+import math
 
 # Get CPU core count
 CPU_COUNT = multiprocessing.cpu_count()
@@ -138,7 +139,8 @@ def get_optimal_batch_size(model_class, input_size, seq_length, device,
         num_layers=2,
         num_filters=32,
         kernel_size=3,
-        dropout=0.2
+        dropout=0.2,
+        n_heads=4
     ).to(device)
     test_model.train()
     
@@ -149,7 +151,7 @@ def get_optimal_batch_size(model_class, input_size, seq_length, device,
     current_batch = min_batch
     
     test_optimizer = optim.Adam(test_model.parameters(), lr=0.001)
-    scaler = GradScaler()
+    scaler = GradScaler('cuda')
     
     while current_batch <= max_batch:
         try:
@@ -603,70 +605,154 @@ class TimeSeriesDataset(Dataset):
         return torch.FloatTensor(X_seq), torch.FloatTensor([y_target])
 
 # ============================== Part 5: CNN-LSTM-Attention Model ==============================
-class CNNLSTMAttention(nn.Module):
-    """CNN-LSTM-Attention model"""
-    def __init__(self, input_size, hidden_size, num_layers, num_filters, kernel_size, dropout=0.2):
-        super(CNNLSTMAttention, self).__init__()
-        
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=400):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        # 计算PE表
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        self.register_buffer("pe", pe.unsqueeze(0))
+
+    def forward(self, x):
+        """
+        x: (B, T, H)
+        """
+        x = x + self.pe[:, :x.size(1)]
+        return self.dropout(x)
+
+
+class CNNLSTM_MultiHeadAttention(nn.Module):
+    """
+    升级版本：
+    CNN + LSTM + Multi-Head Attention + Residual + LayerNorm + Position Encoding
+    """
+    def __init__(
+        self,
+        input_size,
+        hidden_size=64,
+        num_layers=2,
+        num_filters=32,
+        kernel_size=3,
+        dropout=0.2,
+        n_heads=4
+    ):
+        super().__init__()
+
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        
-        # 1D CNN layer
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=num_filters, 
-                               kernel_size=kernel_size, padding=kernel_size//2)
-        self.bn1 = nn.BatchNorm1d(num_filters)
-        self.relu = nn.ReLU()
-        self.pool = nn.MaxPool1d(kernel_size=2, stride=1, padding=0)
-        self.dropout1 = nn.Dropout(dropout)
-        
-        # LSTM layer
-        self.lstm = nn.LSTM(input_size=num_filters, hidden_size=hidden_size, 
-                           num_layers=num_layers, batch_first=True, dropout=dropout if num_layers > 1 else 0)
-        
-        # Attention layer
-        self.attention = nn.Linear(hidden_size, 1)
-        
-        # Fully connected layer
-        self.fc = nn.Sequential(
+        self.n_heads = n_heads
+
+        # -------------------------
+        # 1) Position Encoding
+        # -------------------------
+        self.pos_encoding = PositionalEncoding(hidden_size, dropout)
+
+        # -------------------------
+        # 2) CNN Feature Extractor
+        # -------------------------
+        self.conv = nn.Conv1d(
+            in_channels=input_size,
+            out_channels=num_filters,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2
+        )
+        self.act = nn.ReLU()
+
+        # LayerNorm比BatchNorm更适合时间序列
+        self.ln_cnn = nn.LayerNorm(num_filters)
+
+        # -------------------------
+        # 3) LSTM
+        # -------------------------
+        self.lstm = nn.LSTM(
+            input_size=num_filters,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0
+        )
+
+        # -------------------------
+        # 4) Multi-Head Attention
+        # -------------------------
+        self.attn = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=n_heads,
+            batch_first=True,
+            dropout=dropout
+        )
+
+        # Residual + Norm
+        self.ln_attn = nn.LayerNorm(hidden_size)
+
+        # -------------------------
+        # 5) FeedForward (Transformer-style)
+        # -------------------------
+        self.ff = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size * 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size * 2, hidden_size)
+        )
+        self.ln_ff = nn.LayerNorm(hidden_size)
+
+        # -------------------------
+        # 6) Prediction Layer
+        # -------------------------
+        self.output = nn.Sequential(
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_size // 2, 1)
         )
-        
+
     def forward(self, x, return_attention=False):
-        # x: (batch, seq_len, features)
-        batch_size, seq_len, features = x.size()
-        
-        # CNN: (batch, seq_len, features) -> (batch, features, seq_len)
-        x = x.permute(0, 2, 1)
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.dropout1(x)
-        
-        # (batch, num_filters, seq_len) -> (batch, seq_len, num_filters)
-        x = x.permute(0, 2, 1)
-        
-        # LSTM
-        lstm_out, (h_n, c_n) = self.lstm(x)
-        # lstm_out: (batch, seq_len, hidden_size)
-        
-        # Attention
-        attention_weights = torch.softmax(self.attention(lstm_out), dim=1)
-        # attention_weights: (batch, seq_len, 1)
-        
-        # Weighted sum
-        context_vector = torch.sum(attention_weights * lstm_out, dim=1)
-        # context_vector: (batch, hidden_size)
-        
-        # Output
-        output = self.fc(context_vector)
-        
+        """
+        input: (B, seq_len, features)
+        """
+        B, T, F = x.size()
+
+        # -------- CNN --------
+        xc = self.conv(x.permute(0, 2, 1))       # (B, F, T)
+        xc = self.act(xc).permute(0, 2, 1)       # (B, T, F)
+        xc = self.ln_cnn(xc)
+
+        # -------- LSTM --------
+        lstm_out, _ = self.lstm(xc)              # (B, T, H)
+
+        # -------- Position Encoding --------
+        lstm_out = self.pos_encoding(lstm_out)
+
+        # -------- Multi-Head Attention --------
+        attn_out, attn_weights = self.attn(
+            lstm_out, lstm_out, lstm_out
+        )
+
+        # Residual
+        attn_out = self.ln_attn(attn_out + lstm_out)
+
+        # -------- FeedForward block --------
+        ff_out = self.ff(attn_out)
+        ff_out = self.ln_ff(ff_out + attn_out)   # residual
+
+        # 全序列加权求和
+        context = ff_out.mean(dim=1)
+
+        y = self.output(context)
+
         if return_attention:
-            return output, attention_weights
-        return output
+            return y, attn_weights.mean(dim=1)
+
+        return y
 
 # ============================== Part 6: GPU Accelerated Training and Evaluation Functions ==============================
 def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs, patience, device):
@@ -1032,18 +1118,19 @@ for seq_length in sequence_lengths:
         'num_layers': 2,
         'num_filters': 32,
         'kernel_size': 3,
-        'dropout': 0.2
+        'dropout': 0.2,
+        'n_heads': 4
     }
     
     print("\nBasic model parameters:")
     for key, value in basic_params.items():
         print(f"  {key}: {value}")
     
-    model_basic = CNNLSTMAttention(**basic_params).to(device)
+    model_basic = CNNLSTM_MultiHeadAttention(**basic_params).to(device)
     
     if device.type == 'cuda':
         optimal_batch_size = get_optimal_batch_size(
-            CNNLSTMAttention, input_size, seq_length, device
+            CNNLSTM_MultiHeadAttention, input_size, seq_length, device
         )
         
         if optimal_batch_size != BATCH_SIZE:
@@ -1073,7 +1160,7 @@ for seq_length in sequence_lengths:
             print(f"Compilation failed, using standard mode: {e}")
             use_compile = False
     
-    criterion = nn.MSELoss()
+    criterion = nn.SmoothL1Loss(beta=1.0)
     optimizer = optim.Adam(model_basic.parameters(), lr=0.001)
     
     print("\nStarting training...")
@@ -1179,10 +1266,11 @@ for seq_length in sequence_lengths:
                 'num_layers': int(num_layers),
                 'num_filters': int(num_filters),
                 'kernel_size': int(kernel_size),
-                'dropout': dropout
+                'dropout': dropout,
+                'n_heads': 4
             }
             
-            model_temp = CNNLSTMAttention(**params_test).to(device)
+            model_temp = CNNLSTM_MultiHeadAttention(**params_test).to(device)
             criterion_temp = nn.MSELoss()
             optimizer_temp = optim.Adam(model_temp.parameters(), lr=learning_rate)
             
@@ -1266,10 +1354,11 @@ for seq_length in sequence_lengths:
                                     'num_layers': nl,
                                     'num_filters': nf,
                                     'kernel_size': ks,
-                                    'dropout': dr
+                                    'dropout': dr,
+                                    'n_heads': 4
                                 }
                                 
-                                model_temp = CNNLSTMAttention(**params_test).to(device)
+                                model_temp = CNNLSTM_MultiHeadAttention(**params_test).to(device)
                                 criterion_temp = nn.MSELoss()
                                 optimizer_temp = optim.Adam(model_temp.parameters(), lr=lr)
                                 
@@ -1316,7 +1405,7 @@ for seq_length in sequence_lengths:
         print(f"  {key}: {value}")
     print(f"  learning_rate: {best_lr}")
     
-    model_optimized = CNNLSTMAttention(**optimized_params).to(device)
+    model_optimized = CNNLSTM_MultiHeadAttention(**optimized_params).to(device)
     
     # PyTorch 2.0+ 编译优化（进一步提升性能）
     if use_compile and hasattr(torch, 'compile') and device.type == 'cuda':
@@ -1327,7 +1416,7 @@ for seq_length in sequence_lengths:
         except Exception as e:
             print(f"⚠️  编译失败，使用标准模式: {e}")
     
-    criterion = nn.MSELoss()
+    criterion = nn.SmoothL1Loss(beta=1.0)
     optimizer = optim.Adam(model_optimized.parameters(), lr=best_lr)
     
     print("\nStarting training...")

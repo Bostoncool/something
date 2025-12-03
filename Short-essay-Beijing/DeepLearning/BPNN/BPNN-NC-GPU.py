@@ -27,13 +27,20 @@ warnings.filterwarnings('ignore')
 CPU_COUNT = multiprocessing.cpu_count()
 MAX_WORKERS = max(4, CPU_COUNT - 1)
 
+# 设置多进程启动方法，确保使用真正的多进程而非多线程
+# 这对于netcdf4等非线程安全的库非常重要
 if hasattr(multiprocessing, 'set_start_method'):
     try:
         if os.name != 'nt':
+            # Linux/Unix系统使用fork，性能更好
             multiprocessing.set_start_method('fork', force=True)
+            print(f"Multiprocessing start method: fork")
         else:
+            # Windows系统使用spawn
             multiprocessing.set_start_method('spawn', force=True)
+            print(f"Multiprocessing start method: spawn")
     except RuntimeError:
+        # 如果已经设置过，忽略错误
         pass
 
 try:
@@ -185,9 +192,14 @@ def build_file_index(base_path, prefix):
     return file_index
 
 def read_pollution_day(args):
-    date, file_index_all, file_index_extra, pollution_all_path, pollution_extra_path, pollutants = args
+    """
+    读取单日污染数据（多进程版本）
+    使用字典查找文件路径，时间复杂度O(1)
+    """
+    date, file_index_all, file_index_extra, pollutants = args
     date_str = date.strftime('%Y%m%d')
     
+    # 使用字典O(1)查找，避免遍历
     all_file = file_index_all.get(date_str)
     extra_file = file_index_extra.get(date_str)
     
@@ -219,17 +231,29 @@ def read_pollution_day(args):
         return None
 
 def read_all_pollution():
+    """
+    使用多进程读取所有污染数据
+    优化：预先构建文件索引字典，避免每次遍历查找（O(1)查找）
+    """
     print("\nLoading pollution data...")
+    print(f"Using {MAX_WORKERS} parallel workers (multiprocessing)")
+    
+    # 预先构建文件索引字典，只构建一次，避免重复遍历
+    print("Building file index dictionary...")
     file_index_all = build_file_index(pollution_all_path, 'beijing_all')
     file_index_extra = build_file_index(pollution_extra_path, 'beijing_extra')
+    print(f"  Found {len(file_index_all)} files in all directory")
+    print(f"  Found {len(file_index_extra)} files in extra directory")
     
     dates = list(daterange(start_date, end_date))
+    # 优化：移除不必要的参数传递，只传递需要的字典和污染物列表
     args_list = [
-        (date, file_index_all, file_index_extra, pollution_all_path, pollution_extra_path, pollutants)
+        (date, file_index_all, file_index_extra, pollutants)
         for date in dates
     ]
     
     pollution_dfs = []
+    # 使用多进程Pool，确保每个进程独立运行
     with Pool(processes=MAX_WORKERS) as pool:
         if TQDM_AVAILABLE:
             results = list(tqdm(
@@ -254,10 +278,16 @@ def read_all_pollution():
     return pd.DataFrame()
 
 def read_single_era5_file(args):
+    """
+    读取单个ERA5 NetCDF文件（多进程版本）
+    每个进程独立打开和关闭文件，避免线程安全问题
+    """
     file_path, beijing_lat_min, beijing_lat_max, beijing_lon_min, beijing_lon_max = args
     
     try:
-        with xr.open_dataset(file_path, engine="netcdf4", decode_times=True) as ds:
+        # 使用context manager确保文件正确关闭，避免资源泄漏
+        # 每个进程独立打开文件，避免netcdf4库的线程安全问题
+        with xr.open_dataset(file_path, engine="netcdf4", decode_times=True, lock=False) as ds:
             rename_map = {}
             for tkey in ("valid_time", "forecast_time", "verification_time", "time1", "time2"):
                 if tkey in ds.coords and "time" not in ds.coords:
@@ -328,15 +358,17 @@ def read_single_era5_file(args):
 
 def read_all_era5():
     """
-    Read all ERA5 data from NetCDF files recursively.
-    Each file may contain only one variable, so we need to:
-    1. Recursively find all .nc files
-    2. Read each file and extract variables
-    3. Group variables by name and align by time
-    4. Merge all variables together
+    使用多进程读取所有ERA5气象数据
+    优化：每个进程独立处理文件，避免netcdf4库的线程安全问题
+    
+    处理流程：
+    1. 递归查找所有.nc文件
+    2. 使用多进程并行读取每个文件并提取变量
+    3. 按变量名分组并对齐时间
+    4. 合并所有变量
     """
     print("\nLoading meteorological data...")
-    print(f"Using {MAX_WORKERS} parallel workers")
+    print(f"Using {MAX_WORKERS} parallel workers (multiprocessing)")
     print(f"Meteorological data directory: {era5_path}")
     print(f"Directory exists: {os.path.exists(era5_path)}")
     
@@ -377,13 +409,14 @@ def read_all_era5():
         for file_path in all_nc_files
     ]
     
-    # Use multiprocessing Pool
+    # 使用多进程Pool，确保每个进程独立运行，避免netcdf4线程安全问题
+    # 每个进程会独立打开和关闭NetCDF文件，不会共享文件句柄
     with Pool(processes=MAX_WORKERS) as pool:
         if TQDM_AVAILABLE:
             results = list(tqdm(
                 pool.imap(read_single_era5_file, args_list),
                 total=len(args_list),
-                desc="Reading NetCDF files",
+                desc="Reading NetCDF files (multiprocessing)",
                 unit="file"
             ))
         else:

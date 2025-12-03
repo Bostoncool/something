@@ -470,31 +470,51 @@ if __name__ == '__main__':
     gc.collect()
 
     print("\n" + "=" * 80)
-    print("Step 4: Feature Selection and Data Preparation")
+    print("Step 4: Advanced Feature Engineering (Time Series + Lags)")
     print("=" * 80)
 
+    # ============================================
+    # C1. 强化特征工程（重构版本）
+    # ============================================
+
+    df = df_combined.copy()
+
+    # ====== 1. 加入核心滞后特征（必须） ======
+    lags = [1, 2, 3, 7, 14]
+    for lag in lags:
+        df[f'pm25_lag_{lag}'] = df['PM2.5'].shift(lag)
+
+    # 污染物滞后项（绝不能使用当天的，以免目标泄漏）
+    pollutant_cols = ['PM10', 'NO2', 'SO2', 'CO', 'O3']
+    for col in pollutant_cols:
+        for lag in [1, 2, 7]:
+            df[f'{col}_lag_{lag}'] = df[col].shift(lag)
+
+    # ====== 2. 滚动窗口特征 ======
+    df['pm25_ma_3'] = df['PM2.5'].rolling(3).mean()
+    df['pm25_ma_7'] = df['PM2.5'].rolling(7).mean()
+    df['pm25_std_7'] = df['PM2.5'].rolling(7).std()
+
+    # ====== 3. 季节性特征 ======
+    df['sin_day'] = np.sin(2 * np.pi * df.index.dayofyear / 365)
+    df['cos_day'] = np.cos(2 * np.pi * df.index.dayofyear / 365)
+
+    # ====== 4. 删除当日污染物列（避免泄漏） ======
+    df = df.drop(columns=['PM10', 'NO2', 'SO2', 'CO', 'O3'], errors='ignore')
+
+    # ====== 5. 删除无意义特征 ======
+    df = df.drop(columns=['year'], errors='ignore')
+
+    # ====== 6. 删除含 NaN（由 lag/rolling 引起） ======
+    df = df.dropna()
+    print("Final feature shape:", df.shape)
+
     target = 'PM2.5'
-    exclude_cols = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3', 'year']
+    X = df.drop(columns=[target])
+    y = df[target]
 
-    selected_features = []
-    for feature in ['t2m', 'd2m', 'temp_dewpoint_diff', 'tcwv', 'relative_humidity',
-                    'wind_speed_10m', 'wind_speed_100m', 'blh', 'tp', 'sp', 'str',
-                    'tisr', 'avg_tprate', 'month', 'season', 'day_of_year',
-                    'day_of_week', 'is_heating_season']:
-        if feature in df_combined.columns and feature not in selected_features:
-            selected_features.append(feature)
-
-    print(f"\nNumber of selected features: {len(selected_features)}")
-    print(f"Target variable: {target}")
-
-    print(f"\nFeature list:")
-    for idx, feat in enumerate(selected_features, 1):
-        print(f"  {idx}. {feat}")
-
-    X = df_combined[selected_features].copy()
-    y = df_combined[target].copy()
-
-    print(f"\nFeature matrix shape: {X.shape}")
+    print(f"\nTarget variable: {target}")
+    print(f"Feature matrix shape: {X.shape}")
     print(f"Target variable shape: {y.shape}")
 
     if len(X) == 0 or len(y) == 0:
@@ -509,30 +529,27 @@ if __name__ == '__main__':
     print(f"  Median: {y.median():.2f} μg/m³")
 
     print("\n" + "=" * 80)
-    print("Step 5: Dataset Split")
+    print("Step 5: Time Series Dataset Split")
     print("=" * 80)
 
-    n_samples = len(X)
-    train_size = int(n_samples * 0.70)
-    val_size = int(n_samples * 0.15)
+    # ============================================
+    # C2. 时间序列拆分（更科学）
+    # ============================================
 
-    X_train = X.iloc[:train_size]
-    X_val = X.iloc[train_size:train_size + val_size]
-    X_test = X.iloc[train_size + val_size:]
+    # 按时间序列划分：训练集 = 前 80%，测试 = 后 20%
+    split_idx = int(len(X) * 0.80)
 
-    y_train = y.iloc[:train_size]
-    y_val = y.iloc[train_size:train_size + val_size]
-    y_test = y.iloc[train_size + val_size:]
+    X_train = X.iloc[:split_idx]
+    X_test = X.iloc[split_idx:]
 
-    print(f"\nTraining set: {len(X_train)} samples ({len(X_train) / n_samples * 100:.1f}%)")
+    y_train = y.iloc[:split_idx]
+    y_test = y.iloc[split_idx:]
+
+    print(f"\nTraining set: {len(X_train)} samples ({len(X_train) / len(X) * 100:.1f}%)")
     print(f"  Time range: {X_train.index.min().date()} to {X_train.index.max().date()}")
     print(f"  PM2.5: {y_train.mean():.2f} ± {y_train.std():.2f} μg/m³")
 
-    print(f"\nValidation set: {len(X_val)} samples ({len(X_val) / n_samples * 100:.1f}%)")
-    print(f"  Time range: {X_val.index.min().date()} to {X_val.index.max().date()}")
-    print(f"  PM2.5: {y_val.mean():.2f} ± {y_val.std():.2f} μg/m³")
-
-    print(f"\nTest set: {len(X_test)} samples ({len(X_test) / n_samples * 100:.1f}%)")
+    print(f"\nTest set: {len(X_test)} samples ({len(X_test) / len(X) * 100:.1f}%)")
     print(f"  Time range: {X_test.index.min().date()} to {X_test.index.max().date()}")
     print(f"  PM2.5: {y_test.mean():.2f} ± {y_test.std():.2f} μg/m³")
 
@@ -540,56 +557,46 @@ if __name__ == '__main__':
     print("Step 6: Random Forest Model Training")
     print("=" * 80)
 
-    print("\n6.1 Training basic Random Forest model...")
+    print("\n6.1 Training basic Random Forest model (for comparison)...")
     rf_basic = RandomForestRegressor(
-    n_estimators=100,
-    max_depth=20,
-    min_samples_split=5,
-    min_samples_leaf=2,
-    random_state=42,
-    n_jobs=-1,
-    verbose=0
+        n_estimators=100,
+        max_depth=20,
+        min_samples_split=5,
+        min_samples_leaf=2,
+        random_state=42,
+        n_jobs=-1,
+        verbose=0
     )
 
     print("  Starting training...")
     rf_basic.fit(X_train, y_train)
-    print("  ✓ Basic model training complete")
+    print("  ✓ Basic RF model training complete")
 
     y_train_pred_basic = rf_basic.predict(X_train)
-    y_val_pred_basic = rf_basic.predict(X_val)
     y_test_pred_basic = rf_basic.predict(X_test)
 
-    print("\n6.2 Grid search optimized Random Forest (NetCDF features)...")
-    param_grid_small = {
-    'n_estimators': [100, 200],
-    'max_depth': [20, None],
-    'min_samples_split': [5, 10],
-    'min_samples_leaf': [2, 4]
-    }
+    print("\n6.2 Random Forest Model Training (Optimized)...")
+    # ============================================
+    # C3. 优化的 Random Forest 模型
+    # ============================================
 
-    print(f"  Parameter grid: {param_grid_small}")
-    print(f"  Total {int(np.prod([len(v) for v in param_grid_small.values()]))} parameter combinations")
-
-    rf_grid = RandomForestRegressor(random_state=42, n_jobs=-1)
-    grid_search = GridSearchCV(
-    rf_grid,
-    param_grid_small,
-    cv=3,
-    scoring='r2',
-    verbose=1,
-    n_jobs=-1
+    rf_optimized = RandomForestRegressor(
+        n_estimators=300,
+        max_depth=25,
+        min_samples_split=3,
+        min_samples_leaf=1,
+        max_features='sqrt',
+        bootstrap=True,
+        random_state=42,
+        n_jobs=-1,
+        verbose=0
     )
 
-    print("  Starting grid search...")
-    grid_search.fit(X_train, y_train)
-    rf_optimized = grid_search.best_estimator_
-
-    print(f"\n  ✓ Grid search complete")
-    print(f"  Best parameters: {grid_search.best_params_}")
-    print(f"  Best cross-validation R²: {grid_search.best_score_:.4f}")
+    print("  Starting optimized Random Forest training...")
+    rf_optimized.fit(X_train, y_train)
+    print("  ✓ Optimized RF model training complete")
 
     y_train_pred_opt = rf_optimized.predict(X_train)
-    y_val_pred_opt = rf_optimized.predict(X_val)
     y_test_pred_opt = rf_optimized.predict(X_test)
 
     print("\n" + "=" * 80)
@@ -597,12 +604,10 @@ if __name__ == '__main__':
     print("=" * 80)
 
     results = [
-    evaluate_model(y_train, y_train_pred_basic, 'RF_Basic', 'Train'),
-    evaluate_model(y_val, y_val_pred_basic, 'RF_Basic', 'Validation'),
-    evaluate_model(y_test, y_test_pred_basic, 'RF_Basic', 'Test'),
-    evaluate_model(y_train, y_train_pred_opt, 'RF_Optimized', 'Train'),
-    evaluate_model(y_val, y_val_pred_opt, 'RF_Optimized', 'Validation'),
-    evaluate_model(y_test, y_test_pred_opt, 'RF_Optimized', 'Test'),
+        evaluate_model(y_train, y_train_pred_basic, 'RF_Basic', 'Train'),
+        evaluate_model(y_test, y_test_pred_basic, 'RF_Basic', 'Test'),
+        evaluate_model(y_train, y_train_pred_opt, 'RF_Optimized', 'Train'),
+        evaluate_model(y_test, y_test_pred_opt, 'RF_Optimized', 'Test'),
     ]
 
     results_df = pd.DataFrame(results)
@@ -632,22 +637,58 @@ if __name__ == '__main__':
     print("=" * 80)
 
     feature_importance = pd.DataFrame({
-    'Feature': selected_features,
-    'Importance_Basic': rf_basic.feature_importances_,
-    'Importance_Optimized': rf_optimized.feature_importances_
+        'Feature': X_train.columns,
+        'Importance_Basic': rf_basic.feature_importances_,
+        'Importance_Optimized': rf_optimized.feature_importances_
     })
 
     feature_importance['Importance_Basic_Norm'] = (
-    feature_importance['Importance_Basic'] / feature_importance['Importance_Basic'].sum() * 100
+        feature_importance['Importance_Basic'] / feature_importance['Importance_Basic'].sum() * 100
     )
     feature_importance['Importance_Optimized_Norm'] = (
-    feature_importance['Importance_Optimized'] / feature_importance['Importance_Optimized'].sum() * 100
+        feature_importance['Importance_Optimized'] / feature_importance['Importance_Optimized'].sum() * 100
     )
 
     feature_importance = feature_importance.sort_values('Importance_Optimized', ascending=False)
 
-    print(f"\nTop 15 important features (optimized model):")
+    print(f"\nTop 15 important features (Optimized RF model):")
     print(feature_importance.head(15)[['Feature', 'Importance_Optimized_Norm']].to_string(index=False))
+
+    print("\n" + "=" * 80)
+    print("Step 8.5: Simple Time Series Visualization")
+    print("=" * 80)
+
+    # ============================================
+    # C4. Visualizing Predictions
+    # ============================================
+
+    # 1. Actual vs Predicted Plot (Simple version as suggested in RF renew.txt)
+    # 使用 DataFrame 确保数据对齐和时间排序
+    plot_df_simple = pd.DataFrame({
+        'time': y_test.index,
+        'y_true': y_test.values,
+        'y_pred': y_test_pred_opt
+    })
+    plot_df_simple = plot_df_simple.sort_values('time')  # 确保时间序列单调递增
+    plot_df_simple = plot_df_simple.reset_index(drop=True)  # 重置索引
+    
+    # 使用采样绘图，每4个点选取一次，使图表更清晰易读
+    step = 4
+    plot_df_simple_sampled = plot_df_simple.iloc[::step].copy()
+    
+    plt.figure(figsize=(15,6))
+    plt.plot(plot_df_simple_sampled['time'], plot_df_simple_sampled['y_true'], label="Actual", color='black', linewidth=2)
+    plt.plot(plot_df_simple_sampled['time'], plot_df_simple_sampled['y_pred'], label="RF Optimized Pred", alpha=0.8, linestyle='--', linewidth=1.0)
+    plt.legend(fontsize=12)
+    plt.title("PM2.5 Time Series Prediction", fontsize=14, fontweight='bold')
+    plt.xlabel('Date', fontsize=12)
+    plt.ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / 'rf_simple_timeseries_prediction.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print("✓ Simple time series prediction visualization saved")
 
     print("\n" + "=" * 80)
     print("Step 9: Generate Visualization Charts")
@@ -678,20 +719,42 @@ if __name__ == '__main__':
     plt.close()
 
     fig, ax = plt.subplots(figsize=(18, 6))
-    plot_range = min(365, len(y_test))
-    plot_idx = range(len(y_test) - plot_range, len(y_test))
-    time_idx = y_test.index[plot_idx]
+    
+    # 创建 DataFrame 确保数据对齐和时间排序
+    plot_df = pd.DataFrame({
+        'time': y_test.index,
+        'y_true': y_test.values,
+        'y_pred_basic': y_test_pred_basic,
+        'y_pred_opt': y_test_pred_opt
+    })
+    
+    # 按时间排序，确保时间序列单调递增
+    plot_df = plot_df.sort_values('time').reset_index(drop=True)
+    
+    # 选择最后一年（或指定范围）的数据
+    plot_range = min(365, len(plot_df))
+    plot_df_subset = plot_df.iloc[-plot_range:].copy()
+    
+    # 使用采样绘图避免打结现象，每4个点采样一个
+    step = 4
+    plot_df_sampled = plot_df_subset.iloc[::step].copy()
+    
+    # 确保所有数据长度一致
+    assert len(plot_df_sampled) == len(plot_df_sampled['time']) == len(plot_df_sampled['y_true']) == len(plot_df_sampled['y_pred_basic']) == len(plot_df_sampled['y_pred_opt']), \
+        "数据长度不一致，请检查数据对齐"
+    
+    # 使用整数索引作为 x 轴，避免日期不连续导致的打结
+    x_axis = np.arange(len(plot_df_sampled))
 
-    ax.plot(time_idx, y_test.iloc[plot_idx], 'k-', label='Actual values', linewidth=2, alpha=0.8)
-    ax.plot(time_idx, y_test_pred_basic[plot_idx], '--', color='blue', label='RF_Basic', linewidth=1.5, alpha=0.7)
-    ax.plot(time_idx, y_test_pred_opt[plot_idx], '--', color='green', label='RF_Optimized', linewidth=1.5, alpha=0.7)
+    ax.plot(x_axis, plot_df_sampled['y_true'].values, 'k-', label='Actual values', linewidth=2, alpha=0.8)
+    ax.plot(x_axis, plot_df_sampled['y_pred_basic'].values, '--', color='blue', label='RF_Basic', linewidth=1.0, alpha=0.7)
+    ax.plot(x_axis, plot_df_sampled['y_pred_opt'].values, '--', color='green', label='RF_Optimized', linewidth=1.0, alpha=0.7)
 
-    ax.set_xlabel('Date', fontsize=12)
+    ax.set_xlabel('Time Index (sampled)', fontsize=12)
     ax.set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
-    ax.set_title('PM2.5 Concentration Prediction Time Series Comparison (Last year of test set)', fontsize=14, fontweight='bold')
+    ax.set_title('PM2.5 Concentration Prediction Time Series Comparison (Last year of test set, Sampled)', fontsize=14, fontweight='bold')
     ax.legend(loc='upper right', fontsize=11)
     ax.grid(True, alpha=0.3)
-    plt.xticks(rotation=45)
     plt.tight_layout()
     plt.savefig(output_dir / 'rf_timeseries_nc.png', dpi=300, bbox_inches='tight')
     plt.close()
@@ -721,7 +784,7 @@ if __name__ == '__main__':
     ax.set_yticks(y_pos)
     ax.set_yticklabels(top_features['Feature'])
     ax.set_xlabel('Feature Importance (%)', fontsize=12)
-    ax.set_title(f'Random Forest Feature Importance Comparison (Top {top_n})', fontsize=14, fontweight='bold')
+    ax.set_title(f'Model Feature Importance Comparison (Top {top_n})', fontsize=14, fontweight='bold')
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3, axis='x')
     ax.invert_yaxis()
@@ -748,7 +811,11 @@ if __name__ == '__main__':
     plt.close()
 
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    for idx, (name, pred, color) in enumerate(models_data):
+    models_data_hist = [
+        ('RF_Basic', y_test_pred_basic, 'blue'),
+        ('RF_Optimized', y_test_pred_opt, 'green')
+    ]
+    for idx, (name, pred, color) in enumerate(models_data_hist):
         errors = y_test - pred
         axes[idx].hist(errors, bins=50, color=color, alpha=0.7, edgecolor='black')
         axes[idx].axvline(x=0, color='red', linestyle='--', linewidth=2.5, label='Zero Error')
@@ -767,26 +834,28 @@ if __name__ == '__main__':
     plt.close()
 
     print("\n" + "=" * 80)
-    print("Step 10: Save Results")
+    print("Step 11: Save Results")
     print("=" * 80)
 
     results_df.to_csv(output_dir / 'rf_model_performance_nc.csv', index=False, encoding='utf-8-sig')
     feature_importance.to_csv(output_dir / 'rf_feature_importance_nc.csv', index=False, encoding='utf-8-sig')
 
     predictions_df = pd.DataFrame({
-    'Date': y_test.index,
-    'Actual_PM25': y_test.values,
-    'Predicted_Basic': y_test_pred_basic,
-    'Predicted_Optimized': y_test_pred_opt,
-    'Error_Basic': y_test.values - y_test_pred_basic,
-    'Error_Optimized': y_test.values - y_test_pred_opt
+        'Date': y_test.index,
+        'Actual_PM25': y_test.values,
+        'Predicted_RF_Basic': y_test_pred_basic,
+        'Predicted_RF_Optimized': y_test_pred_opt,
+        'Error_RF_Basic': y_test.values - y_test_pred_basic,
+        'Error_RF_Optimized': y_test.values - y_test_pred_opt
     })
     predictions_df.to_csv(output_dir / 'rf_predictions_nc.csv', index=False, encoding='utf-8-sig')
 
-    best_params_df = pd.DataFrame([grid_search.best_params_])
-    best_params_df.to_csv(output_dir / 'rf_best_parameters_nc.csv', index=False, encoding='utf-8-sig')
+    # Save Random Forest model parameters
+    rf_params = rf_optimized.get_params()
+    best_params_df = pd.DataFrame([rf_params])
+    best_params_df.to_csv(output_dir / 'rf_parameters_nc.csv', index=False, encoding='utf-8-sig')
 
-    with open(model_dir / 'rf_optimized_nc.pkl', 'wb') as f:
+    with open(model_dir / 'rf_pm25_model.pkl', 'wb') as f:
         pickle.dump(rf_optimized, f)
 
     print("\n" + "=" * 80)
@@ -799,20 +868,21 @@ if __name__ == '__main__':
     print("\nGenerated files:")
     print("\nCSV Files:")
     print("  - rf_model_performance_nc.csv       Model performance metrics")
-    print("  - rf_feature_importance_nc.csv      Feature importance")
+    print("  - rf_feature_importance_nc.csv       Feature importance")
     print("  - rf_predictions_nc.csv             Prediction results")
-    print("  - rf_best_parameters_nc.csv         Best parameters")
+    print("  - rf_parameters_nc.csv              Random Forest parameters")
 
     print("\nChart Files:")
-    print("  - rf_prediction_scatter_nc.png      Prediction vs Actual scatter plot")
-    print("  - rf_timeseries_nc.png              Time series comparison")
-    print("  - rf_residuals_nc.png               Residual analysis")
-    print("  - rf_feature_importance_nc.png      Feature importance plot")
-    print("  - rf_model_comparison_nc.png        Model performance comparison")
-    print("  - rf_error_distribution_nc.png      Error distribution")
+    print("  - rf_simple_timeseries_prediction.png      Simple actual vs predicted time series")
+    print("  - rf_prediction_scatter_nc.png    Prediction vs Actual scatter plot")
+    print("  - rf_timeseries_nc.png             Time series comparison")
+    print("  - rf_residuals_nc.png              Residual analysis")
+    print("  - rf_feature_importance_nc.png     Feature importance plot")
+    print("  - rf_model_comparison_nc.png       Model performance comparison")
+    print("  - rf_error_distribution_nc.png     Error distribution")
 
     print("\nModel Files:")
-    print("  - rf_optimized_nc.pkl               Random Forest optimized model")
+    print("  - rf_pm25_model.pkl                 Random Forest optimized model")
 
     best_model = test_results.iloc[0]
     print(f"\nBest model: {best_model['Model']}")
@@ -827,10 +897,9 @@ if __name__ == '__main__':
 
     print(f"\nDataset information:")
     print(f"  Training set samples: {len(X_train)}")
-    print(f"  Validation set samples: {len(X_val)}")
     print(f"  Test set samples: {len(X_test)}")
-    print(f"  Number of features: {len(selected_features)}")
+    print(f"  Number of features: {len(X_train.columns)}")
 
     print("\n" + "=" * 80)
-    print("Random Forest PM2.5 Concentration Prediction Complete (NetCDF ERA5)!")
+    print("Random Forest PM2.5 Concentration Prediction Complete (NetCDF ERA5 + Time Series Features)!")
     print("=" * 80)

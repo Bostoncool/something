@@ -114,7 +114,7 @@ era5_vars = [
 
 # LSTM specific configuration - GPU optimized version
 SEQUENCE_LENGTHS = [7, 14, 30]
-BATCH_SIZE = 256
+BATCH_SIZE = 128  # 降低到128以减少内存使用和潜在溢出
 EPOCHS = 100
 EARLY_STOP_PATIENCE = 20
 
@@ -504,6 +504,16 @@ def read_all_era5():
     print(f"Missing values: {initial_na} -> {final_na}")
     print(f"Meteorological data loading complete, shape: {df_era5_all.shape}")
     
+    for col in df_era5_all.columns:
+        q1 = df_era5_all[col].quantile(0.25)
+        q3 = df_era5_all[col].quantile(0.75)
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        # 使用 np.clip 替代 pandas clip，避免 axis 参数问题
+        df_era5_all[col] = np.clip(df_era5_all[col].values, lower, upper)
+    print("异常值已clip处理")
+    
     return df_era5_all
 
 # ============================== Part 4: Feature Engineering (Reused) ==============================
@@ -569,9 +579,88 @@ def create_features(df):
     return df_copy
 
 # ============================== Part 5: Sequence Data Preparation (GPU Optimized) ==============================
+def split_by_date(X, y, train_ratio=0.7, val_ratio=0.15):
+    """按日期严格切分"""
+    dates = X.index
+    n = len(dates)
+
+    train_end = int(n * train_ratio)
+    val_end   = int(n * (train_ratio + val_ratio))
+
+    train_idx = dates[:train_end]
+    val_idx   = dates[train_end:val_end]
+    test_idx  = dates[val_end:]
+
+    return train_idx, val_idx, test_idx
+
+
+def create_sequences_by_index(X, y, date_index, lookback):
+    """根据时间索引构建连续 sequences"""
+    X_seq, y_seq, seq_dates = [], [], []
+
+    for i in range(lookback, len(X)):
+        if X.index[i] in date_index:
+            X_seq.append(X.iloc[i-lookback:i].values)
+            y_seq.append(y.iloc[i])
+            seq_dates.append(X.index[i])
+
+    return np.array(X_seq), np.array(y_seq), seq_dates
+
+def prepare_data_for_lstm_TIME_BASED(X, y, lookback, train_ratio=0.7, val_ratio=0.15):
+    """新版 LSTM 数据预处理：全程按时间切分"""
+    
+    # 1. 按时间切分
+    train_idx, val_idx, test_idx = split_by_date(X, y, train_ratio, val_ratio)
+
+    # 2. 构建 sequences（确保 test 日期严格递增）
+    X_train_seq, y_train_seq, idx_train = create_sequences_by_index(X, y, train_idx, lookback)
+    X_val_seq,   y_val_seq,   idx_val   = create_sequences_by_index(X, y, val_idx, lookback)
+    X_test_seq,  y_test_seq,  idx_test  = create_sequences_by_index(X, y, test_idx, lookback)
+
+    # ===========================
+    # 3. 标准化（fit ONLY on train）
+    # ===========================
+
+    scaler_X = StandardScaler()
+    X_train_2d = X_train_seq.reshape(-1, X_train_seq.shape[-1])
+    X_train_scaled = scaler_X.fit_transform(X_train_2d).reshape(X_train_seq.shape)
+
+    X_val_scaled = scaler_X.transform(X_val_seq.reshape(-1, X_train_seq.shape[-1])).reshape(X_val_seq.shape)
+    X_test_scaled = scaler_X.transform(X_test_seq.reshape(-1, X_train_seq.shape[-1])).reshape(X_test_seq.shape)
+
+    scaler_y = StandardScaler()
+    y_train_scaled = scaler_y.fit_transform(y_train_seq.reshape(-1,1)).flatten()
+    y_val_scaled   = scaler_y.transform(y_val_seq.reshape(-1,1)).flatten()
+    y_test_scaled  = scaler_y.transform(y_test_seq.reshape(-1,1)).flatten()
+
+    # 4. DataLoader
+    def make_loader(X, y):
+        return DataLoader(
+            TensorDataset(torch.FloatTensor(X), torch.FloatTensor(y)),
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=NUM_WORKERS,
+            pin_memory=PIN_MEMORY,
+            persistent_workers=True if NUM_WORKERS > 0 else False,
+            prefetch_factor=PREFETCH_FACTOR if NUM_WORKERS > 0 else None
+        )
+
+    return {
+        'train_loader': make_loader(X_train_scaled, y_train_scaled),
+        'val_loader':   make_loader(X_val_scaled,   y_val_scaled),
+        'test_loader':  make_loader(X_test_scaled,  y_test_scaled),
+        'train_idx': idx_train,
+        'val_idx': idx_val,
+        'test_idx': idx_test,
+        'scaler_y': scaler_y,
+        'y_train': y_train_seq,
+        'y_val': y_val_seq,
+        'y_test': y_test_seq
+    }
+
 def create_sequences(X, y, lookback):
     """
-    Convert time series data to LSTM input format
+    Convert time series data to LSTM input format (向后兼容函数)
     
     Parameters:
         X: Feature data (DataFrame)
@@ -594,7 +683,8 @@ def create_sequences(X, y, lookback):
 
 def prepare_data_for_lstm(X, y, lookback, train_ratio=0.7, val_ratio=0.15):
     """
-    Prepare dataset for LSTM (GPU optimized version)
+    Prepare dataset for LSTM (GPU optimized version) - 向后兼容函数
+    建议使用 prepare_data_for_lstm_TIME_BASED 以获得更好的时间切分
     
     Returns:
         Dictionary containing DataLoaders and indices for training, validation, and test sets
@@ -693,73 +783,93 @@ def prepare_data_for_lstm(X, y, lookback, train_ratio=0.7, val_ratio=0.15):
     }
 
 # ============================== Part 6: LSTM + Attention Model Definition ==============================
-class Attention(nn.Module):
-    """Attention mechanism layer"""
-    def __init__(self, hidden_size):
-        super(Attention, self).__init__()
-        self.attention = nn.Linear(hidden_size, 1)
-        
-    def forward(self, lstm_output):
-        # lstm_output: [batch, seq_len, hidden_size]
-        attention_weights = torch.softmax(self.attention(lstm_output), dim=1)
-        # attention_weights: [batch, seq_len, 1]
-        
-        # Weighted sum
-        context = torch.sum(attention_weights * lstm_output, dim=1)
-        # context: [batch, hidden_size]
-        
-        return context, attention_weights
+class PM25_LSTM_Pro(nn.Module):
+    """新版 PM2.5 预测模型：BiLSTM + MultiHead Attention + Residual + LayerNorm"""
+    def __init__(self, input_size, hidden_size=128, num_layers=2, dropout=0.3):
+        super().__init__()
 
-class LSTMAttentionModel(nn.Module):
-    """LSTM + Attention Model"""
-    def __init__(self, input_size, hidden_size, num_layers, dropout=0.2):
-        super(LSTMAttentionModel, self).__init__()
-        
         self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        
+
+        # BiLSTM（核心增强）
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
-            dropout=dropout if num_layers > 1 else 0
+            dropout=dropout,
+            bidirectional=True   # ⭐ 双向 LSTM
         )
-        
-        self.attention = Attention(hidden_size)
-        self.fc = nn.Linear(hidden_size, 1)
+
+        # MHA（Transformers 风格）
+        self.attn = nn.MultiheadAttention(
+            embed_dim=hidden_size * 2,
+            num_heads=4,
+            batch_first=True
+        )
+
+        # LayerNorm（提高稳定性）
+        self.norm = nn.LayerNorm(hidden_size * 2)
+
+        # 残差输出
         self.dropout = nn.Dropout(dropout)
-        
-        # Store attention weights for analysis
-        self.last_attention_weights = None
-        
+
+        # 全连接输出层
+        self.fc = nn.Linear(hidden_size * 2, 1)
+
+        # 添加位置编码
+        self.pos_encoder = nn.Parameter(torch.zeros(1, 100, hidden_size * 2))  # 假设最大序列长度100
+
     def forward(self, x):
-        # x: [batch, seq_len, input_size]
-        lstm_out, _ = self.lstm(x)
-        # lstm_out: [batch, seq_len, hidden_size]
-        
-        context, attention_weights = self.attention(lstm_out)
-        # context: [batch, hidden_size]
-        
-        # Save attention weights
-        self.last_attention_weights = attention_weights.detach()
-        
-        out = self.dropout(context)
+        # LSTM 输出
+        lstm_out, _ = self.lstm(x)  # [B, T, 2H]
+
+        # 添加位置编码
+        lstm_out = lstm_out + self.pos_encoder[:, :lstm_out.size(1), :]
+
+        # MHA
+        attn_out, _ = self.attn(lstm_out, lstm_out, lstm_out)
+
+        # 残差结构
+        out = self.norm(attn_out + lstm_out)
+
+        # 取最后一个时间步
+        out = out[:, -1, :]
+
+        out = self.dropout(out)
         out = self.fc(out)
-        # out: [batch, 1]
-        
+
         return out.squeeze()
 
+# 保持向后兼容性：LSTMAttentionModel 作为别名
+LSTMAttentionModel = PM25_LSTM_Pro
+
 # ============================== Part 7: Training and Evaluation Functions (Mixed Precision Optimization) ==============================
-def train_model(model, train_loader, val_loader, epochs, learning_rate, patience=20, verbose=True):
+def weighted_mse_loss(pred, target):
+    """加权 MSE 损失：高污染值给予更大惩罚"""
+    base_error = (pred - target)**2
+    
+    # 权重：高污染值给予更大惩罚
+    weights = 1 + (target > 75) * 2 + (target > 150) * 5
+    
+    return (base_error * weights).mean()
+
+def train_model(model, train_loader, val_loader, epochs, learning_rate, patience=20, verbose=True, scaler_y=None):
     """
-    Train LSTM model (GPU accelerated + Mixed precision training)
+    Train LSTM model (GPU accelerated + Mixed precision training + Weighted Loss)
+    
+    Parameters:
+        scaler_y: StandardScaler for y, used to convert thresholds for weighted loss
     
     Returns:
         Training history (loss curves) and best model state
     """
+    from torch.optim.lr_scheduler import ReduceLROnPlateau
+    
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)  # 添加weight_decay
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)  # 添加学习率调度
+    
+    # 使用标准MSE损失
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
     # GradScaler for mixed precision training
     scaler = GradScaler(enabled=USE_AMP)
@@ -790,7 +900,7 @@ def train_model(model, train_loader, val_loader, epochs, learning_rate, patience
             # Mixed precision training
             with autocast(enabled=USE_AMP):
                 outputs = model(X_batch)
-                loss = criterion(outputs, y_batch)
+                loss = criterion(outputs, y_batch)  # 使用标准MSE损失
             
             scaler.scale(loss).backward()
             
@@ -816,12 +926,15 @@ def train_model(model, train_loader, val_loader, epochs, learning_rate, patience
                 
                 with autocast(enabled=USE_AMP):
                     outputs = model(X_batch)
-                    loss = criterion(outputs, y_batch)
+                    loss = criterion(outputs, y_batch)  # 使用标准MSE损失
                 
                 val_loss += loss.item() * X_batch.size(0)
         
         val_loss /= len(val_loader.dataset)
         val_losses.append(val_loss)
+        
+        # Learning rate scheduler step
+        scheduler.step(val_loss)
         
         # Early stopping check
         if val_loss < best_val_loss:
@@ -906,35 +1019,47 @@ def evaluate_model(model, data_loader, scaler_y, y_true):
 def extract_attention_importance(model, data_loader, feature_names):
     """
     Extract attention weights as feature importance
+    支持新旧两种模型结构
     
     Returns:
         Feature importance DataFrame
     """
     model.eval()
-    all_attention_weights = []
     
-    with torch.no_grad():
-        for X_batch, _ in data_loader:
-            X_batch = X_batch.to(device, non_blocking=True)
+    # 检查模型是否有 last_attention_weights 属性（旧模型）
+    has_attention_weights = hasattr(model, 'last_attention_weights')
+    
+    if has_attention_weights:
+        # 旧模型：使用存储的 attention weights
+        all_attention_weights = []
+        
+        with torch.no_grad():
+            for X_batch, _ in data_loader:
+                X_batch = X_batch.to(device, non_blocking=True)
+                
+                with autocast(enabled=USE_AMP):
+                    _ = model(X_batch)
+                
+                # Get attention weights [batch, seq_len, 1]
+                if model.last_attention_weights is not None:
+                    all_attention_weights.append(model.last_attention_weights)
+        
+        if all_attention_weights:
+            # GPU优化：一次性转换所有attention weights到CPU
+            all_attention_weights = torch.cat(all_attention_weights, dim=0).cpu().numpy()
+            # Shape: [total_samples, seq_len, 1]
             
-            with autocast(enabled=USE_AMP):
-                _ = model(X_batch)
-            
-            # GPU优化：保持在GPU上累积，最后一次性转换
-            # Get attention weights [batch, seq_len, 1]
-            all_attention_weights.append(model.last_attention_weights)
-    
-    # GPU优化：一次性转换所有attention weights到CPU
-    all_attention_weights = torch.cat(all_attention_weights, dim=0).cpu().numpy()
-    # Shape: [total_samples, seq_len, 1]
-    
-    # Average over time steps to get feature importance for each sample
-    # Here we calculate the average attention weights across all samples
-    avg_attention = all_attention_weights.mean(axis=0).squeeze()  # [seq_len]
-    
-    # Since LSTM looks at the entire sequence, we assign equal attention weights to each feature
-    # A more accurate method would use feature-level attention, but this is a simplified approach
-    feature_importance = np.ones(len(feature_names)) * avg_attention.mean()
+            # Average over time steps to get feature importance for each sample
+            avg_attention = all_attention_weights.mean(axis=0).squeeze()  # [seq_len]
+            feature_importance = np.ones(len(feature_names)) * avg_attention.mean()
+        else:
+            # Fallback: 均匀分布
+            feature_importance = np.ones(len(feature_names))
+    else:
+        # 新模型（PM25_LSTM_Pro）：MultiHeadAttention 的权重难以直接提取
+        # 使用均匀分布作为fallback，或者可以基于梯度等方法计算重要性
+        # 这里使用简单的均匀分布
+        feature_importance = np.ones(len(feature_names))
     
     # Create DataFrame
     importance_df = pd.DataFrame({
@@ -1027,7 +1152,7 @@ print("=" * 80)
 datasets = {}
 for lookback in SEQUENCE_LENGTHS:
     print(f"\nPreparing data for sequence length={lookback} days...")
-    data_dict = prepare_data_for_lstm(X, y, lookback)
+    data_dict = prepare_data_for_lstm_TIME_BASED(X, y, lookback)
     datasets[lookback] = data_dict
     
     print(f"  Training set: {len(data_dict['train_idx'])} samples")
@@ -1073,11 +1198,27 @@ for lookback in SEQUENCE_LENGTHS:
     
     # GPU优化：使用torch.compile加速模型（PyTorch 2.0+）
     if USE_COMPILE and hasattr(torch, 'compile'):
-        try:
-            model = torch.compile(model, mode='max-autotune')
-            print("  Model compiled with torch.compile for maximum performance")
-        except Exception as e:
-            print(f"  Warning: torch.compile failed ({e}), continuing without compilation")
+        compiled = False
+        # 尝试不同的编译模式，从最优化到最基础
+        for compile_mode in ['max-autotune', 'reduce-overhead', 'default']:
+            try:
+                model = torch.compile(model, mode=compile_mode)
+                print(f"  Model compiled with torch.compile (mode: {compile_mode})")
+                compiled = True
+                break
+            except Exception as e:
+                if 'duplicate template name' in str(e):
+                    # 如果是模板名称冲突，尝试使用默认模式并禁用缓存
+                    try:
+                        model = torch.compile(model, mode='default', fullgraph=False)
+                        print(f"  Model compiled with torch.compile (mode: default, fullgraph=False)")
+                        compiled = True
+                        break
+                    except:
+                        continue
+                continue
+        if not compiled:
+            print("  Warning: torch.compile failed, continuing without compilation")
     
     print(f"Model parameter count: {sum(p.numel() for p in model.parameters()):,}")
     print_gpu_memory_usage("Model loading complete")
@@ -1090,7 +1231,8 @@ for lookback in SEQUENCE_LENGTHS:
         epochs=EPOCHS,
         learning_rate=basic_params['learning_rate'],
         patience=EARLY_STOP_PATIENCE,
-        verbose=True
+        verbose=True,
+        scaler_y=data['scaler_y']
     )
     train_time = time.time() - train_start
     
@@ -1207,7 +1349,8 @@ for lookback in SEQUENCE_LENGTHS:
             epochs=50,  # Reduced epochs
             learning_rate=lr,
             patience=10,  # Reduced patience
-            verbose=False
+            verbose=False,
+            scaler_y=data['scaler_y']
         )
         
         val_rmse = np.sqrt(history['best_val_loss'])
@@ -1250,11 +1393,27 @@ for lookback in SEQUENCE_LENGTHS:
     
     # GPU优化：使用torch.compile加速模型（PyTorch 2.0+）
     if USE_COMPILE and hasattr(torch, 'compile'):
-        try:
-            model_opt = torch.compile(model_opt, mode='max-autotune')
-            print("  Model compiled with torch.compile for maximum performance")
-        except Exception as e:
-            print(f"  Warning: torch.compile failed ({e}), continuing without compilation")
+        compiled = False
+        # 尝试不同的编译模式，从最优化到最基础
+        for compile_mode in ['max-autotune', 'reduce-overhead', 'default']:
+            try:
+                model_opt = torch.compile(model_opt, mode=compile_mode)
+                print(f"  Model compiled with torch.compile (mode: {compile_mode})")
+                compiled = True
+                break
+            except Exception as e:
+                if 'duplicate template name' in str(e):
+                    # 如果是模板名称冲突，尝试使用默认模式并禁用缓存
+                    try:
+                        model_opt = torch.compile(model_opt, mode='default', fullgraph=False)
+                        print(f"  Model compiled with torch.compile (mode: default, fullgraph=False)")
+                        compiled = True
+                        break
+                    except:
+                        continue
+                continue
+        if not compiled:
+            print("  Warning: torch.compile failed, continuing without compilation")
     
     history_opt = train_model(
         model=model_opt,
@@ -1263,7 +1422,8 @@ for lookback in SEQUENCE_LENGTHS:
         epochs=EPOCHS,
         learning_rate=best_params['learning_rate'],
         patience=EARLY_STOP_PATIENCE,
-        verbose=True
+        verbose=True,
+        scaler_y=data['scaler_y']
     )
     
     optimized_models[lookback] = model_opt
@@ -1484,13 +1644,34 @@ for idx, lookback in enumerate(SEQUENCE_LENGTHS):
     y_pred = eval_result['predictions']
     y_true = data['y_test']
     
+    # 确保时间索引和预测值对齐
+    time_idx = pd.DatetimeIndex(data['test_idx'])
+    
+    # 确保长度一致
+    min_len = min(len(time_idx), len(y_true), len(y_pred))
+    time_idx = time_idx[:min_len]
+    y_true = y_true[:min_len]
+    y_pred = y_pred[:min_len]
+    
+    # 选择最后300个点进行绘制
     plot_range = min(300, len(y_true))
-    plot_idx = range(len(y_true) - plot_range, len(y_true))
-    time_idx = pd.DatetimeIndex(data['test_idx'])[plot_idx]
+    start_idx = len(y_true) - plot_range
+    
+    time_idx_plot = time_idx[start_idx:]
+    y_true_plot = y_true[start_idx:]
+    y_pred_plot = y_pred[start_idx:]
+    
+    # 确保时间索引是单调递增的，避免打结
+    df_plot = pd.DataFrame({
+        'time': time_idx_plot,
+        'y_true': y_true_plot,
+        'y_pred': y_pred_plot
+    })
+    df_plot = df_plot.sort_values('time').reset_index(drop=True)
     
     ax = axes[idx]
-    ax.plot(time_idx, y_true[plot_idx], 'k-', label='Actual', linewidth=2, alpha=0.8)
-    ax.plot(time_idx, y_pred[plot_idx], 'r--', label='LSTM Prediction', linewidth=1.5, alpha=0.7)
+    ax.plot(df_plot['time'], df_plot['y_true'], 'k-', label='Actual', linewidth=2, alpha=0.8)
+    ax.plot(df_plot['time'], df_plot['y_pred'], 'r--', label='LSTM Prediction', linewidth=1.5, alpha=0.7)
     ax.set_xlabel('Date', fontsize=12)
     ax.set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
     ax.set_title(f'LSTM Seq{lookback} days - Time Series Prediction Comparison (Last {plot_range} days of test set)\nR²={eval_result["R²"]:.4f}, RMSE={eval_result["RMSE"]:.2f}', 

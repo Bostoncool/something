@@ -12,8 +12,8 @@ import dask
 from numba import guvectorize, float32
 
 # ---------- 1. High-speed I/O: One-time Concatenation ----------
-def load_pm25_fast(file_dir: str) -> xr.DataArray:
-    """Returns PM2.5 DataArray for 2000-2023 (scaled & missing values handled)"""
+def load_pm25_fast(file_dir: str) -> tuple[xr.DataArray, xr.DataArray]:
+    """Returns PM2.5 DataArray and land mask for 2000-2023 (scaled & missing values handled)"""
     import re
     import os
     
@@ -102,8 +102,14 @@ def load_pm25_fast(file_dir: str) -> xr.DataArray:
         # Clean up intermediate data
         for ds in valid_datasets:
             ds.close()
-        
-        return ds_combined['PM2.5']
+
+        pm25_data = ds_combined['PM2.5']
+
+        # 创建陆地掩膜
+        print('>>> Creating land mask to filter ocean regions...')
+        land_mask = create_land_mask(pm25_data)
+
+        return pm25_data, land_mask
     except Exception as e:
         # Clean up resources
         for ds in valid_datasets:
@@ -112,6 +118,39 @@ def load_pm25_fast(file_dir: str) -> xr.DataArray:
             except:
                 pass
         raise RuntimeError(f"Dataset merge failed: {e}") from e
+
+
+# ---------- 1.5. Land Mask Creation ----------
+def create_land_mask(data: xr.DataArray, min_valid_ratio: float = 0.1) -> xr.DataArray:
+    """
+    创建陆地掩膜：识别至少有一定比例时间点有有效数据的空间位置
+
+    参数:
+        data: PM2.5 DataArray (time, lat, lon)
+        min_valid_ratio: 最小有效数据比例（默认0.1，即至少10%的时间有数据）
+
+    返回:
+        land_mask: 布尔掩膜，True表示陆地区域
+    """
+    # 计算每个空间点在时间维度上的有效数据比例
+    valid_ratio = data.notnull().sum(dim='time') / data.sizes['time']
+
+    # 创建掩膜：有效数据比例 >= min_valid_ratio 的位置为陆地
+    land_mask = valid_ratio >= min_valid_ratio
+
+    # 统计信息
+    total_points = land_mask.size
+    land_points = land_mask.sum().item()
+    ocean_points = total_points - land_points
+    reduction_ratio = (1 - land_points / total_points) * 100
+
+    print(f'>>> Land mask created:')
+    print(f'    Total grid points: {total_points}')
+    print(f'    Land points: {land_points} ({land_points/total_points*100:.1f}%)')
+    print(f'    Ocean points: {ocean_points} ({ocean_points/total_points*100:.1f}%)')
+    print(f'    Computation reduction: {reduction_ratio:.1f}%')
+
+    return land_mask
 
 
 # ---------- 2. Numba Vectorized Regression ----------
@@ -242,13 +281,17 @@ def fast_mk(data: xr.DataArray, dim: str = 'time') -> xr.DataArray:
 
 
 # ---------- 4. Statistics ----------
-def basic_statistics(data):
+def basic_statistics(data, land_mask=None):
+    """Calculate basic statistics, optionally masked to land only"""
+    if land_mask is not None:
+        data = data.where(land_mask)
+
     return {
-        'annual_mean': data.mean(dim=['lat', 'lon']),
-        'annual_max': data.max(dim=['lat', 'lon']),
-        'annual_min': data.min(dim=['lat', 'lon']),
-        'spatial_std': data.std(dim=['lat', 'lon']),
-        'national_mean_concentration': data.mean(dim=['lat', 'lon']).mean()
+        'annual_mean': data.mean(dim=['lat', 'lon'], skipna=True),
+        'annual_max': data.max(dim=['lat', 'lon'], skipna=True),
+        'annual_min': data.min(dim=['lat', 'lon'], skipna=True),
+        'spatial_std': data.std(dim=['lat', 'lon'], skipna=True),
+        'national_mean_concentration': data.mean(dim=['lat', 'lon'], skipna=True).mean(skipna=True)
     }
 
 
@@ -274,21 +317,40 @@ def time_series_analysis(data):
 
 
 # ---------- 6. Spatial ----------
-def spatial_distribution_analysis(data):
-    """Spatial distribution analysis with error handling to avoid Cartopy segfault"""
+def spatial_distribution_analysis(data, land_mask=None):
+    """Spatial distribution analysis with land mask optimization"""
     try:
-        spatial_mean = data.mean(dim='time')
-        spatial_std = data.std(dim='time')
-        print('>>> Calculating trend slope...')
-        slope = fast_trend(data)  # High-speed version
-        print('>>> Calculating Mann-Kendall statistic...')
-        mk_z = fast_mk(data)
-        
-        # Load to memory immediately after calculation to avoid dask delayed computation issues
+        # 如果提供了掩膜，只对陆地区域进行计算
+        if land_mask is not None:
+            print('>>> Applying land mask to reduce computation...')
+            data_masked = data.where(land_mask)
+        else:
+            data_masked = data
+
+        # 计算空间统计（海洋区域自动为NaN）
+        spatial_mean = data_masked.mean(dim='time', skipna=True)
+        spatial_std = data_masked.std(dim='time', skipna=True)
+
+        print('>>> Calculating trend slope (land only)...')
+        # 对于趋势计算，只对有效点进行计算
+        slope = fast_trend(data_masked)
+
+        print('>>> Calculating Mann-Kendall statistic (land only)...')
+        mk_z = fast_mk(data_masked)
+
+        # Load to memory
         spatial_mean = spatial_mean.compute()
         spatial_std = spatial_std.compute()
         slope = slope.compute()
         mk_z = mk_z.compute()
+
+        # 应用掩膜确保海洋区域为NaN
+        if land_mask is not None:
+            spatial_mean = spatial_mean.where(land_mask)
+            spatial_std = spatial_std.where(land_mask)
+            slope = slope.where(land_mask)
+            mk_z = mk_z.where(land_mask)
+
     except Exception as e:
         print(f"Error: Spatial statistics calculation failed: {e}")
         raise
@@ -332,10 +394,20 @@ def spatial_distribution_analysis(data):
 def regional_analysis(data):
     """Regional comparison analysis with data validity checks"""
     # First check the lat/lon range of the data
+    lat_decreasing = False  # Default: assume increasing
     if 'lat' in data.coords and 'lon' in data.coords:
         lat_min, lat_max = float(data.lat.min()), float(data.lat.max())
         lon_min, lon_max = float(data.lon.min()), float(data.lon.max())
         print(f'>>> Data lat/lon range: Latitude [{lat_min:.2f}, {lat_max:.2f}], Longitude [{lon_min:.2f}, {lon_max:.2f}]')
+        
+        # Check latitude order (increasing or decreasing)
+        lat_first = float(data.lat[0])
+        lat_last = float(data.lat[-1])
+        lat_decreasing = lat_first > lat_last
+        if lat_decreasing:
+            print(f'>>> Latitude is decreasing (from {lat_first:.2f} to {lat_last:.2f}), adjusting slice order')
+        else:
+            print(f'>>> Latitude is increasing (from {lat_first:.2f} to {lat_last:.2f})')
     
     regions = {
         'Beijing-Tianjin-Hebei': (36, 42, 114, 120),
@@ -347,8 +419,17 @@ def regional_analysis(data):
     regional_data = {}
     for name, (l1, l2, l3, l4) in regions.items():
         try:
-            # Select regional data
-            region_subset = data.sel(lat=slice(l1, l2), lon=slice(l3, l4))
+            # Select regional data - adjust lat slice order if latitude is decreasing
+            if lat_decreasing:
+                region_subset = data.sel(lat=slice(l2, l1), lon=slice(l3, l4))
+            else:
+                region_subset = data.sel(lat=slice(l1, l2), lon=slice(l3, l4))
+            
+            # Debug: print region subset info
+            if region_subset.size > 0:
+                print(f'>>> Region: {name}, subset shape: {region_subset.shape}, '
+                      f'Lat range: [{float(region_subset.lat.min()):.2f}, {float(region_subset.lat.max()):.2f}], '
+                      f'Lon range: [{float(region_subset.lon.min()):.2f}, {float(region_subset.lon.max()):.2f}]')
             
             # Check if there is valid data
             if region_subset.size == 0:
@@ -505,9 +586,9 @@ if __name__ == '__main__':
     matplotlib.use('Agg')  # Use non-interactive backend
     
     try:
-        file_dir = '/root/autodl-tmp/Year'  # <-- Change to your path
+        file_dir = '/tmp'  # <-- Change to your path
         print('>>> Loading data...')
-        pm25 = load_pm25_fast(file_dir)              # Lazy loading, doesn't occupy memory
+        pm25, land_mask = load_pm25_fast(file_dir)  # 现在返回数据和掩膜
         print(f'>>> Data shape: {pm25.shape}')
         print(f'>>> Time range: {pm25.time.min().values} to {pm25.time.max().values}')
         
@@ -516,42 +597,45 @@ if __name__ == '__main__':
             print(f'>>> Lat/lon range: Latitude [{float(pm25.lat.min()):.2f}, {float(pm25.lat.max()):.2f}], '
                   f'Longitude [{float(pm25.lon.min()):.2f}, {float(pm25.lon.max()):.2f}]')
         
-        # Check data validity
-        valid_ratio = float((pm25.notnull().sum() / pm25.size * 100).item())
-        print(f'>>> Data completeness: {valid_ratio:.1f}%')
-        
+        # Check data validity (land only)
+        valid_ratio = float((pm25.where(land_mask).notnull().sum() /
+                            (pm25.where(land_mask).size) * 100).item())
+        print(f'>>> Data completeness (land only): {valid_ratio:.1f}%')
+
         # Check data value range
         if valid_ratio > 0:
-            data_min = float(pm25.min(skipna=True).item())
-            data_max = float(pm25.max(skipna=True).item())
-            data_mean = float(pm25.mean(skipna=True).item())
-            print(f'>>> Data value range: {data_min:.2f} - {data_max:.2f} µg/m³')
-            print(f'>>> Data mean value: {data_mean:.2f} µg/m³')
+            pm25_land = pm25.where(land_mask)
+            data_min = float(pm25_land.min(skipna=True).item())
+            data_max = float(pm25_land.max(skipna=True).item())
+            data_mean = float(pm25_land.mean(skipna=True).item())
+            print(f'>>> Data value range (land): {data_min:.2f} - {data_max:.2f} µg/m³')
+            print(f'>>> Data mean value (land): {data_mean:.2f} µg/m³')
         
-        stats = basic_statistics(pm25)               # Immediately return small objects
+        # 传递掩膜到各个分析函数
+        stats = basic_statistics(pm25, land_mask)
 
         print('>>> Generating time series plot...')
-        time_fig = time_series_analysis(pm25)
+        time_fig = time_series_analysis(pm25.where(land_mask) if land_mask is not None else pm25)
         time_fig.savefig('PM25_time_series.png', dpi=300, bbox_inches='tight')
         plt.close(time_fig)
 
         print('>>> Generating spatial distribution plot...')
-        spatial_fig = spatial_distribution_analysis(pm25)
+        spatial_fig = spatial_distribution_analysis(pm25, land_mask)
         spatial_fig.savefig('PM25_spatial.png', dpi=300, bbox_inches='tight')
         plt.close(spatial_fig)
 
         print('>>> Regional comparison...')
-        regional_fig, reg_stats = regional_analysis(pm25)
+        regional_fig, reg_stats = regional_analysis(pm25.where(land_mask) if land_mask is not None else pm25)
         regional_fig.savefig('PM25_regional.png', dpi=300, bbox_inches='tight')
         plt.close(regional_fig)
 
         print('>>> Pollution level...')
-        pollution_fig = pollution_level_analysis(pm25)
+        pollution_fig = pollution_level_analysis(pm25.where(land_mask) if land_mask is not None else pm25)
         pollution_fig.savefig('PM25_level.png', dpi=300, bbox_inches='tight')
         plt.close(pollution_fig)
 
         print('>>> Comprehensive report...')
-        generate_summary_report(pm25, reg_stats)
+        generate_summary_report(pm25.where(land_mask) if land_mask is not None else pm25, reg_stats)
 
         print('>>> All completed! Images saved to current directory.')
     except Exception as e:

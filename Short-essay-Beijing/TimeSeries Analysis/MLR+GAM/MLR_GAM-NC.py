@@ -33,6 +33,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.pipeline import Pipeline
 
+
 # GAM library
 try:
     from pygam import LinearGAM, s, f
@@ -50,7 +51,7 @@ plt.rcParams['figure.dpi'] = 100
 np.random.seed(42)
 
 print("=" * 80)
-print("Beijing PM2.5 Concentration Prediction - Linear Baseline Model")
+print("Beijing PM2.5 Concentration Prediction - GAM vs MLR Comparison")
 print("=" * 80)
 
 # ============================== Part1: Define paths and parameters ==============================
@@ -437,6 +438,17 @@ if __name__ == '__main__':
     print("\nMerging data...")
     df_combined = df_pollution.join(df_era5, how='inner')
 
+    # ============================== Optimization: Fix date index issues ==============================
+    print("\n========== Fixing Duplicate Dates & Sorting ==========")
+
+    # 合并后的数据可能有重复日期（你的问题源头）
+    df_combined = df_combined.groupby(df_combined.index).mean()
+
+    # 强制按时间排序
+    df_combined = df_combined.sort_index()
+
+    print(f"After fixing: {df_combined.shape} rows, time from {df_combined.index.min()} to {df_combined.index.max()}")
+
     if df_combined.empty:
         print("\n❌ Error: Data is empty after merging!")
         print("   Possible reason: Pollution data and meteorological data date indices have no intersection.")
@@ -461,6 +473,18 @@ if __name__ == '__main__':
     )
     df_combined['day_of_year'] = df_combined.index.dayofyear
 
+    # ============================== Optimization: Add Lag Features ==============================
+    print("\n========== Adding Lag Features ==========")
+
+    lag_features = [1, 3, 7]  # 可自由调整
+    for lag in lag_features:
+        df_combined[f'PM2.5_lag{lag}'] = df_combined['PM2.5'].shift(lag)
+
+    # 删除缺失（因滞后特征导致）
+    df_combined.dropna(inplace=True)
+
+    print(f"Shape after adding lag features: {df_combined.shape}")
+
     # Clean data
     df_combined.replace([np.inf, -np.inf], np.nan, inplace=True)
     df_combined.dropna(inplace=True)
@@ -477,36 +501,29 @@ if __name__ == '__main__':
     # Define target variable
     target = 'PM2.5'
 
-    # Select features based on correlation analysis results
-    # From Pearson and Kendall correlation analysis, features with strong correlation to PM2.5:
-    # d2m (dew point temp), t2m (temperature), u10/v10 (wind speed), tcwv (water vapor), tp (precipitation), blh (boundary layer height), sp (pressure), str (radiation)
-    selected_features = [
-    'd2m',  # Dew point temperature - strongest correlation
-    't2m',  # 2-meter temperature
-    'wind_speed_10m',  # 10-meter wind speed (calculated)
-    'tcwv',  # Total column water vapor
-    'tp',  # Total precipitation
-    'blh',  # Boundary layer height
-    'sp',  # Surface pressure
-    'str',  # Surface thermal radiation
-    'tisr',  # TOA incident solar radiation
-    'month',  # Month (time feature)
-    'season',  # Season (time feature)
+    # ============================== Optimization: Feature Selection ==============================
+    feature_cols = [
+    'd2m', 't2m', 'wind_speed_10m',
+    'tcwv', 'tp', 'blh', 'sp', 'str', 'tisr',
+    'month', 'season',
     ]
 
+    # 加入滞后特征
+    feature_cols += [f'PM2.5_lag{lag}' for lag in lag_features]
+
     # Check if features exist
-    available_features = [f for f in selected_features if f in df_combined.columns]
-    missing_features = [f for f in selected_features if f not in df_combined.columns]
+    selected_features = [f for f in feature_cols if f in df_combined.columns]
+    missing_features = [f for f in feature_cols if f not in df_combined.columns]
 
     if missing_features:
         print(f"\nWarning: The following features do not exist and will be skipped: {missing_features}")
 
-    print(f"\nSelected features ({len(available_features)} total):")
-    for i, feat in enumerate(available_features, 1):
+    print(f"\nSelected features ({len(selected_features)} total):")
+    for i, feat in enumerate(selected_features, 1):
         print(f"  {i}. {feat}")
 
     # Prepare modeling data
-    X = df_combined[available_features].copy()
+    X = df_combined[selected_features].copy()
     y = df_combined[target].copy()
 
     print(f"\nFeature matrix shape: {X.shape}")
@@ -558,19 +575,16 @@ if __name__ == '__main__':
     print(f"  Time range: {X_test.index.min().date()} to {X_test.index.max().date()}")
     print(f"  PM2.5: {y_test.mean():.2f} ± {y_test.std():.2f} μg/m³")
 
-    # ============================== Part6: Model Training - Multiple Linear Regression (MLR) ==============================
-    print("\n" + "=" * 80)
-    print("Model 1: Multiple Linear Regression (MLR)")
-    print("=" * 80)
+    # ============================== Training Models ==============================
+    print("\n========== Training MLR Model for Comparison ==========")
 
     # Create pipeline: standardization + linear regression
     mlr_pipeline = Pipeline([
-    ('scaler', StandardScaler()),
-    ('regressor', LinearRegression())
+        ('scaler', StandardScaler()),
+        ('regressor', LinearRegression())
     ])
 
     # Train model
-    print("\nTraining MLR model...")
     mlr_pipeline.fit(X_train, y_train)
 
     # Predict
@@ -579,149 +593,63 @@ if __name__ == '__main__':
 
     # Evaluate
     train_r2_mlr = r2_score(y_train, y_train_pred_mlr)
-    train_rmse_mlr = np.sqrt(mean_squared_error(y_train, y_train_pred_mlr))
-    train_mae_mlr = mean_absolute_error(y_train, y_train_pred_mlr)
-
     test_r2_mlr = r2_score(y_test, y_test_pred_mlr)
     test_rmse_mlr = np.sqrt(mean_squared_error(y_test, y_test_pred_mlr))
     test_mae_mlr = mean_absolute_error(y_test, y_test_pred_mlr)
 
-    print("\nMLR Model Performance:")
-    print(f"  Training set:")
-    print(f"    R² Score: {train_r2_mlr:.4f}")
-    print(f"    RMSE: {train_rmse_mlr:.4f}")
-    print(f"    MAE: {train_mae_mlr:.4f}")
-    print(f"  Test set:")
-    print(f"    R² Score: {test_r2_mlr:.4f}")
-    print(f"    RMSE: {test_rmse_mlr:.4f}")
-    print(f"    MAE: {test_mae_mlr:.4f}")
+    print("MLR Model Performance:")
+    print(f"  Train R²: {train_r2_mlr:.4f}")
+    print(f"  Test  R²: {test_r2_mlr:.4f}")
+    print(f"  Test  RMSE: {test_rmse_mlr:.2f}")
+    print(f"  Test  MAE : {test_mae_mlr:.2f}")
 
-    # Get feature coefficients
-    mlr_coef = mlr_pipeline.named_steps['regressor'].coef_
-    mlr_intercept = mlr_pipeline.named_steps['regressor'].intercept_
+    # ============================== Training GAM Model ==============================
+    if not GAM_AVAILABLE:
+        print("\n❌ Error: GAM is not available. Please install with 'pip install pygam'")
+        import sys
+        sys.exit(1)
 
-    print(f"\nModel Parameters:")
-    print(f"  Intercept: {mlr_intercept:.4f}")
-    print(f"  Feature coefficients:")
-    for feat, coef in zip(available_features, mlr_coef):
-        print(f"    {feat}: {coef:.4f}")
+    print("\n========== Training GAM Model ==========")
 
-    # Cross-validation
-    print("\nPerforming 5-fold cross-validation...")
-    cv_scores_mlr = cross_val_score(mlr_pipeline, X_train, y_train, 
-                                  cv=5, scoring='r2')
-    print(f"  Cross-validation R² Scores: {cv_scores_mlr}")
-    print(f"  Average R²: {cv_scores_mlr.mean():.4f} ± {cv_scores_mlr.std():.4f}")
+    # 标准化特征（GAM对尺度敏感）
+    scaler_gam = StandardScaler()
+    X_train_scaled = scaler_gam.fit_transform(X_train)
+    X_test_scaled = scaler_gam.transform(X_test)
 
-    # ============================== Part7: Model Training - Ridge Regression ==============================
-    print("\n" + "=" * 80)
-    print("Model 2: Ridge Regression (L2 Regularization)")
-    print("=" * 80)
+    # 构建GAM模型，使用默认的自动平滑样条项
+    # pygam会自动为每个特征创建平滑样条项
+    gam = LinearGAM()
 
-    # Create Ridge regression pipeline
-    ridge_pipeline = Pipeline([
-    ('scaler', StandardScaler()),
-    ('regressor', Ridge(alpha=1.0))
-    ])
+    # 训练模型
+    print("  Fitting GAM model (this may take a while)...")
+    gam.fit(X_train_scaled, y_train)
 
-    # Train
-    print("\nTraining Ridge model...")
-    ridge_pipeline.fit(X_train, y_train)
+    # 预测
+    y_train_pred_gam = gam.predict(X_train_scaled)
+    y_test_pred_gam = gam.predict(X_test_scaled)
 
-    # Predict
-    y_train_pred_ridge = ridge_pipeline.predict(X_train)
-    y_test_pred_ridge = ridge_pipeline.predict(X_test)
+    # 评估
+    train_r2_gam = r2_score(y_train, y_train_pred_gam)
+    test_r2_gam = r2_score(y_test, y_test_pred_gam)
+    test_rmse_gam = np.sqrt(mean_squared_error(y_test, y_test_pred_gam))
+    test_mae_gam = mean_absolute_error(y_test, y_test_pred_gam)
 
-    # Evaluate
-    train_r2_ridge = r2_score(y_train, y_train_pred_ridge)
-    train_rmse_ridge = np.sqrt(mean_squared_error(y_train, y_train_pred_ridge))
-    train_mae_ridge = mean_absolute_error(y_train, y_train_pred_ridge)
+    print("GAM Model Performance:")
+    print(f"  Train R²: {train_r2_gam:.4f}")
+    print(f"  Test  R²: {test_r2_gam:.4f}")
+    print(f"  Test  RMSE: {test_rmse_gam:.2f}")
+    print(f"  Test  MAE : {test_mae_gam:.2f}")
 
-    test_r2_ridge = r2_score(y_test, y_test_pred_ridge)
-    test_rmse_ridge = np.sqrt(mean_squared_error(y_test, y_test_pred_ridge))
-    test_mae_ridge = mean_absolute_error(y_test, y_test_pred_ridge)
-
-    print("\nRidge Model Performance:")
-    print(f"  Training set:")
-    print(f"    R² Score: {train_r2_ridge:.4f}")
-    print(f"    RMSE: {train_rmse_ridge:.4f}")
-    print(f"    MAE: {train_mae_ridge:.4f}")
-    print(f"  Test set:")
-    print(f"    R² Score: {test_r2_ridge:.4f}")
-    print(f"    RMSE: {test_rmse_ridge:.4f}")
-    print(f"    MAE: {test_mae_ridge:.4f}")
-
-    # ============================== Part8: Model Training - GAM ==============================
-    if GAM_AVAILABLE:
-        print("\n" + "=" * 80)
-        print("Model 3: Generalized Additive Model (GAM)")
-        print("=" * 80)
-        
-        # Standardize data (GAM also needs this)
-        scaler_gam = StandardScaler()
-        X_train_scaled = scaler_gam.fit_transform(X_train)
-        X_test_scaled = scaler_gam.transform(X_test)
-        
-        # Create GAM model
-        # Add spline terms for each feature
-        print("\nTraining GAM model...")
-        gam = LinearGAM(s(0) + s(1) + s(2) + s(3) + s(4) + s(5) + s(6) + s(7) + s(8) + f(9) + f(10))
-        
-        try:
-            gam.gridsearch(X_train_scaled, y_train.values)
-            
-            # Predict
-            y_train_pred_gam = gam.predict(X_train_scaled)
-            y_test_pred_gam = gam.predict(X_test_scaled)
-            
-            # Evaluate
-            train_r2_gam = r2_score(y_train, y_train_pred_gam)
-            train_rmse_gam = np.sqrt(mean_squared_error(y_train, y_train_pred_gam))
-            train_mae_gam = mean_absolute_error(y_train, y_train_pred_gam)
-            
-            test_r2_gam = r2_score(y_test, y_test_pred_gam)
-            test_rmse_gam = np.sqrt(mean_squared_error(y_test, y_test_pred_gam))
-            test_mae_gam = mean_absolute_error(y_test, y_test_pred_gam)
-            
-            print("\nGAM Model Performance:")
-            print(f"  Training set:")
-            print(f"    R² Score: {train_r2_gam:.4f}")
-            print(f"    RMSE: {train_rmse_gam:.4f}")
-            print(f"    MAE: {train_mae_gam:.4f}")
-            print(f"  Test set:")
-            print(f"    R² Score: {test_r2_gam:.4f}")
-            print(f"    RMSE: {test_rmse_gam:.4f}")
-            print(f"    MAE: {test_mae_gam:.4f}")
-            
-            print(f"\nOptimal parameters: λ = {gam.lam}")
-            
-        except Exception as e:
-            print(f"\nGAM model training error: {e}")
-            GAM_AVAILABLE = False
-
-    # ============================== Part9: Model Comparison ==============================
-    print("\n" + "=" * 80)
-    print("Model Comparison")
-    print("=" * 80)
+    # ============================== Optimization Part 7: Model Comparison ==============================
+    print("\n========== Model Comparison ==========")
 
     results = {
-    'Model': ['MLR', 'Ridge'],
-    'Train R²': [train_r2_mlr, train_r2_ridge],
-    'Train RMSE': [train_rmse_mlr, train_rmse_ridge],
-    'Train MAE': [train_mae_mlr, train_mae_ridge],
-    'Test R²': [test_r2_mlr, test_r2_ridge],
-    'Test RMSE': [test_rmse_mlr, test_rmse_ridge],
-    'Test MAE': [test_mae_mlr, test_mae_ridge],
+    'Model': ['MLR', 'GAM'],
+    'Train R²': [train_r2_mlr, train_r2_gam],
+    'Test R²': [test_r2_mlr, test_r2_gam],
+    'Test RMSE': [test_rmse_mlr, test_rmse_gam],
+    'Test MAE': [test_mae_mlr, test_mae_gam],
     }
-
-    if GAM_AVAILABLE:
-        results['Model'].append('GAM')
-        results['Train R²'].append(train_r2_gam)
-        results['Train RMSE'].append(train_rmse_gam)
-        results['Train MAE'].append(train_mae_gam)
-        results['Test R²'].append(test_r2_gam)
-        results['Test RMSE'].append(test_rmse_gam)
-        results['Test MAE'].append(test_mae_gam)
 
     results_df = pd.DataFrame(results)
     print("\nModel Performance Comparison:")
@@ -732,136 +660,88 @@ if __name__ == '__main__':
     print("Generating Visualization Results")
     print("=" * 80)
 
-    # 1. Prediction vs Actual Values Scatter Plot
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    # ============================== GAM Scatter Plot ==============================
+    fig, ax = plt.subplots(figsize=(6,6))
+    ax.scatter(y_test, y_test_pred_gam, alpha=0.5, color='green')
+    ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', label="Perfect Prediction")
 
-    # MLR
-    axes[0].scatter(y_test, y_test_pred_mlr, alpha=0.5, s=20)
-    axes[0].plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 
-             'r--', lw=2, label='Perfect Prediction')
-    axes[0].set_xlabel('Actual PM2.5 Concentration (μg/m³)', fontsize=12)
-    axes[0].set_ylabel('Predicted PM2.5 Concentration (μg/m³)', fontsize=12)
-    axes[0].set_title(f'MLR Model\nR²={test_r2_mlr:.4f}, RMSE={test_rmse_mlr:.2f}', fontsize=12)
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+    ax.set_xlabel("Actual PM2.5")
+    ax.set_ylabel("Predicted PM2.5")
+    ax.set_title(f"GAM Prediction Scatter\nTest R²={test_r2_gam:.3f}, RMSE={test_rmse_gam:.2f}")
+    ax.legend()
+    ax.grid(True)
 
-    # Ridge
-    axes[1].scatter(y_test, y_test_pred_ridge, alpha=0.5, s=20, color='green')
-    axes[1].plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 
-             'r--', lw=2, label='Perfect Prediction')
-    axes[1].set_xlabel('Actual PM2.5 Concentration (μg/m³)', fontsize=12)
-    axes[1].set_ylabel('Predicted PM2.5 Concentration (μg/m³)', fontsize=12)
-    axes[1].set_title(f'Ridge Model\nR²={test_r2_ridge:.4f}, RMSE={test_rmse_ridge:.2f}', fontsize=12)
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
-
-    # GAM
-    if GAM_AVAILABLE:
-        axes[2].scatter(y_test, y_test_pred_gam, alpha=0.5, s=20, color='orange')
-        axes[2].plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 
-                     'r--', lw=2, label='Perfect Prediction')
-        axes[2].set_xlabel('Actual PM2.5 Concentration (μg/m³)', fontsize=12)
-        axes[2].set_ylabel('Predicted PM2.5 Concentration (μg/m³)', fontsize=12)
-        axes[2].set_title(f'GAM Model\nR²={test_r2_gam:.4f}, RMSE={test_rmse_gam:.2f}', fontsize=12)
-        axes[2].legend()
-        axes[2].grid(True, alpha=0.3)
-    else:
-        axes[2].text(0.5, 0.5, 'GAM Model Not Trained', ha='center', va='center', fontsize=14)
-        axes[2].axis('off')
-
-    plt.tight_layout()
-    plt.savefig(output_dir / 'prediction_scatter.png', dpi=300, bbox_inches='tight')
-    print("\nSaved: prediction_scatter.png")
+    plt.savefig(output_dir / "gam_prediction_scatter.png", dpi=300, bbox_inches='tight')
     plt.close()
+    print("Saved: gam_prediction_scatter.png")
 
-    # 2. Time Series Prediction Comparison
-    fig, ax = plt.subplots(figsize=(16, 6))
+    # ============================== Optimization Part 7: Clean Time Series Plot ==============================
+    print("\n========== Plotting Time Series ==========")
 
-    # Plot only part of test set (last 200 points)
-    plot_range = min(200, len(y_test))
-    plot_indices = range(len(y_test) - plot_range, len(y_test))
-    time_index = y_test.index[plot_indices]
+    fig, ax = plt.subplots(figsize=(16,6))
 
-    ax.plot(time_index, y_test.iloc[plot_indices], 'k-', label='Actual Values', linewidth=2, alpha=0.7)
-    ax.plot(time_index, y_test_pred_mlr[plot_indices], 'b--', label='MLR Prediction', linewidth=1.5, alpha=0.7)
-    ax.plot(time_index, y_test_pred_ridge[plot_indices], 'g-.', label='Ridge Prediction', linewidth=1.5, alpha=0.7)
-    if GAM_AVAILABLE:
-        ax.plot(time_index, y_test_pred_gam[plot_indices], 'r:', label='GAM Prediction', linewidth=1.5, alpha=0.7)
+    # 按时间排序以避免"打结"
+    y_test_sorted = y_test.sort_index()
+    y_test_pred_mlr_sorted = pd.Series(y_test_pred_mlr, index=y_test.index).sort_index()
+    y_test_pred_gam_sorted = pd.Series(y_test_pred_gam, index=y_test.index).sort_index()
 
-    ax.set_xlabel('Date', fontsize=12)
-    ax.set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
-    ax.set_title('PM2.5 Concentration Prediction Time Series Comparison (Last 200 Days of Test Set)', fontsize=14)
-    ax.legend(loc='upper right', fontsize=10)
-    ax.grid(True, alpha=0.3)
+    plot_range = 200
+    y_true_plot = y_test_sorted[-plot_range:]
+    y_mlr_plot = y_test_pred_mlr_sorted[-plot_range:]
+    y_gam_plot = y_test_pred_gam_sorted[-plot_range:]
+
+    ax.plot(y_true_plot.index, y_true_plot, label="Actual", color="black", linewidth=2)
+    ax.plot(y_mlr_plot.index, y_mlr_plot, label="MLR Prediction", color="blue", linestyle='--')
+    ax.plot(y_gam_plot.index, y_gam_plot, label="GAM Prediction", color="green", linestyle='-')
+
+    ax.set_title("PM2.5 Prediction Comparison (Last 200 Days)")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("PM2.5 (μg/m³)")
+    ax.legend()
+    ax.grid(True)
     plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig(output_dir / 'prediction_timeseries.png', dpi=300, bbox_inches='tight')
-    print("Saved: prediction_timeseries.png")
+
+    plt.savefig(output_dir / "prediction_timeseries_optimized.png", dpi=300, bbox_inches='tight')
     plt.close()
 
-    # 3. Residual Analysis
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    print("Saved: prediction_timeseries_optimized.png")
+
+    # ============================== Residual Analysis ==============================
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
     # MLR Residuals
     residuals_mlr = y_test - y_test_pred_mlr
-    axes[0].scatter(y_test_pred_mlr, residuals_mlr, alpha=0.5, s=20)
+    axes[0].scatter(y_test_pred_mlr, residuals_mlr, alpha=0.5, s=20, color='blue')
     axes[0].axhline(y=0, color='r', linestyle='--', linewidth=2)
     axes[0].set_xlabel('Predicted Values', fontsize=12)
     axes[0].set_ylabel('Residuals', fontsize=12)
     axes[0].set_title('MLR Model Residual Plot', fontsize=12)
     axes[0].grid(True, alpha=0.3)
 
-    # Ridge Residuals
-    residuals_ridge = y_test - y_test_pred_ridge
-    axes[1].scatter(y_test_pred_ridge, residuals_ridge, alpha=0.5, s=20, color='green')
+    # GAM Residuals
+    residuals_gam = y_test - y_test_pred_gam
+    axes[1].scatter(y_test_pred_gam, residuals_gam, alpha=0.5, s=20, color='green')
     axes[1].axhline(y=0, color='r', linestyle='--', linewidth=2)
     axes[1].set_xlabel('Predicted Values', fontsize=12)
     axes[1].set_ylabel('Residuals', fontsize=12)
-    axes[1].set_title('Ridge Model Residual Plot', fontsize=12)
+    axes[1].set_title('GAM Model Residual Plot', fontsize=12)
     axes[1].grid(True, alpha=0.3)
 
-    # GAM Residuals
-    if GAM_AVAILABLE:
-        residuals_gam = y_test - y_test_pred_gam
-        axes[2].scatter(y_test_pred_gam, residuals_gam, alpha=0.5, s=20, color='orange')
-        axes[2].axhline(y=0, color='r', linestyle='--', linewidth=2)
-        axes[2].set_xlabel('Predicted Values', fontsize=12)
-        axes[2].set_ylabel('Residuals', fontsize=12)
-        axes[2].set_title('GAM Model Residual Plot', fontsize=12)
-        axes[2].grid(True, alpha=0.3)
-    else:
-        axes[2].axis('off')
-
     plt.tight_layout()
-    plt.savefig(output_dir / 'residuals_analysis.png', dpi=300, bbox_inches='tight')
-    print("Saved: residuals_analysis.png")
+    plt.savefig(output_dir / 'residuals_analysis_optimized.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-    # 4. Feature Importance (Based on MLR Coefficients)
-    fig, ax = plt.subplots(figsize=(10, 6))
+    print("Saved: residuals_analysis_optimized.png")
 
-    feature_importance = pd.DataFrame({
-    'Feature': available_features,
-    'Coefficient': np.abs(mlr_coef)
-    }).sort_values('Coefficient', ascending=True)
 
-    ax.barh(feature_importance['Feature'], feature_importance['Coefficient'], color='steelblue')
-    ax.set_xlabel('Absolute Coefficient Value', fontsize=12)
-    ax.set_title('MLR Model Feature Importance (Absolute Coefficients)', fontsize=14)
-    ax.grid(True, alpha=0.3, axis='x')
-    plt.tight_layout()
-    plt.savefig(output_dir / 'feature_importance.png', dpi=300, bbox_inches='tight')
-    print("Saved: feature_importance.png")
-    plt.close()
-
-    # 5. Model Performance Comparison Bar Charts
+    # ============================== Optimization Part 10: Model Performance Comparison ==============================
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
     models = results_df['Model'].tolist()
     x_pos = np.arange(len(models))
 
     # R² Score
-    axes[0].bar(x_pos, results_df['Test R²'], color=['blue', 'green', 'orange'][:len(models)])
+    axes[0].bar(x_pos, results_df['Test R²'], color=['blue', 'green'])
     axes[0].set_xticks(x_pos)
     axes[0].set_xticklabels(models)
     axes[0].set_ylabel('R² Score', fontsize=12)
@@ -869,7 +749,7 @@ if __name__ == '__main__':
     axes[0].grid(True, alpha=0.3, axis='y')
 
     # RMSE
-    axes[1].bar(x_pos, results_df['Test RMSE'], color=['blue', 'green', 'orange'][:len(models)])
+    axes[1].bar(x_pos, results_df['Test RMSE'], color=['blue', 'green'])
     axes[1].set_xticks(x_pos)
     axes[1].set_xticklabels(models)
     axes[1].set_ylabel('RMSE', fontsize=12)
@@ -877,7 +757,7 @@ if __name__ == '__main__':
     axes[1].grid(True, alpha=0.3, axis='y')
 
     # MAE
-    axes[2].bar(x_pos, results_df['Test MAE'], color=['blue', 'green', 'orange'][:len(models)])
+    axes[2].bar(x_pos, results_df['Test MAE'], color=['blue', 'green'])
     axes[2].set_xticks(x_pos)
     axes[2].set_xticklabels(models)
     axes[2].set_ylabel('MAE', fontsize=12)
@@ -885,9 +765,10 @@ if __name__ == '__main__':
     axes[2].grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
-    plt.savefig(output_dir / 'model_comparison.png', dpi=300, bbox_inches='tight')
-    print("Saved: model_comparison.png")
+    plt.savefig(output_dir / 'model_comparison_optimized.png', dpi=300, bbox_inches='tight')
     plt.close()
+
+    print("Saved: model_comparison_optimized.png")
 
     # ============================== Part11: Save Results ==============================
     print("\n" + "=" * 80)
@@ -903,23 +784,22 @@ if __name__ == '__main__':
     'Date': y_test.index,
     'Actual': y_test.values,
     'MLR_Prediction': y_test_pred_mlr,
-    'Ridge_Prediction': y_test_pred_ridge,
+    'GAM_Prediction': y_test_pred_gam,
     })
 
-    if GAM_AVAILABLE:
-        predictions_df['GAM_Prediction'] = y_test_pred_gam
-
-    predictions_df.to_csv(output_dir / 'predictions.csv', index=False, encoding='utf-8-sig')
-    print("Saved: predictions.csv")
+    predictions_df.to_csv(output_dir / 'predictions_optimized.csv', index=False, encoding='utf-8-sig')
+    print("Saved: predictions_optimized.csv")
 
     # Save feature importance
+    # GAM系数（标准化后的）
+    gam_coef = gam.coef_
     feature_importance_df = pd.DataFrame({
-    'Feature': available_features,
-    'MLR_Coefficient': mlr_coef,
-    'Ridge_Coefficient': ridge_pipeline.named_steps['regressor'].coef_
+    'Feature': selected_features,
+    'MLR_Coefficient': mlr_pipeline.named_steps['regressor'].coef_,
+    'GAM_Coefficient': gam_coef[:len(selected_features)] if len(gam_coef) >= len(selected_features) else gam_coef
     })
-    feature_importance_df.to_csv(output_dir / 'feature_importance.csv', index=False, encoding='utf-8-sig')
-    print("Saved: feature_importance.csv")
+    feature_importance_df.to_csv(output_dir / 'feature_importance_optimized.csv', index=False, encoding='utf-8-sig')
+    print("Saved: feature_importance_optimized.csv")
 
     # Save models (using pickle)
     import pickle
@@ -927,14 +807,14 @@ if __name__ == '__main__':
         pickle.dump(mlr_pipeline, f)
     print("Saved: mlr_model.pkl")
 
-    with open(model_dir / 'ridge_model.pkl', 'wb') as f:
-        pickle.dump(ridge_pipeline, f)
-    print("Saved: ridge_model.pkl")
-
-    if GAM_AVAILABLE:
-        with open(model_dir / 'gam_model.pkl', 'wb') as f:
-            pickle.dump((gam, scaler_gam), f)
-        print("Saved: gam_model.pkl")
+    # Save GAM model and scaler
+    gam_model_data = {
+        'gam': gam,
+        'scaler': scaler_gam
+    }
+    with open(model_dir / 'gam_model.pkl', 'wb') as f:
+        pickle.dump(gam_model_data, f)
+    print("Saved: gam_model.pkl")
 
     print("\n" + "=" * 80)
     print("Analysis Complete!")
@@ -942,22 +822,19 @@ if __name__ == '__main__':
 
     print("\nGenerated files:")
     print("\nCSV Files:")
-    print("  - model_performance.csv       Model performance comparison")
-    print("  - predictions.csv             Prediction results")
-    print("  - feature_importance.csv      Feature importance")
+    print("  - model_performance.csv           Model performance comparison")
+    print("  - predictions_optimized.csv       Prediction results")
+    print("  - feature_importance_optimized.csv Feature importance")
 
     print("\nChart Files:")
-    print("  - prediction_scatter.png      Prediction vs actual scatter plot")
-    print("  - prediction_timeseries.png   Time series prediction comparison")
-    print("  - residuals_analysis.png      Residual analysis plot")
-    print("  - feature_importance.png      Feature importance plot")
-    print("  - model_comparison.png        Model performance comparison plot")
+    print("  - gam_prediction_scatter.png           GAM prediction scatter plot")
+    print("  - prediction_timeseries_optimized.png   Time series prediction comparison")
+    print("  - residuals_analysis_optimized.png      Residual analysis plot")
+    print("  - model_comparison_optimized.png        Model performance comparison plot")
 
     print("\nModel Files:")
     print("  - mlr_model.pkl               Multiple Linear Regression model")
-    print("  - ridge_model.pkl             Ridge Regression model")
-    if GAM_AVAILABLE:
-        print("  - gam_model.pkl               Generalized Additive Model")
+    print("  - gam_model.pkl               Generalized Additive Model (GAM)")
 
     # Best model information
     best_model_idx = results_df['Test R²'].idxmax()
@@ -967,11 +844,14 @@ if __name__ == '__main__':
     print(f"  RMSE: {best_model['Test RMSE']:.2f} μg/m³")
     print(f"  MAE: {best_model['Test MAE']:.2f} μg/m³")
 
-    print("\nTop 5 Important Features:")
-    for i, row in feature_importance.head(5).iterrows():
-        print(f"  {row['Feature']}: {row['Coefficient']:.4f}")
+    print("\nTop 5 Important Features (GAM coefficients):")
+    # 显示GAM系数的绝对值最大的特征
+    gam_importance = np.abs(feature_importance_df['GAM_Coefficient'])
+    top_features = feature_importance_df.iloc[gam_importance.nlargest(5).index]
+    for i, row in top_features.iterrows():
+        print(f"  {row['Feature']}: {row['GAM_Coefficient']:.4f}")
 
     print("\n" + "=" * 80)
-    print("MLR+GAM Baseline Model Training Complete!")
+    print("GAM vs MLR PM2.5 Prediction Analysis Complete!")
     print("=" * 80)
 

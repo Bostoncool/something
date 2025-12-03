@@ -482,67 +482,100 @@ def read_all_era5(
 
 
 def create_features(df: pd.DataFrame) -> pd.DataFrame:
-    df_copy = df.copy()
+    df = df.copy()
 
-    if {"u10", "v10"}.issubset(df_copy.columns):
-        df_copy["wind_speed_10m"] = np.sqrt(df_copy["u10"] ** 2 + df_copy["v10"] ** 2)
-        df_copy["wind_dir_10m"] = np.degrees(np.arctan2(df_copy["v10"], df_copy["u10"]))
-        df_copy["wind_dir_10m"] = (df_copy["wind_dir_10m"] + 360) % 360
+    # -------------------------
+    # 1. 风速风向（保留你原来的）
+    # -------------------------
+    if {"u10", "v10"}.issubset(df.columns):
+        df["wind_speed_10m"] = np.sqrt(df["u10"]**2 + df["v10"]**2)
+        df["wind_dir_10m"] = (np.degrees(np.arctan2(df["v10"], df["u10"])) + 360) % 360
 
-    if {"u100", "v100"}.issubset(df_copy.columns):
-        df_copy["wind_speed_100m"] = np.sqrt(df_copy["u100"] ** 2 + df_copy["v100"] ** 2)
-        df_copy["wind_dir_100m"] = np.degrees(np.arctan2(df_copy["v100"], df_copy["u100"]))
-        df_copy["wind_dir_100m"] = (df_copy["wind_dir_100m"] + 360) % 360
+    if {"u100", "v100"}.issubset(df.columns):
+        df["wind_speed_100m"] = np.sqrt(df["u100"]**2 + df["v100"]**2)
+        df["wind_dir_100m"] = (np.degrees(np.arctan2(df["v100"], df["u100"])) + 360) % 360
 
-    df_copy["year"] = df_copy.index.year
-    df_copy["month"] = df_copy.index.month
-    df_copy["day"] = df_copy.index.day
-    df_copy["day_of_year"] = df_copy.index.day_of_year  # 使用新的API替代已弃用的dayofyear
-    df_copy["day_of_week"] = df_copy.index.day_of_week  # 使用新的API替代已弃用的dayofweek
-    df_copy["week_of_year"] = df_copy.index.isocalendar().week.astype(int)
+    # -------------------------
+    # 2. 基础时间特征
+    # -------------------------
+    df["year"] = df.index.year
+    df["month"] = df.index.month
+    df["day"] = df.index.day
+    df["day_of_week"] = df.index.day_of_week
+    df["day_of_year"] = df.index.day_of_year
+    df["week_of_year"] = df.index.isocalendar().week.astype("int")
 
-    df_copy["season"] = df_copy["month"].apply(
-        lambda x: 1
-        if x in (12, 1, 2)
-        else 2
-        if x in (3, 4, 5)
-        else 3
-        if x in (6, 7, 8)
-        else 4
+    # 季节
+    df["season"] = df["month"].map(
+        {12: 1, 1: 1, 2: 1,
+         3: 2, 4: 2, 5: 2,
+         6: 3, 7: 3, 8: 3,
+         9: 4, 10: 4, 11: 4}
     )
-    df_copy["is_heating_season"] = (
-        ((df_copy["month"] >= 11) | (df_copy["month"] <= 3)).astype(int)
-    )
 
-    if {"t2m", "d2m"}.issubset(df_copy.columns):
-        df_copy["temp_dewpoint_diff"] = df_copy["t2m"] - df_copy["d2m"]
+    # 供暖季（强特征）
+    df["is_heating"] = ((df["month"] >= 11) | (df["month"] <= 3)).astype(int)
+
+    # -------------------------
+    # 3. PM2.5 的 lag & rolling（最重要）
+    # -------------------------
+    if "PM2.5" in df.columns:
+        for lag in [1, 2, 3, 5, 7, 14, 30]:
+            df[f"PM25_lag{lag}"] = df["PM2.5"].shift(lag)
+
+        for win in [3, 7, 14, 30]:
+            df[f"PM25_ma{win}"] = df["PM2.5"].rolling(win, min_periods=1).mean()
+
+        # 差分（捕获上升或下降趋势）
+        df["PM25_diff1"] = df["PM2.5"].diff()
+        df["PM25_diff7"] = df["PM2.5"].diff(7)
+
+    # -------------------------
+    # 4. 天气变化率（比绝对值更有预测力）
+    # -------------------------
+    if "t2m" in df.columns:
+        df["t2m_diff1"] = df["t2m"].diff()
+        df["t2m_diff3"] = df["t2m"].diff(3)
+
+    if "d2m" in df.columns:
+        df["humidity_diff1"] = df["d2m"].diff()
+        df["humidity_diff3"] = df["d2m"].diff(3)
+
+    if "wind_speed_10m" in df.columns:
+        df["wind_change1"] = df["wind_speed_10m"].diff()
+
+    # -------------------------
+    # 5. 湿度计算（保留原来逻辑）
+    # -------------------------
+    if {"t2m", "d2m"}.issubset(df.columns):
+        df["temp_dewpoint_diff"] = df["t2m"] - df["d2m"]
         numerator = np.exp(
-            (17.625 * (df_copy["d2m"] - 273.15))
-            / (243.04 + (df_copy["d2m"] - 273.15))
+            (17.625 * (df["d2m"] - 273.15))
+            / (243.04 + (df["d2m"] - 273.15))
         )
         denominator = np.exp(
-            (17.625 * (df_copy["t2m"] - 273.15))
-            / (243.04 + (df_copy["t2m"] - 273.15))
+            (17.625 * (df["t2m"] - 273.15))
+            / (243.04 + (df["t2m"] - 273.15))
         )
-        df_copy["relative_humidity"] = (100 * numerator / denominator).clip(0, 100)
+        df["relative_humidity"] = (100 * numerator / denominator).clip(0, 100)
 
-    if "PM2.5" in df_copy.columns:
-        df_copy["PM2.5_lag1"] = df_copy["PM2.5"].shift(1)
-        df_copy["PM2.5_lag3"] = df_copy["PM2.5"].shift(3)
-        df_copy["PM2.5_lag7"] = df_copy["PM2.5"].shift(7)
-        df_copy["PM2.5_ma3"] = df_copy["PM2.5"].rolling(window=3, min_periods=1).mean()
-        df_copy["PM2.5_ma7"] = df_copy["PM2.5"].rolling(window=7, min_periods=1).mean()
-        df_copy["PM2.5_ma30"] = df_copy["PM2.5"].rolling(window=30, min_periods=1).mean()
-
-    if "wind_dir_10m" in df_copy.columns:
-        df_copy["wind_dir_category"] = pd.cut(
-            df_copy["wind_dir_10m"],
+    # -------------------------
+    # 6. 风向分类（保留原来逻辑）
+    # -------------------------
+    if "wind_dir_10m" in df.columns:
+        df["wind_dir_category"] = pd.cut(
+            df["wind_dir_10m"],
             bins=[0, 45, 90, 135, 180, 225, 270, 315, 360],
             labels=list(range(8)),
             include_lowest=True,
         ).astype("Int64")
 
-    return df_copy
+    # -------------------------
+    # 7. 清理
+    # -------------------------
+    df = df.replace([np.inf, -np.inf], np.nan)
+
+    return df
 
 
 def evaluate_model(y_true: pd.Series, y_pred: np.ndarray, dataset_name: str) -> dict:
@@ -1080,34 +1113,49 @@ def main():
     print(f"  Median: {y.median():.2f} μg/m³")
 
     print("\n" + "=" * 80)
-    print("Step 3: Dataset Splitting")
+    print("Step 3: Dataset Splitting (Time-based)")
     print("=" * 80)
 
-    n_samples = len(X)
-    train_size = int(n_samples * 0.70)
-    val_size = int(n_samples * 0.15)
+    # 确保索引是单调的（排序）
+    if not X.index.is_monotonic_increasing:
+        print("Warning: Index is not monotonic, sorting...")
+        X = X.sort_index()
+        y = y.sort_index()
 
-    X_train = X.iloc[:train_size]
-    X_val = X.iloc[train_size : train_size + val_size]
-    X_test = X.iloc[train_size + val_size :]
+    # 按年份划分数据集（避免数据泄漏）
+    train_end = pd.Timestamp("2020-12-31")
+    val_end = pd.Timestamp("2021-12-31")
 
-    y_train = y.iloc[:train_size]
-    y_val = y.iloc[train_size : train_size + val_size]
-    y_test = y.iloc[train_size + val_size :]
+    # 使用布尔索引进行更安全的日期切片
+    train_mask = X.index <= train_end
+    val_mask = (X.index > train_end) & (X.index <= val_end)
+    test_mask = X.index > val_end
 
-    print(f"\nTraining set: {len(X_train)} samples ({len(X_train) / n_samples * 100:.1f}%)")
+    X_train = X[train_mask].copy()
+    X_val = X[val_mask].copy()
+    X_test = X[test_mask].copy()
+
+    y_train = y[train_mask].copy()
+    y_val = y[val_mask].copy()
+    y_test = y[test_mask].copy()
+
+    # 对目标变量进行log1p变换
+    y_train_log = np.log1p(y_train)
+    y_val_log = np.log1p(y_val)
+
+    print(f"\nTraining set: {len(X_train)} samples (2015-2020)")
     print(
         f"  Time range: {X_train.index.min().date()} to {X_train.index.max().date()}"
     )
-    print(f"  PM2.5: {y_train.mean():.2f} ± {y_train.std():.2f} μg/m³")
+    print(f"  PM2.5: {y_train.mean():.2f} ± {y_train.std():.2f} μg/m³ (log-transformed for training)")
 
-    print(f"\nValidation set: {len(X_val)} samples ({len(X_val) / n_samples * 100:.1f}%)")
+    print(f"\nValidation set: {len(X_val)} samples (2021)")
     print(f"  Time range: {X_val.index.min().date()} to {X_val.index.max().date()}")
-    print(f"  PM2.5: {y_val.mean():.2f} ± {y_val.std():.2f} μg/m³")
+    print(f"  PM2.5: {y_val.mean():.2f} ± {y_val.std():.2f} μg/m³ (log-transformed for training)")
 
-    print(f"\nTest set: {len(X_test)} samples ({len(X_test) / n_samples * 100:.1f}%)")
+    print(f"\nTest set: {len(X_test)} samples (2022-2024)")
     print(f"  Time range: {X_test.index.min().date()} to {X_test.index.max().date()}")
-    print(f"  PM2.5: {y_test.mean():.2f} ± {y_test.std():.2f} μg/m³")
+    print(f"  PM2.5: {y_test.mean():.2f} ± {y_test.std():.2f} μg/m³ (original scale for evaluation)")
 
     print("\n" + "=" * 80)
     print("Step 4: XGBoost Basic Model Training")
@@ -1115,17 +1163,19 @@ def main():
 
     params_basic = {
         "objective": "reg:squarederror",
-        "max_depth": 5,
-        "learning_rate": 0.05,
-        "n_estimators": 200,
+        "tree_method": "hist",
+        "device": "cuda",
+        "max_depth": 8,
+        "learning_rate": 0.03,
+        "n_estimators": 600,
         "min_child_weight": 3,
         "subsample": 0.8,
         "colsample_bytree": 0.8,
+        "gamma": 0.1,
+        "reg_lambda": 1.2,
+        "reg_alpha": 0.1,
         "random_state": RANDOM_SEED,
-        "n_jobs": MAX_WORKERS,
         "eval_metric": "rmse",
-        "device": "cuda",
-        "tree_method": "hist",
     }
 
     print("\nBasic model parameters:")
@@ -1135,7 +1185,7 @@ def main():
     print("\nStarting basic model training...")
     model_basic = xgb.XGBRegressor(
         **params_basic,
-        early_stopping_rounds=50,
+        early_stopping_rounds=80,
         callbacks=[
             XGBoostProgressBar(
                 params_basic["n_estimators"], description="Basic Model Training"
@@ -1145,8 +1195,8 @@ def main():
     evals_result_basic: dict = {}
     model_basic.fit(
         X_train,
-        y_train,
-        eval_set=[(X_train, y_train), (X_val, y_val)],
+        y_train_log,
+        eval_set=[(X_train, y_train_log), (X_val, y_val_log)],
         verbose=False,
     )
     # Get training history
@@ -1156,9 +1206,10 @@ def main():
     if hasattr(model_basic, "best_iteration") and model_basic.best_iteration is not None:
         print(f"  Best iteration: {model_basic.best_iteration}")
 
-    y_train_pred_basic = model_basic.predict(X_train)
-    y_val_pred_basic = model_basic.predict(X_val)
-    y_test_pred_basic = model_basic.predict(X_test)
+    # 预测结果转换回原始尺度
+    y_train_pred_basic = np.expm1(model_basic.predict(X_train))
+    y_val_pred_basic = np.expm1(model_basic.predict(X_val))
+    y_test_pred_basic = np.expm1(model_basic.predict(X_test))
 
     results_basic = [
         evaluate_model(y_train, y_train_pred_basic, "Train"),
@@ -1232,7 +1283,7 @@ def main():
         }
         model_optimized = xgb.XGBRegressor(
             **params_optimized,
-            early_stopping_rounds=50,
+            early_stopping_rounds=80,
             callbacks=[
                 XGBoostProgressBar(
                     params_optimized["n_estimators"],
@@ -1243,8 +1294,8 @@ def main():
         evals_result_opt: dict = {}
         model_optimized.fit(
             X_train,
-            y_train,
-            eval_set=[(X_train, y_train), (X_val, y_val)],
+            y_train_log,
+            eval_set=[(X_train, y_train_log), (X_val, y_val_log)],
             verbose=False,
         )
         # Get training history
@@ -1260,9 +1311,10 @@ def main():
     print("Step 6: Optimized Model Evaluation")
     print("=" * 80)
 
-    y_train_pred_opt = model_optimized.predict(X_train)
-    y_val_pred_opt = model_optimized.predict(X_val)
-    y_test_pred_opt = model_optimized.predict(X_test)
+    # 预测结果转换回原始尺度
+    y_train_pred_opt = np.expm1(model_optimized.predict(X_train))
+    y_val_pred_opt = np.expm1(model_optimized.predict(X_val))
+    y_test_pred_opt = np.expm1(model_optimized.predict(X_test))
 
     results_opt = [
         evaluate_model(y_train, y_train_pred_opt, "Train"),

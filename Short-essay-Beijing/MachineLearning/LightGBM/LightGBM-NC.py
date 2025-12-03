@@ -492,12 +492,22 @@ def create_features(df):
         df_copy['temp_dewpoint_diff'] = df_copy['t2m'] - df_copy['d2m']
     
     if 'PM2.5' in df_copy:
+        # 扩展 lag 特征
         df_copy['PM2.5_lag1'] = df_copy['PM2.5'].shift(1)
+        df_copy['PM2.5_lag2'] = df_copy['PM2.5'].shift(2)  # 新增
         df_copy['PM2.5_lag3'] = df_copy['PM2.5'].shift(3)
+        df_copy['PM2.5_lag5'] = df_copy['PM2.5'].shift(5)  # 新增
         df_copy['PM2.5_lag7'] = df_copy['PM2.5'].shift(7)
+        df_copy['PM2.5_lag14'] = df_copy['PM2.5'].shift(14)  # 新增，周周期
+
+        # 移动平均特征
         df_copy['PM2.5_ma3'] = df_copy['PM2.5'].rolling(window=3, min_periods=1).mean()
         df_copy['PM2.5_ma7'] = df_copy['PM2.5'].rolling(window=7, min_periods=1).mean()
         df_copy['PM2.5_ma30'] = df_copy['PM2.5'].rolling(window=30, min_periods=1).mean()
+
+        # 新增滚动统计特征
+        df_copy['PM2.5_rolling_std7'] = df_copy['PM2.5'].rolling(window=7, min_periods=1).std()
+        df_copy['PM2.5_rolling_max7'] = df_copy['PM2.5'].rolling(window=7, min_periods=1).max()
     
     if 't2m' in df_copy and 'd2m' in df_copy:
         df_copy['relative_humidity'] = 100 * np.exp((17.625 * (df_copy['d2m'] - 273.15)) / 
@@ -507,11 +517,31 @@ def create_features(df):
         df_copy['relative_humidity'] = df_copy['relative_humidity'].clip(0, 100)
     
     if 'wind_dir_10m' in df_copy:
-        df_copy['wind_dir_category'] = pd.cut(df_copy['wind_dir_10m'], 
+        df_copy['wind_dir_category'] = pd.cut(df_copy['wind_dir_10m'],
                                                 bins=[0, 45, 90, 135, 180, 225, 270, 315, 360],
                                                 labels=[0, 1, 2, 3, 4, 5, 6, 7],
                                                 include_lowest=True).astype(int)
-    
+
+    # 添加污染物交叉项特征（化学反应相关）
+    if 'PM2.5' in df_copy and 'NO2' in df_copy:
+        df_copy['PM25_NO2_interaction'] = df_copy['PM2.5'] * df_copy['NO2']
+
+    if 'PM2.5' in df_copy and 'SO2' in df_copy:
+        df_copy['PM25_SO2_interaction'] = df_copy['PM2.5'] * df_copy['SO2']
+
+    if 'PM2.5' in df_copy and 'O3' in df_copy:
+        df_copy['PM25_O3_interaction'] = df_copy['PM2.5'] * df_copy['O3']
+
+    # 添加气象特征组合
+    if 'relative_humidity' in df_copy and 'wind_speed_10m' in df_copy:
+        df_copy['humidity_wind_interaction'] = df_copy['relative_humidity'] * df_copy['wind_speed_10m']
+
+    if 'blh' in df_copy and 'wind_speed_10m' in df_copy:
+        df_copy['blh_wind_interaction'] = df_copy['blh'] * df_copy['wind_speed_10m']
+
+    if 'temp_dewpoint_diff' in df_copy and 'blh' in df_copy:
+        df_copy['temp_diff_blh_interaction'] = df_copy['temp_dewpoint_diff'] * df_copy['blh']
+
     return df_copy
 
 df_combined = create_features(df_combined)
@@ -525,7 +555,7 @@ print("=" * 80)
 
 target = 'PM2.5'
 exclude_cols = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3', 'year']
-numeric_features = [col for col in df_combined.select_dtypes(include=[np.number]).columns 
+numeric_features = [col for col in df_combined.select_dtypes(include=[np.number]).columns
                     if col not in exclude_cols]
 
 X = df_combined[numeric_features].copy()
@@ -535,6 +565,12 @@ if len(X) == 0 or len(y) == 0:
     print("❌ 错误: 无可用数据")
     import sys
     sys.exit(1)
+
+# 对数变换目标变量以处理长尾分布
+print("\n应用对数变换到目标变量...")
+y_log = np.log1p(y)  # 使用log1p避免log(0)问题
+print(f"原始目标变量范围: {y.min():.2f} - {y.max():.2f}")
+print(f"对数变换后范围: {y_log.min():.2f} - {y_log.max():.2f}")
 
 print("\n" + "=" * 80)
 print("Step 3: 数据集划分")
@@ -548,13 +584,20 @@ X_train = X.iloc[:train_size]
 X_val = X.iloc[train_size:train_size + val_size]
 X_test = X.iloc[train_size + val_size:]
 
-y_train = y.iloc[:train_size]
-y_val = y.iloc[train_size:train_size + val_size]
-y_test = y.iloc[train_size + val_size:]
+# 使用原始目标变量用于评估和绘图，使用对数变换后的用于训练
+y_train_orig = y.iloc[:train_size]
+y_val_orig = y.iloc[train_size:train_size + val_size]
+y_test_orig = y.iloc[train_size + val_size:]
+
+# 使用对数变换后的目标变量进行训练
+y_train_log = y_log.iloc[:train_size]
+y_val_log = y_log.iloc[train_size:train_size + val_size]
+y_test_log = y_log.iloc[train_size + val_size:]
+
 X_train_gpu = X_train.values.astype(np.float32)
 X_val_gpu = X_val.values.astype(np.float32)
-y_train_gpu = y_train.values.astype(np.float32)
-y_val_gpu = y_val.values.astype(np.float32)
+y_train_gpu = y_train_log.values.astype(np.float32)  # 使用对数变换后的
+y_val_gpu = y_val_log.values.astype(np.float32)     # 使用对数变换后的
 
 gpu_dataset_params = {
     'device': 'gpu',
@@ -568,6 +611,11 @@ gpu_dataset_params = {
 
 lgb_train = lgb.Dataset(X_train_gpu, label=y_train_gpu, feature_name=list(X_train.columns), params=gpu_dataset_params)
 lgb_val = lgb.Dataset(X_val_gpu, label=y_val_gpu, reference=lgb_train, feature_name=list(X_val.columns), params=gpu_dataset_params)
+
+# 保存原始目标变量用于后续评估
+y_train_orig_values = y_train_orig.values
+y_val_orig_values = y_val_orig.values
+y_test_orig_values = y_test_orig.values
 
 print("\n" + "=" * 80)
 print("Step 4: 训练LightGBM基础模型")
@@ -611,10 +659,15 @@ model_basic = lgb.train(
 
 print(f"✓ 基础模型训练完成 (最佳迭代: {model_basic.best_iteration})")
 
-# 预测时也需要使用numpy数组格式
-y_train_pred_basic = model_basic.predict(X_train_gpu, num_iteration=model_basic.best_iteration)
-y_val_pred_basic = model_basic.predict(X_val_gpu, num_iteration=model_basic.best_iteration)
-y_test_pred_basic = model_basic.predict(X_test.values.astype(np.float32), num_iteration=model_basic.best_iteration)
+# 预测时也需要使用numpy数组格式（预测结果需要反变换）
+y_train_pred_basic_log = model_basic.predict(X_train_gpu, num_iteration=model_basic.best_iteration)
+y_val_pred_basic_log = model_basic.predict(X_val_gpu, num_iteration=model_basic.best_iteration)
+y_test_pred_basic_log = model_basic.predict(X_test.values.astype(np.float32), num_iteration=model_basic.best_iteration)
+
+# 反变换回原始尺度
+y_train_pred_basic = np.expm1(y_train_pred_basic_log)
+y_val_pred_basic = np.expm1(y_val_pred_basic_log)
+y_test_pred_basic = np.expm1(y_test_pred_basic_log)
 
 def evaluate_model(y_true, y_pred, dataset_name):
     r2 = r2_score(y_true, y_pred)
@@ -630,9 +683,9 @@ def evaluate_model(y_true, y_pred, dataset_name):
     }
 
 results_basic = []
-results_basic.append(evaluate_model(y_train, y_train_pred_basic, 'Train'))
-results_basic.append(evaluate_model(y_val, y_val_pred_basic, 'Validation'))
-results_basic.append(evaluate_model(y_test, y_test_pred_basic, 'Test'))
+results_basic.append(evaluate_model(y_train_orig_values, y_train_pred_basic, 'Train'))
+results_basic.append(evaluate_model(y_val_orig_values, y_val_pred_basic, 'Validation'))
+results_basic.append(evaluate_model(y_test_orig_values, y_test_pred_basic, 'Test'))
 
 results_basic_df = pd.DataFrame(results_basic)
 
@@ -696,8 +749,9 @@ if BAYESIAN_OPT_AVAILABLE:
             callbacks=[lgb.early_stopping(stopping_rounds=30)]
         )
         
-        y_pred = model.predict(X_val_gpu, num_iteration=model.best_iteration)
-        rmse = np.sqrt(mean_squared_error(y_val, y_pred))
+        y_pred_log = model.predict(X_val_gpu, num_iteration=model.best_iteration)
+        y_pred = np.expm1(y_pred_log)  # 反变换
+        rmse = np.sqrt(mean_squared_error(y_val_orig_values, y_pred))
         
         return -rmse
     
@@ -787,8 +841,9 @@ else:
             callbacks=[lgb.early_stopping(stopping_rounds=30)]
         )
         
-        y_pred_temp = model_temp.predict(X_val_gpu, num_iteration=model_temp.best_iteration)
-        rmse_temp = np.sqrt(mean_squared_error(y_val, y_pred_temp))
+        y_pred_temp_log = model_temp.predict(X_val_gpu, num_iteration=model_temp.best_iteration)
+        y_pred_temp = np.expm1(y_pred_temp_log)  # 反变换
+        rmse_temp = np.sqrt(mean_squared_error(y_val_orig_values, y_pred_temp))
         
         return combo, rmse_temp
     
@@ -869,15 +924,20 @@ model_optimized = lgb.train(
 
 print(f"✓ 优化模型训练完成 (最佳迭代: {model_optimized.best_iteration})")
 
-# 预测时也需要使用numpy数组格式
-y_train_pred_opt = model_optimized.predict(X_train_gpu, num_iteration=model_optimized.best_iteration)
-y_val_pred_opt = model_optimized.predict(X_val_gpu, num_iteration=model_optimized.best_iteration)
-y_test_pred_opt = model_optimized.predict(X_test.values.astype(np.float32), num_iteration=model_optimized.best_iteration)
+# 预测时也需要使用numpy数组格式（预测结果需要反变换）
+y_train_pred_opt_log = model_optimized.predict(X_train_gpu, num_iteration=model_optimized.best_iteration)
+y_val_pred_opt_log = model_optimized.predict(X_val_gpu, num_iteration=model_optimized.best_iteration)
+y_test_pred_opt_log = model_optimized.predict(X_test.values.astype(np.float32), num_iteration=model_optimized.best_iteration)
+
+# 反变换回原始尺度
+y_train_pred_opt = np.expm1(y_train_pred_opt_log)
+y_val_pred_opt = np.expm1(y_val_pred_opt_log)
+y_test_pred_opt = np.expm1(y_test_pred_opt_log)
 
 results_opt = []
-results_opt.append(evaluate_model(y_train, y_train_pred_opt, 'Train'))
-results_opt.append(evaluate_model(y_val, y_val_pred_opt, 'Validation'))
-results_opt.append(evaluate_model(y_test, y_test_pred_opt, 'Test'))
+results_opt.append(evaluate_model(y_train_orig_values, y_train_pred_opt, 'Train'))
+results_opt.append(evaluate_model(y_val_orig_values, y_val_pred_opt, 'Validation'))
+results_opt.append(evaluate_model(y_test_orig_values, y_test_pred_opt, 'Test'))
 
 results_opt_df = pd.DataFrame(results_opt)
 
@@ -898,6 +958,9 @@ basic_test_r2 = results_basic_df[results_basic_df['Dataset'] == 'Test']['R²'].v
 opt_test_r2 = results_opt_df[results_opt_df['Dataset'] == 'Test']['R²'].values[0]
 basic_test_rmse = results_basic_df[results_basic_df['Dataset'] == 'Test']['RMSE'].values[0]
 opt_test_rmse = results_opt_df[results_opt_df['Dataset'] == 'Test']['RMSE'].values[0]
+
+print("\n对数变换优化效果:")
+print("  使用对数变换处理长尾分布，提升对峰值预测能力")
 
 r2_improvement = (opt_test_r2 - basic_test_r2) / basic_test_r2 * 100
 rmse_improvement = (basic_test_rmse - opt_test_rmse) / basic_test_rmse * 100
@@ -956,12 +1019,12 @@ plt.close()
 fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
 models_data = [
-    ('Basic', y_train_pred_basic, y_train, 'Train'),
-    ('Basic', y_val_pred_basic, y_val, 'Val'),
-    ('Basic', y_test_pred_basic, y_test, 'Test'),
-    ('Optimized', y_train_pred_opt, y_train, 'Train'),
-    ('Optimized', y_val_pred_opt, y_val, 'Val'),
-    ('Optimized', y_test_pred_opt, y_test, 'Test')
+    ('Basic', y_train_pred_basic, y_train_orig_values, 'Train'),
+    ('Basic', y_val_pred_basic, y_val_orig_values, 'Val'),
+    ('Basic', y_test_pred_basic, y_test_orig_values, 'Test'),
+    ('Optimized', y_train_pred_opt, y_train_orig_values, 'Train'),
+    ('Optimized', y_val_pred_opt, y_val_orig_values, 'Val'),
+    ('Optimized', y_test_pred_opt, y_test_orig_values, 'Test')
 ]
 
 for idx, (model_name, y_pred, y_true, dataset) in enumerate(models_data):
@@ -992,33 +1055,42 @@ plt.close()
 
 fig, axes = plt.subplots(2, 1, figsize=(18, 10))
 
-plot_range = min(300, len(y_test))
-plot_idx = range(len(y_test) - plot_range, len(y_test))
-time_idx = y_test.index[plot_idx]
+plot_range = min(300, len(y_test_orig_values))
+plot_idx = range(len(y_test_orig_values) - plot_range, len(y_test_orig_values))
 
-axes[0].plot(time_idx, y_test.iloc[plot_idx], 'k-', label='Actual values', 
+# 使用采样绘图避免打结现象
+step = 3  # 每3个点采样一个
+plot_idx_sampled = plot_idx[::step]
+
+time_idx_sampled = y_test_orig.index[plot_idx_sampled]
+y_test_sampled = y_test_orig_values[plot_idx_sampled]
+y_basic_sampled = y_test_pred_basic[plot_idx_sampled]
+y_opt_sampled = y_test_pred_opt[plot_idx_sampled]
+
+# 使用整数索引而不是日期索引，避免日期不连续导致的打结
+x_axis = range(len(plot_idx_sampled))
+
+axes[0].plot(x_axis, y_test_sampled, 'k-', label='Actual values',
              linewidth=2, alpha=0.8)
-axes[0].plot(time_idx, y_test_pred_basic[plot_idx], 'b--', label='Basic model prediction', 
+axes[0].plot(x_axis, y_basic_sampled, 'b--', label='Basic model prediction',
              linewidth=1.5, alpha=0.7)
-axes[0].set_xlabel('Date', fontsize=12)
+axes[0].set_xlabel('Time Index (sampled)', fontsize=12)
 axes[0].set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
-axes[0].set_title('LightGBM Basic Model - Time Series Prediction Comparison (Last 300 days of Test set)', 
+axes[0].set_title('LightGBM Basic Model - Time Series Prediction Comparison (Sampled)', 
                   fontsize=13, fontweight='bold')
 axes[0].legend(fontsize=10)
 axes[0].grid(True, alpha=0.3)
-plt.setp(axes[0].xaxis.get_majorticklabels(), rotation=45)
 
-axes[1].plot(time_idx, y_test.iloc[plot_idx], 'k-', label='Actual values', 
+axes[1].plot(x_axis, y_test_sampled, 'k-', label='Actual values', 
              linewidth=2, alpha=0.8)
-axes[1].plot(time_idx, y_test_pred_opt[plot_idx], 'g--', label='Optimized model prediction', 
+axes[1].plot(x_axis, y_opt_sampled, 'g--', label='Optimized model prediction', 
              linewidth=1.5, alpha=0.7)
-axes[1].set_xlabel('Date', fontsize=12)
+axes[1].set_xlabel('Time Index (sampled)', fontsize=12)
 axes[1].set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
-axes[1].set_title('LightGBM Optimized Model - Time Series Prediction Comparison (Last 300 days of Test set)', 
+axes[1].set_title('LightGBM Optimized Model - Time Series Prediction Comparison (Sampled)', 
                   fontsize=13, fontweight='bold')
 axes[1].legend(fontsize=10)
 axes[1].grid(True, alpha=0.3)
-plt.setp(axes[1].xaxis.get_majorticklabels(), rotation=45)
 
 plt.tight_layout()
 plt.savefig(output_dir / 'timeseries_comparison.png', dpi=300, bbox_inches='tight')
@@ -1108,8 +1180,8 @@ plt.close()
 
 fig, axes = plt.subplots(1, 2, figsize=(16, 5))
 
-errors_basic = y_test - y_test_pred_basic
-errors_opt = y_test - y_test_pred_opt
+errors_basic = y_test_orig_values - y_test_pred_basic
+errors_opt = y_test_orig_values - y_test_pred_opt
 
 axes[0].hist(errors_basic, bins=50, color='blue', alpha=0.7, edgecolor='black')
 axes[0].axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='Zero error')
@@ -1143,12 +1215,12 @@ best_params_df = pd.DataFrame([params_optimized])
 best_params_df.to_csv(output_dir / 'best_parameters.csv', index=False, encoding='utf-8-sig')
 
 predictions_df = pd.DataFrame({
-    'Date': y_test.index,
-    'Actual': y_test.values,
+    'Date': y_test_orig.index,
+    'Actual': y_test_orig_values,
     'Prediction_Basic': y_test_pred_basic,
     'Prediction_Optimized': y_test_pred_opt,
-    'Error_Basic': y_test.values - y_test_pred_basic,
-    'Error_Optimized': y_test.values - y_test_pred_opt
+    'Error_Basic': y_test_orig_values - y_test_pred_basic,
+    'Error_Optimized': y_test_orig_values - y_test_pred_opt
 })
 predictions_df.to_csv(output_dir / 'predictions.csv', index=False, encoding='utf-8-sig')
 
