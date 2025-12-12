@@ -8,8 +8,10 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
-import dask
 from numba import guvectorize, float32
+from matplotlib.ticker import FixedLocator
+from matplotlib.transforms import blended_transform_factory
+import pyproj
 
 # ---------- 1. High-speed I/O: One-time Concatenation ----------
 def load_pm25_fast(file_dir: str) -> tuple[xr.DataArray, xr.DataArray]:
@@ -312,8 +314,64 @@ def time_series_analysis(data):
     axes[1, 1].plot(national_mean.time.dt.year, national_mean, alpha=.5)
     axes[1, 1].plot(ma5.time.dt.year, ma5, 'r-', lw=2)
     axes[1, 1].set_title('5-Year Moving Average')
-    fig.tight_layout()
+    # fig.tight_layout()
     return fig
+
+
+# ---------- 5.5. 绘图辅助函数：比例尺和指北针 ----------
+def add_scalebar(ax, length_km=500, location=(0.1, 0.08), linewidth=3):
+    """
+    在 Cartopy Axes 添加比例尺
+    
+    参数:
+        ax: cartopy Axes
+        length_km: 比例尺长度（公里）
+        location: (x,y) 以轴域坐标为单位 (0~1)
+        linewidth: 比例尺线条宽度
+    """
+    # 取主图中心纬度，用于换算 km→经度距离
+    lon0 = (ax.get_extent(crs=ccrs.PlateCarree())[0] +
+            ax.get_extent(crs=ccrs.PlateCarree())[1]) / 2
+    lat0 = (ax.get_extent(crs=ccrs.PlateCarree())[2] +
+            ax.get_extent(crs=ccrs.PlateCarree())[3]) / 2
+    
+    geod = pyproj.Geod(ellps='WGS84')
+    
+    # 计算 length_km 对应的经度差
+    lon1, lat1, _ = geod.fwd(lon0, lat0, 90, length_km * 1000)
+    dlon = lon1 - lon0
+    
+    # 转换到轴域坐标
+    x0, y0 = location
+    x1 = x0 + 0.15  # 比例尺长度可调（相对坐标）
+    
+    transform = blended_transform_factory(ax.transAxes, ax.transAxes)
+    ax.plot([x0, x1], [y0, y0], transform=transform, color='k', linewidth=linewidth)
+    ax.text(x0, y0 - 0.02, "0 km", transform=transform, ha='center', va='top', fontsize=9)
+    ax.text(x1, y0 - 0.02, f"{length_km} km", transform=transform, ha='center', va='top', fontsize=9)
+
+
+def add_north_arrow(ax, size=0.1, loc_x=0.95, loc_y=0.90):
+    """
+    在 Cartopy Axes 添加指北针
+    
+    参数:
+        ax: cartopy Axes
+        size: 箭头大小
+        loc_x: x位置（轴域坐标，0~1）
+        loc_y: y位置（轴域坐标，0~1）
+    """
+    ax.annotate(
+        'N',
+        xy=(loc_x, loc_y),
+        xytext=(loc_x, loc_y - size),
+        xycoords='axes fraction',
+        ha='center',
+        va='center',
+        fontsize=18,
+        fontweight='bold',
+        arrowprops=dict(arrowstyle="-|>", color='black', lw=2)
+    )
 
 
 # ---------- 6. Spatial ----------
@@ -355,39 +413,137 @@ def spatial_distribution_analysis(data, land_mask=None):
         print(f"Error: Spatial statistics calculation failed: {e}")
         raise
 
-    try:
-        fig = plt.figure(figsize=(18, 12))
-        proj = ccrs.PlateCarree()
-        for i, (src, title, vmin, vmax, cmap) in enumerate(zip(
-                [spatial_mean, spatial_std, slope, mk_z],
-                ['2000-2023 Mean', 'Spatial Variability (Std Dev)', 'Trend Slope µg/m³/year', 'Mann-Kendall Z'],
-                [0, 0, -2, -2],
-                [100, None, 2, 2],
-                ['hot_r', 'viridis', 'RdBu_r', 'RdBu_r'])):
-            ax = fig.add_subplot(2, 2, i + 1, projection=proj)
-            im = src.plot(ax=ax, transform=proj, cmap=cmap, vmin=vmin, vmax=vmax,
-                          add_colorbar=False)
-            ax.coastlines(resolution='50m', linewidth=0.5)
-            ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.5)
-            ax.set_title(title)
-            plt.colorbar(im, ax=ax, orientation='horizontal', shrink=.8)
-        fig.tight_layout()
-        return fig
-    except Exception as e:
-        print(f"Warning: Cartopy plotting failed, using matplotlib basic plotting: {e}")
-        # Fallback: don't use Cartopy projection
-        fig, axes = plt.subplots(2, 2, figsize=(18, 12))
-        for i, (src, title, vmin, vmax, cmap) in enumerate(zip(
-                [spatial_mean, spatial_std, slope, mk_z],
-                ['2000-2023 Mean', 'Spatial Variability (Std Dev)', 'Trend Slope µg/m³/year', 'Mann-Kendall Z'],
-                [0, 0, -2, -2],
-                [100, None, 2, 2],
-                ['hot_r', 'viridis', 'RdBu_r', 'RdBu_r'])):
-            ax = axes[i // 2, i % 2]
-            im = src.plot(ax=ax, cmap=cmap, vmin=vmin, vmax=vmax, add_colorbar=True)
-            ax.set_title(title)
-        fig.tight_layout()
-        return fig
+    # 中国最合适的 Lambert Conformal 投影
+    proj = ccrs.LambertConformal(
+        central_longitude=105,
+        central_latitude=35,
+        standard_parallels=(25, 47)
+    )
+
+    # 中国标准范围
+    china_extent = [73, 135, 18, 54]
+
+    # 导入省界（自然地理数据）
+    provinces = cfeature.NaturalEarthFeature(
+        category='cultural',
+        name='admin_1_states_provinces_lines',
+        scale='50m',
+        facecolor='none'
+    )
+
+    # 确保output文件夹存在
+    output_dir = Path('output')
+    output_dir.mkdir(exist_ok=True)
+
+    for src, title, vmin, vmax, cmap, filename in zip(
+            [spatial_mean, spatial_std, slope, mk_z],
+            ['2000-2023 Annual Mean PM2.5', 'Spatial Variability (Std Dev)', 
+             'Trend Slope µg/m³/year', 'Mann-Kendall Z'],
+            [0, 0, -2, -2],
+            [100, None, 2, 2],
+            ['hot_r', 'viridis', 'RdBu_r', 'RdBu_r'],
+            ['PM25_mean.png', 'PM25_std.png', 'PM25_trend.png', 'PM25_mk.png']):
+
+        fig = plt.figure(figsize=(9, 6))  # Single plot size
+
+        ax = fig.add_subplot(1, 1, 1, projection=proj)
+
+        # 主图：数据绘制
+        im = src.plot(
+            ax=ax,
+            transform=ccrs.PlateCarree(),
+            cmap=cmap,
+            vmin=vmin, vmax=vmax,
+            add_colorbar=False
+        )
+
+        # 添加海岸线、国界、省界
+        ax.coastlines(resolution='50m', linewidth=0.4)
+        ax.add_feature(cfeature.BORDERS, linestyle=':', linewidth=0.4)
+        ax.add_feature(provinces, edgecolor='gray', linewidth=0.4)
+
+        # 设置中国地图范围
+        ax.set_extent(china_extent, crs=ccrs.PlateCarree())
+
+        # 美化坐标轴：经纬度格式化
+        gl = ax.gridlines(
+            crs=ccrs.PlateCarree(),
+            draw_labels=True,
+            linewidth=0.5,
+            color='gray',
+            alpha=0.5,
+            linestyle='--',
+            x_inline=False,   # 关键：关闭经度内嵌，让标签显示在边框上
+            y_inline=False    # 关键：关闭纬度内嵌，让标签显示在边框上
+        )
+        gl.top_labels = False
+        gl.right_labels = False
+        gl.bottom_labels = True        # 只在底边显示经度
+        gl.left_labels = True          # 只在左侧显示纬度
+        gl.xlocator = FixedLocator(range(75, 136, 10))
+        gl.ylocator = FixedLocator(range(20, 55, 5))
+        gl.xformatter = LongitudeFormatter(number_format='.0f')
+        gl.yformatter = LatitudeFormatter(number_format='.0f')
+        
+        # 移除 xarray 自动添加的轴标签
+        ax.set_xlabel('')
+        ax.set_ylabel('')
+
+        ax.set_title(title)
+
+        # 水平色标
+        plt.colorbar(im, ax=ax, orientation='horizontal', shrink=0.8)
+
+        # 添加南海诸岛插图 —— 新位置：图的左下角，不遮挡台湾
+        bbox = ax.get_position()
+
+        inset_w = 0.10   # 小一些
+        inset_h = 0.16
+
+        # 左下角更安全的位置
+        inset_ax = fig.add_axes([
+            bbox.x0 + 0.01,     # 靠左
+            bbox.y0 + 0.01,     # 靠下
+            inset_w,
+            inset_h
+        ], projection=ccrs.PlateCarree())
+
+        # 设置南海诸岛范围
+        inset_ax.set_extent([105, 125, 3, 25], crs=ccrs.PlateCarree())
+
+        # 绘制南海诸岛 - 使用高分辨率海岸线
+        inset_ax.coastlines(resolution='10m', linewidth=0.6, color='black')
+        inset_ax.add_feature(cfeature.BORDERS.with_scale('10m'), linewidth=0.4)
+        inset_ax.add_feature(provinces, edgecolor='gray', linewidth=0.25)
+
+        src.plot(
+            ax=inset_ax,
+            transform=ccrs.PlateCarree(),
+            cmap=cmap, vmin=vmin, vmax=vmax,
+            add_colorbar=False
+        )
+
+        # 去刻度提高美观
+        inset_ax.set_xticks([])
+        inset_ax.set_yticks([])
+        
+        # 移除 xarray 自动添加的轴标签
+        inset_ax.set_xlabel('')
+        inset_ax.set_ylabel('')
+
+        inset_ax.set_title('South China Sea', fontsize=7)
+
+        # 添加指北针（主图右上角）
+        add_north_arrow(ax)
+        
+        # 添加比例尺（主图左下角）
+        add_scalebar(ax, length_km=500)
+
+        # fig.tight_layout()
+        fig.savefig(output_dir / filename, dpi=600, bbox_inches='tight')
+        plt.close(fig)
+
+    # No return value, figures saved separately
 
 
 # ---------- 7. Regional Comparison ----------
@@ -465,7 +621,7 @@ def regional_analysis(data):
                    ha='center', va='center', transform=ax.transAxes)
             ax.set_title(f'{name} Annual Mean PM2.5')
         ax.grid(True)
-    fig.tight_layout()
+    # fig.tight_layout()
 
     # Build statistics table, only include valid data
     reg_stats_dict = {}
@@ -522,7 +678,7 @@ def pollution_level_analysis(data):
     good = ((data > 0) & (data <= 75)).sum(dim=['lat', 'lon']) / total * 100
     axes[2].plot(data.time.dt.year, good, 'go-')
     axes[2].set_title('Good/Excellent Area Proportion')
-    fig.tight_layout()
+    # fig.tight_layout()
     return fig
 
 
@@ -586,7 +742,7 @@ if __name__ == '__main__':
     matplotlib.use('Agg')  # Use non-interactive backend
     
     try:
-        file_dir = '/tmp'  # <-- Change to your path
+        file_dir = '/root/Year'  # <-- Change to your path
         print('>>> Loading data...')
         pm25, land_mask = load_pm25_fast(file_dir)  # 现在返回数据和掩膜
         print(f'>>> Data shape: {pm25.shape}')
@@ -614,30 +770,32 @@ if __name__ == '__main__':
         # 传递掩膜到各个分析函数
         stats = basic_statistics(pm25, land_mask)
 
+        # 确保output文件夹存在
+        output_dir = Path('output')
+        output_dir.mkdir(exist_ok=True)
+        
         print('>>> Generating time series plot...')
         time_fig = time_series_analysis(pm25.where(land_mask) if land_mask is not None else pm25)
-        time_fig.savefig('PM25_time_series.png', dpi=300, bbox_inches='tight')
+        time_fig.savefig(output_dir / 'PM25_time_series.png', dpi=300, bbox_inches='tight')
         plt.close(time_fig)
 
         print('>>> Generating spatial distribution plot...')
-        spatial_fig = spatial_distribution_analysis(pm25, land_mask)
-        spatial_fig.savefig('PM25_spatial.png', dpi=300, bbox_inches='tight')
-        plt.close(spatial_fig)
+        spatial_distribution_analysis(pm25, land_mask)
 
         print('>>> Regional comparison...')
         regional_fig, reg_stats = regional_analysis(pm25.where(land_mask) if land_mask is not None else pm25)
-        regional_fig.savefig('PM25_regional.png', dpi=300, bbox_inches='tight')
+        regional_fig.savefig(output_dir / 'PM25_regional.png', dpi=300, bbox_inches='tight')
         plt.close(regional_fig)
 
         print('>>> Pollution level...')
         pollution_fig = pollution_level_analysis(pm25.where(land_mask) if land_mask is not None else pm25)
-        pollution_fig.savefig('PM25_level.png', dpi=300, bbox_inches='tight')
+        pollution_fig.savefig(output_dir / 'PM25_level.png', dpi=300, bbox_inches='tight')
         plt.close(pollution_fig)
 
         print('>>> Comprehensive report...')
         generate_summary_report(pm25.where(land_mask) if land_mask is not None else pm25, reg_stats)
 
-        print('>>> All completed! Images saved to current directory.')
+        print('>>> All completed! Images saved to output directory.')
     except Exception as e:
         import traceback
         print(f"Error: {e}")

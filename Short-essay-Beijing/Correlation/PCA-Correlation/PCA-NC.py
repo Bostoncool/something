@@ -740,7 +740,7 @@ class BeijingPCAAnalyzerNC:
     def plot_correlation_heatmap(
         self,
         correlation_matrix: Optional[pd.DataFrame],
-        save_path: str = "beijing_correlation_heatmap_nc.png",
+        save_path: str = "beijing_correlation_heatmap.png",
     ) -> None:
         """Plot correlation heatmap."""
         if correlation_matrix is None:
@@ -766,8 +766,8 @@ class BeijingPCAAnalyzerNC:
         )
 
         plt.title(
-            "Beijing Meteorological Factors and Pollution Indicators Correlation Heatmap (NC Data)",
-            fontsize=22,
+            " PCA Correlation Heatmap ",
+            fontsize=26,
             fontweight="bold",
             pad=50,
             color="#2E3440",
@@ -812,7 +812,7 @@ class BeijingPCAAnalyzerNC:
         axes[0, 0].set_xlabel("First Principal Component (PC1)", fontsize=14, fontweight="bold")
         axes[0, 0].set_ylabel("Second Principal Component (PC2)", fontsize=14, fontweight="bold")
         axes[0, 0].set_title(
-            "PCA Principal Component Scatter Plot (NC Data)", fontsize=16, fontweight="bold", pad=20
+            "PCA Principal Component Scatter Plot ", fontsize=26, fontweight="bold", pad=20
         )
         axes[0, 0].grid(True, alpha=0.3, linestyle="--")
         axes[0, 0].spines["top"].set_visible(False)
@@ -829,7 +829,7 @@ class BeijingPCAAnalyzerNC:
         axes[0, 1].set_xlabel("Principal Component", fontsize=12, fontweight="bold")
         axes[0, 1].set_ylabel("Variance Contribution Ratio", fontsize=12, fontweight="bold")
         axes[0, 1].set_title(
-            "Variance Contribution Ratio of Each Principal Component (NC Data)", fontsize=14, fontweight="bold", pad=15
+            "Variance Contribution Ratio of Each Principal Component ", fontsize=26, fontweight="bold", pad=15
         )
         axes[0, 1].grid(True, alpha=0.3, linestyle="--", axis="y")
         axes[0, 1].spines["top"].set_visible(False)
@@ -860,7 +860,7 @@ class BeijingPCAAnalyzerNC:
         axes[1, 0].set_xlabel("Number of Principal Components", fontsize=12, fontweight="bold")
         axes[1, 0].set_ylabel("Cumulative Variance Contribution Ratio", fontsize=12, fontweight="bold")
         axes[1, 0].set_title(
-            "Cumulative Variance Contribution Ratio (NC Data)", fontsize=14, fontweight="bold", pad=15
+            "Cumulative Variance Contribution Ratio ", fontsize=26, fontweight="bold", pad=15
         )
         axes[1, 0].grid(True, alpha=0.3, linestyle="--")
         axes[1, 0].spines["top"].set_visible(False)
@@ -898,7 +898,7 @@ class BeijingPCAAnalyzerNC:
             axes[1, 1].set_yticklabels(top_features, fontsize=10)
             axes[1, 1].set_xlabel("Feature Importance (Absolute Value)", fontsize=12, fontweight="bold")
             axes[1, 1].set_title(
-                "First Principal Component Feature Importance (NC Data)", fontsize=14, fontweight="bold", pad=15
+                "First Principal Component Feature Importance ", fontsize=26, fontweight="bold", pad=15
             )
             axes[1, 1].grid(True, alpha=0.3, linestyle="--", axis="x")
             axes[1, 1].spines["top"].set_visible(False)
@@ -937,7 +937,7 @@ class BeijingPCAAnalyzerNC:
     ) -> None:
         """Generate analysis report."""
         print("\n" + "=" * 80)
-        print("Beijing Multi-Meteorological Factor Pollution Variation PCA Analysis Report (NC Data)")
+        print("Beijing Multi-Meteorological Factor Pollution Variation PCA Analysis Report ")
         print("=" * 80)
 
         if data.empty:
@@ -1023,7 +1023,7 @@ class BeijingPCAAnalyzerNC:
 
     def run_analysis(self) -> None:
         """Run complete analysis pipeline."""
-        print("Beijing Multi-Meteorological Factor Pollution Variation PCA Analysis (NC Data)")
+        print("Beijing Multi-Meteorological Factor Pollution Variation PCA Analysis ")
         print("=" * 60)
 
         try:
@@ -1061,7 +1061,7 @@ def main() -> None:
     extra_pollution_data_dir = "/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)"
 
     print("Data directory confirmation:")
-    print(f"Meteorological data directory (NC): {meteo_data_dir}")
+    print(f"Meteorological data directory : {meteo_data_dir}")
     print(f"Pollution data directory (CSV): {pollution_data_dir}")
     print(f"Additional pollution data directory (CSV): {extra_pollution_data_dir}")
     print("If paths are incorrect, please modify the configuration in main().")

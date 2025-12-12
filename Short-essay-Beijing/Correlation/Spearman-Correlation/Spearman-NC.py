@@ -762,7 +762,7 @@ class BeijingSpearmanAnalyzerNC:
     def plot_correlation_heatmap(
         self,
         correlation_matrix: Optional[pd.DataFrame],
-        save_path: str = "beijing_spearman_correlation_heatmap_nc.png",
+        save_path: str = "beijing_spearman_correlation_heatmap.png",
     ) -> None:
         """Plot Spearman correlation heatmap."""
         if correlation_matrix is None or correlation_matrix.empty:
@@ -788,7 +788,7 @@ class BeijingSpearmanAnalyzerNC:
         )
 
         plt.title(
-            "Beijing Meteorological Factors and Pollution Indicators Spearman Correlation Heatmap (NC Data)",
+            " Spearman Correlation Heatmap ",
             fontsize=22,
             fontweight="bold",
             pad=50,
@@ -832,7 +832,7 @@ class BeijingSpearmanAnalyzerNC:
     def plot_top_correlations(
         self,
         correlation_matrix: Optional[pd.DataFrame],
-        save_path: str = "beijing_spearman_top_correlations_nc.png",
+        save_path: str = "beijing_spearman_top_correlations.png",
     ) -> None:
         """Plot comparison chart of strongest correlations."""
         if correlation_matrix is None or correlation_matrix.empty:
@@ -930,7 +930,7 @@ class BeijingSpearmanAnalyzerNC:
         ax.set_yticklabels(features, fontsize=10)
         ax.set_xlabel("Spearman Correlation Coefficient", fontsize=14, fontweight="bold")
         ax.set_title(
-            "Top 20 Strongest Correlations Between Beijing Meteorological Factors and Pollution Indicators (NC Data)",
+            "Top 20 Strongest Correlations Between Beijing Meteorological Factors and Pollution Indicators ",
             fontsize=16,
             fontweight="bold",
             pad=20,
@@ -963,7 +963,7 @@ class BeijingSpearmanAnalyzerNC:
     ) -> None:
         """Generate analysis report."""
         print("\n" + "=" * 80)
-        print("Beijing Multi-Meteorological Factor Pollution Change Spearman Correlation Analysis Report (NC Data)")
+        print("Beijing Multi-Meteorological Factor Pollution Change Spearman Correlation Analysis Report ")
         print("=" * 80)
 
         if data.empty:
@@ -1037,7 +1037,7 @@ class BeijingSpearmanAnalyzerNC:
     # ----------------------------------------------------------------------------------
     def run_analysis(self) -> None:
         """Run complete analysis workflow."""
-        print("Beijing Multi-Meteorological Factor Pollution Change Spearman Correlation Analysis (NC Data)")
+        print("Beijing Multi-Meteorological Factor Pollution Change Spearman Correlation Analysis ")
         print("=" * 60)
 
         try:
@@ -1064,7 +1064,7 @@ def main() -> None:
     extra_pollution_data_dir = "/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)"
 
     print("Data directory confirmation:")
-    print(f"Meteorological data directory (NC): {meteo_data_dir}")
+    print(f"Meteorological data directory : {meteo_data_dir}")
     print(f"Pollution data directory (CSV): {pollution_data_dir}")
     print(f"Additional pollution data directory (CSV): {extra_pollution_data_dir}")
     print("If paths are incorrect, please modify the configuration in main().")

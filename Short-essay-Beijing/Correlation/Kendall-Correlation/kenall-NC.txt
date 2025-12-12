@@ -1,0 +1,254 @@
+kenall-NC
+
+Additional pollution data loading completed, time taken: 9.42 seconds
+Successfully loaded data from 3627 files
+Data loading completed!
+Preparing combined data...
+Final data shape: (120, 89)
+Column names after merging: ['year', 'month', 'days', 'u100_mean', 'u100_std', 'u100_min', 'u100_max', 'v100_mean', 'v100_std', 'v100_min', 'v100_max', 'u10_mean', 'u10_std', 'u10_min', 'u10_max', 'v10_mean', 'v10_std', 'v10_min', 'v10_max', 'd2m_mean', 'd2m_std', 'd2m_min', 'd2m_max', 't2m_mean', 't2m_std', 't2m_min', 't2m_max', 'blh_mean', 'blh_std', 'blh_min', 'blh_max', 'cvh_mean', 'cvh_std', 'cvh_min', 'cvh_max', 'lsm_mean', 'lsm_std', 'lsm_min', 'lsm_max', 'cvl_mean', 'cvl_std', 'cvl_min', 'cvl_max', 'avg_tprate_mean', 'avg_tprate_std', 'avg_tprate_min', 'avg_tprate_max', 'mn2t_mean', 'mn2t_std', 'mn2t_min', 'mn2t_max', 'sd_mean', 'sd_std', 'sd_min', 'sd_max', 'str_mean', 'str_std', 'str_min', 'str_max', 'sp_mean', 'sp_std', 'sp_min', 'sp_max', 'tisr_mean', 'tisr_std', 'tisr_min', 'tisr_max', 'tcwv_mean', 'tcwv_std', 'tcwv_min', 'tcwv_max', 'tp_mean', 'tp_std', 'tp_min', 'tp_max', 'pm25_mean', 'pm10_mean', 'aqi_mean', 'pm25_max', 'pm10_max', 'aqi_max', 'so2_mean', 'co_mean', 'o3_mean', 'no2_mean', 'so2_max', 'co_max', 'o3_max', 'no2_max']
+Meteorological parameter count: 72
+Meteorological parameter list: ['u100_mean', 'u100_std', 'u100_min', 'u100_max', 'v100_mean', 'v100_std', 'v100_min', 'v100_max', 'u10_mean', 'u10_std']...
+Wind component parameter count: 16
+Wind component parameter list: ['u100_mean', 'u100_std', 'u100_min', 'u100_max', 'v100_mean', 'v100_std', 'v100_min', 'v100_max', 'u10_mean', 'u10_std', 'u10_min', 'u10_max', 'v10_mean', 'v10_std', 'v10_min', 'v10_max']
+Pollution parameter count: 14
+Pollution parameter list: ['pm25_mean', 'pm10_mean', 'aqi_mean', 'pm25_max', 'pm10_max', 'aqi_max', 'so2_mean', 'co_mean', 'o3_mean', 'no2_mean', 'so2_max', 'co_max', 'o3_max', 'no2_max']
+Performing Kendall correlation analysis...
+Calculating Kendall correlation coefficients...
+Kendall correlation matrix shape: (87, 87)
+Analyzing Kendall correlations...
+
+Kendall correlation analysis between meteorological factors and pollution indicators:
+Found 14 pollution indicators and 72 meteorological factors
+
+Meteorological factors with strongest correlation to pm25_mean (Kendall):
+  v10_min: 0.234
+  v100_min: 0.220
+  sd_max: 0.211
+  sd_std: 0.206
+  sd_mean: 0.192
+
+Meteorological factors with strongest correlation to pm10_mean (Kendall):
+  v10_min: 0.199
+  v100_min: 0.185
+  d2m_std: 0.177
+  u10_mean: 0.167
+  sd_max: 0.165
+
+Meteorological factors with strongest correlation to aqi_mean (Kendall):
+  v10_std: 0.202
+  v100_std: 0.198
+  v10_min: 0.191
+  v100_min: 0.188
+  d2m_std: 0.186
+
+Meteorological factors with strongest correlation to pm25_max (Kendall):
+  sd_max: 0.197
+  sd_std: 0.195
+  sd_mean: 0.186
+  v10_min: 0.182
+  d2m_std: 0.169
+
+Meteorological factors with strongest correlation to pm10_max (Kendall):
+  v10_min: 0.159
+  v10_std: 0.151
+  str_mean: 0.150
+  v100_std: 0.148
+  v100_min: 0.145
+
+Meteorological factors with strongest correlation to aqi_max (Kendall):
+  d2m_std: 0.186
+  sd_std: 0.172
+  sd_max: 0.172
+  v10_std: 0.170
+  sd_mean: 0.169
+
+Meteorological factors with strongest correlation to so2_mean (Kendall):
+  sd_max: 0.150
+  sd_mean: 0.143
+  sd_std: 0.143
+  avg_tprate_min: 0.122
+  tp_min: 0.122
+
+Meteorological factors with strongest correlation to co_mean (Kendall):
+  sd_max: 0.170
+  sd_mean: 0.159
+  sd_std: 0.159
+  v10_min: 0.144
+  v100_min: 0.134
+
+Meteorological factors with strongest correlation to o3_mean (Kendall):
+  sd_max: 0.141
+  sd_mean: 0.134
+  sd_std: 0.131
+  tp_min: 0.122
+  avg_tprate_min: 0.122
+
+Meteorological factors with strongest correlation to no2_mean (Kendall):
+  v10_min: 0.160
+  v100_min: 0.141
+  d2m_std: 0.139
+  sd_max: 0.135
+  blh_std: 0.135
+
+Meteorological factors with strongest correlation to so2_max (Kendall):
+  sd_max: 0.144
+  sd_mean: 0.140
+  sd_std: 0.140
+  avg_tprate_min: 0.129
+  tp_min: 0.129
+
+Meteorological factors with strongest correlation to co_max (Kendall):
+  avg_tprate_min: 0.135
+  tp_min: 0.135
+  sd_max: 0.128
+  sd_std: 0.119
+  sd_mean: 0.118
+
+Meteorological factors with strongest correlation to o3_max (Kendall):
+  tp_min: 0.119
+  avg_tprate_min: 0.118
+  sd_max: 0.112
+  sd_std: 0.099
+  sd_mean: 0.098
+
+Meteorological factors with strongest correlation to no2_max (Kendall):
+  blh_std: 0.209
+  v10_min: 0.204
+  v100_min: 0.187
+  blh_max: 0.176
+  v10_std: 0.164
+Kendall correlation heatmap saved to: beijing_kendall_correlation_heatmap_nc.png
+Heatmap contains 87 features (meteorological parameters + pollution indicators)
+
+Plotting meteorological-pollution correlation subset heatmap...
+  Pollution indicator count: 14
+  Meteorological parameter count: 72
+Meteorological-pollution correlation heatmap saved to: beijing_meteo_pollution_correlation_nc.png
+Kendall statistical charts saved to: beijing_kendall_statistics_nc.png
+
+================================================================================
+Beijing Multi-Meteorological Factors and Pollution Variation Kendall Correlation Analysis Report (NC Data)
+Pollution Indicators: PM2.5, PM10, AQI, SO2, CO, O3, NO2
+================================================================================
+
+1. Data Overview:
+   - Data shape: (120, 89)
+   - Feature count: 87
+   - Sample count: 120
+
+2. Feature Classification:
+   - Meteorological factor count: 72
+   - Pollution indicator count: 14
+
+3. Meteorological Factor Details:
+   - u100_mean
+   - u100_std
+   - u100_min
+   - u100_max
+   - v100_mean
+   - v100_std
+   - v100_min
+   - v100_max
+   - u10_mean
+   - u10_std
+   ... and 62 other meteorological factors
+
+4. Pollution Indicator Details:
+   - pm25_mean
+   - pm10_mean
+   - aqi_mean
+   - pm25_max
+   - pm10_max
+   - aqi_max
+   - so2_mean
+   - co_mean
+   - o3_mean
+   - no2_mean
+   - so2_max
+   - co_max
+   - o3_max
+   - no2_max
+
+5. Kendall Correlation Analysis:
+   - Total correlations calculated: 6239
+   - Mean correlation coefficient: 0.0653
+   - Standard deviation: 0.3535
+   - Strong correlations (|r| > 0.3): 2251
+   - Moderate correlations (0.1 < |r| <= 0.3): 1952
+   Meteorological factors with strongest correlation to pollution indicators:
+   pm25_mean:
+     - v10_min: 0.234
+     - v100_min: 0.220
+     - sd_max: 0.211
+   pm10_mean:
+     - v10_min: 0.199
+     - v100_min: 0.185
+     - d2m_std: 0.177
+   aqi_mean:
+     - v10_std: 0.202
+     - v100_std: 0.198
+     - v10_min: 0.191
+   pm25_max:
+     - sd_max: 0.197
+     - sd_std: 0.195
+     - sd_mean: 0.186
+   pm10_max:
+     - v10_min: 0.159
+     - v10_std: 0.151
+     - str_mean: 0.150
+   aqi_max:
+     - d2m_std: 0.186
+     - sd_std: 0.172
+     - sd_max: 0.172
+   so2_mean:
+     - sd_max: 0.150
+     - sd_mean: 0.143
+     - sd_std: 0.143
+   co_mean:
+     - sd_max: 0.170
+     - sd_mean: 0.159
+     - sd_std: 0.159
+   o3_mean:
+     - sd_max: 0.141
+     - sd_mean: 0.134
+     - sd_std: 0.131
+   no2_mean:
+     - v10_min: 0.160
+     - v100_min: 0.141
+     - d2m_std: 0.139
+   so2_max:
+     - sd_max: 0.144
+     - sd_mean: 0.140
+     - sd_std: 0.140
+   co_max:
+     - avg_tprate_min: 0.135
+     - tp_min: 0.135
+     - sd_max: 0.128
+   o3_max:
+     - tp_min: 0.119
+     - avg_tprate_min: 0.118
+     - sd_max: 0.112
+   no2_max:
+     - blh_std: 0.209
+     - v10_min: 0.204
+     - v100_min: 0.187
+
+6. Statistical Significance Analysis:
+   - Total P-values: 6241
+   - Significant at α = 0.05 level: 3807 (61.0%)
+   - Significant at α = 0.01 level: 3355 (53.8%)
+   - Significant at α = 0.001 level: 2963 (47.5%)
+
+7. Main Findings:
+   - Kendall correlation analysis reveals non-parametric relationships between variables
+   - Temperature, humidity, and wind factors show significant correlations with pollution levels
+   - Boundary layer height and atmospheric stability are key influencing factors
+   - Precipitation and wind speed have significant effects on pollutant dispersion
+   - Non-parametric analysis is more robust to outliers than Pearson correlation
+
+================================================================================
+
+Clearing cache to free up space...
+Cache cleared: cache
+
+Analysis completed!

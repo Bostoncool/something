@@ -1,0 +1,47 @@
+2.数据说明
+
+2.2.1空气污染数据（Air pollutants data）
+在公开的污染数据源网站（https://quotsoft.net/air/）上使用六个标准的空气污染物（即SO2，NO2，CO，O3，PM2.5和PM10）的标准测量值，以及一个AQI指数。从2015年到2024年，北京市所有监测地点的每日平均PM2.5浓度均作为该城市的区域长期复合污染水平。
+2.2.2大气再分析数据ERA-5（Reanalysis data from ERA-5）
+ERA-5（fifth generation ECMWF atmospheric reanalysis of the global climate）是由欧洲中期天气预报中心（European Centre for Medium-Range Weather Forecasts，ECMWF）开发和维护的一种全球范围内的高分辨率大气再分析数据集，提供了多种气象和气候变量的连续、一致和高质量的数据（https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=download）。ERA-5基于全球观测数据、数值模型和物理参数化方案，通过数据同化和数值模拟的技术，对过去数十年（1940年至今）的天气状况进行再构建和模拟，从而生成了高时空分辨率的大气和地表变量数据。ERA-5提供了广泛的气象和气候变量，包括温度、湿度、风速、降水、云量、地表辐射、地表温度等。
+2.3数据输入与预处理（Data input and Pre-processing）
+2.3.1空气污染数据预处理
+以年，月，日（Year，Month，Day）三个时间尺度进行数据预处理。
+在使用原始数据集之前，使用Python 3.13.9（https://www.python.org/）中的Numpy（https://numpy.org/）和Pandas库（https://pandas.pydata.org/）检测到缺失值并替换为其他值，为了确保数据质量，根据生态环境部（Ministry of Ecology and Environment , MEE）技术法规——《环境空气质量指数(aqi)技术规定(试行)》（HJ 633-2013）以及《环境空气质量标准》（GB3095-2012）处理了异常（空值，错值，极值，缺失，噪声）数据，让数据的训练可行性和稳定性更好。
+2.3.2气象参数数据预处理
+NetCDF (.nc) 格式需要使用NetCDF4与Xarray库读取，并转化为可以用于模型训练的张量（Tensor）；
+某些气象数据中的温度以开尔文尺度计量，需转换为摄氏度尺度计量，这样易于理解，便于计算。
+18个气象参数计算4个统计量（均值、标准差、最小值、最大值），为3个污染参数计算2个统计量（均值、标准差—最大值），一共78个特征（18 ✖️ 4 + 2 ✖️ 3）。
+数据准备说明
+空气污染数据：
+PM10代表该城市的局地短期扬尘污染水平。此外，颗粒物研究过程模型中，包括所有六种空气污染物的小时浓度。（PM2.5和PM10为因变量，SO2，NO2，CO，O3为自变量）数据格式：CSV（.csv）
+气象因素数据：
+数据格式：NetCDF (.nc) and CSV(.csv)
+存储方式：每月1个文件(包含每一天，24时次数据)
+起止时间：2015.01.01-2024.12.31
+范围：中国北京市，（North 39°26′-41°03′，East 115°25′-117°30′）
+时间分辨率：逐日（将原数据逐小时求和平均）
+空间分辨率：0.25°  ✖️  0.25°  单层/表层：1层
+PM2.5（细颗粒物）浓度受多种气象因素和地表条件影响，选择变量如下：
+单层变量：
+ 
+1.	2m_dewpoint_temperature
+2.	2m_temperature
+3.	10m_u_component_of_wind
+4.	10m_v_component_of_wind
+5.	100m_u_component_of_wind
+6.	100m_v_component_of_wind
+7.	boundary_layer_height
+8.	high_vegetation_cover
+9.	land sea mask
+10.	low_vegetation_cover
+11.	mean total precipitation_rate
+12.	minimum_2m_temperature_since_previous_post_processing
+13.	snow_depth
+14.	surface net thermal_radiation
+15.	surface_pressure
+16.	toa incident solar radiation
+17.	total_column_water_vapour
+18.	total_precipitation
+
+

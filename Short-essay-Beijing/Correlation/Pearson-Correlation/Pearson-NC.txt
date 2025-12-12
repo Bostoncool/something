@@ -1,0 +1,226 @@
+Pearson-NC
+
+Data loading completed!
+Preparing to combine data...
+Final data shape: (119, 89)
+Number of columns after combination: 89
+Total null values after combination: 0
+Number of meteorological parameters: 72
+Meteorological parameter examples: ['u100_mean', 'u100_std', 'u100_min', 'u100_max', 'v100_mean', 'v100_std', 'v100_min', 'v100_max', 'u10_mean', 'u10_std'] ...
+Number of wind component parameters: 16
+Number of pollution parameters: 14
+Analyzing correlations...
+Detected 14 pollution indicators and 72 meteorological factors
+
+Meteorological factors most correlated with pm25_mean:
+  sd_mean: 0.392
+  sd_std: 0.391
+  sd_max: 0.290
+  mn2t_std: 0.236
+  t2m_std: 0.226
+
+Meteorological factors most correlated with pm10_mean:
+  sd_std: 0.379
+  sd_mean: 0.357
+  sd_max: 0.280
+  mn2t_std: 0.241
+  t2m_std: 0.236
+
+Meteorological factors most correlated with aqi_mean:
+  sd_std: 0.284
+  sd_mean: 0.268
+  mn2t_std: 0.223
+  t2m_std: 0.216
+  sd_max: 0.201
+
+Meteorological factors most correlated with pm25_max:
+  sd_mean: 0.537
+  sd_std: 0.502
+  sd_max: 0.404
+  t2m_min: 0.312
+  mn2t_min: 0.307
+
+Meteorological factors most correlated with pm10_max:
+  sd_mean: 0.370
+  sd_std: 0.367
+  sd_max: 0.289
+  t2m_min: 0.263
+  mn2t_min: 0.262
+
+Meteorological factors most correlated with aqi_max:
+  sd_mean: 0.454
+  sd_std: 0.384
+  sd_max: 0.334
+  t2m_min: 0.314
+  mn2t_min: 0.311
+
+Meteorological factors most correlated with so2_mean:
+  mn2t_mean: 0.356
+  t2m_mean: 0.354
+  mn2t_min: 0.353
+  d2m_max: 0.353
+  t2m_max: 0.351
+
+Meteorological factors most correlated with co_mean:
+  sd_mean: 0.550
+  sd_std: 0.519
+  sd_max: 0.415
+  tisr_max: 0.210
+  t2m_min: 0.207
+
+Meteorological factors most correlated with o3_mean:
+  blh_mean: 0.632
+  v10_max: 0.606
+  v100_max: 0.579
+  blh_min: 0.573
+  tisr_min: 0.573
+
+Meteorological factors most correlated with no2_mean:
+  sd_std: 0.365
+  sd_mean: 0.349
+  sd_max: 0.322
+  tisr_min: 0.300
+  tisr_mean: 0.282
+
+Meteorological factors most correlated with so2_max:
+  sd_mean: 0.368
+  d2m_max: 0.332
+  mn2t_mean: 0.330
+  tcwv_max: 0.330
+  t2m_max: 0.330
+
+Meteorological factors most correlated with co_max:
+  sd_mean: 0.387
+  sd_std: 0.339
+  sd_max: 0.285
+  avg_tprate_max: 0.227
+  tp_max: 0.227
+
+Meteorological factors most correlated with o3_max:
+  blh_mean: 0.598
+  v10_max: 0.587
+  v100_max: 0.571
+  blh_min: 0.547
+  tisr_min: 0.547
+
+Meteorological factors most correlated with no2_max:
+  sd_std: 0.269
+  sd_mean: 0.231
+  mn2t_std: 0.222
+  sd_max: 0.216
+  t2m_std: 0.211
+Correlation heatmap saved to: beijing_pearson_correlation_heatmap.png
+Top 20 correlations plot saved to: beijing_top_correlations.png
+
+================================================================================
+Beijing Multi-Meteorological Factor Pollution Change Pearson Correlation Analysis Report 
+================================================================================
+
+1. Data Overview:
+   - Data shape: (119, 89)
+   - Number of features: 87
+   - Number of samples: 119
+
+2. Feature Classification:
+   - Number of meteorological factors: 72
+   - Number of pollution indicators: 14
+
+3. Meteorological Factor Examples:
+   - u100_mean
+   - u100_std
+   - u100_min
+   - u100_max
+   - v100_mean
+   - v100_std
+   - v100_min
+   - v100_max
+   - u10_mean
+   - u10_std
+   ... and 62 other meteorological factors
+
+4. Pollution Indicators:
+   - pm25_mean
+   - pm10_mean
+   - aqi_mean
+   - pm25_max
+   - pm10_max
+   - aqi_max
+   - so2_mean
+   - co_mean
+   - o3_mean
+   - no2_mean
+   - so2_max
+   - co_max
+   - o3_max
+   - no2_max
+
+5. Pearson Correlation Analysis:
+   - Total number of correlations: 6241
+   - Mean correlation coefficient: 0.0760
+   - Standard deviation: 0.4254
+   Meteorological factors with strongest correlation to pm25_mean:
+     - sd_mean: 0.392
+     - sd_std: 0.391
+     - sd_max: 0.290
+   Meteorological factors with strongest correlation to pm10_mean:
+     - sd_std: 0.379
+     - sd_mean: 0.357
+     - sd_max: 0.280
+   Meteorological factors with strongest correlation to aqi_mean:
+     - sd_std: 0.284
+     - sd_mean: 0.268
+     - mn2t_std: 0.223
+   Meteorological factors with strongest correlation to pm25_max:
+     - sd_mean: 0.537
+     - sd_std: 0.502
+     - sd_max: 0.404
+   Meteorological factors with strongest correlation to pm10_max:
+     - sd_mean: 0.370
+     - sd_std: 0.367
+     - sd_max: 0.289
+   Meteorological factors with strongest correlation to aqi_max:
+     - sd_mean: 0.454
+     - sd_std: 0.384
+     - sd_max: 0.334
+   Meteorological factors with strongest correlation to so2_mean:
+     - mn2t_mean: 0.356
+     - t2m_mean: 0.354
+     - mn2t_min: 0.353
+   Meteorological factors with strongest correlation to co_mean:
+     - sd_mean: 0.550
+     - sd_std: 0.519
+     - sd_max: 0.415
+   Meteorological factors with strongest correlation to o3_mean:
+     - blh_mean: 0.632
+     - v10_max: 0.606
+     - v100_max: 0.579
+   Meteorological factors with strongest correlation to no2_mean:
+     - sd_std: 0.365
+     - sd_mean: 0.349
+     - sd_max: 0.322
+   Meteorological factors with strongest correlation to so2_max:
+     - sd_mean: 0.368
+     - d2m_max: 0.332
+     - mn2t_mean: 0.330
+   Meteorological factors with strongest correlation to co_max:
+     - sd_mean: 0.387
+     - sd_std: 0.339
+     - sd_max: 0.285
+   Meteorological factors with strongest correlation to o3_max:
+     - blh_mean: 0.598
+     - v10_max: 0.587
+     - v100_max: 0.571
+   Meteorological factors with strongest correlation to no2_max:
+     - sd_std: 0.269
+     - sd_mean: 0.231
+     - mn2t_std: 0.222
+
+6. Key Findings:
+   - Multiple meteorological factors show significant correlations with pollution indicators, requiring seasonal interpretation
+   - Temperature, humidity, wind speed, and boundary layer height have important effects on pollution dispersion
+   - Precipitation and radiation flux may be related to pollution reduction, further analysis with PCA or time series recommended
+================================================================================
+
+Clearing cache directory...
+Cache directory cleared: cache
+Analysis workflow completed.

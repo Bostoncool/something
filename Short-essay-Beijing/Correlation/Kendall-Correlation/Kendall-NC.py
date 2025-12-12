@@ -613,8 +613,8 @@ class BeijingKendallAnalyzer:
         # Set y-axis labels
         ax.set_yticklabels(ax.get_yticklabels(), rotation=0, fontsize=8)
         
-        plt.title('Beijing Meteorological Factors and Pollution Indicators Kendall Correlation Heatmap (NC Data)\n(PM2.5, PM10, AQI, SO2, CO, O3, NO2)', 
-                 fontsize=22, fontweight='bold', pad=50, color='#2E3440')
+        plt.title(' Kendall Correlation Heatmap ', 
+                 fontsize=26, fontweight='bold', pad=50, color='#2E3440')
         
         plt.tight_layout()
         plt.savefig(save_path, dpi=1200, bbox_inches='tight', 
@@ -672,8 +672,8 @@ class BeijingKendallAnalyzer:
         ax.set_xlabel('Meteorological Parameters', fontsize=12, fontweight='bold')
         ax.set_ylabel('Pollution Indicators', fontsize=12, fontweight='bold')
         
-        plt.title('Kendall Correlation Heatmap of Meteorological Parameters and Pollution Indicators (NC Data)\n(PM2.5, PM10, AQI, SO2, CO, O3, NO2)', 
-                 fontsize=16, fontweight='bold', pad=20, color='#2E3440')
+        plt.title('Kendall Correlation Heatmap ', 
+                 fontsize=26, fontweight='bold', pad=20, color='#2E3440')
         
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches='tight', 

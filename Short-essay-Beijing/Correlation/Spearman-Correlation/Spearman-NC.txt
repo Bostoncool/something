@@ -1,0 +1,228 @@
+Spearman-NC
+
+Additional pollution data loading completed, elapsed time: 9.43 seconds
+Successfully loaded data from 3627 files
+Data loading completed!
+Preparing to combine data...
+Final data shape: (120, 89)
+Number of columns after combination: 89
+Total null values after combination: 0
+Number of meteorological parameters: 72
+Meteorological parameter examples: ['u100_mean', 'u100_std', 'u100_min', 'u100_max', 'v100_mean', 'v100_std', 'v100_min', 'v100_max', 'u10_mean', 'u10_std'] ...
+Number of wind component parameters: 16
+Number of pollution parameters: 14
+Analyzing correlations...
+Detected 14 pollution indicators and 72 meteorological factors
+
+Meteorological factors most correlated with pm25_mean:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with pm10_mean:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with aqi_mean:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with pm25_max:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with pm10_max:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with aqi_max:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with so2_mean:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with co_mean:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with o3_mean:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with no2_mean:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with so2_max:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with co_max:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with o3_max:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+
+Meteorological factors most correlated with no2_max:
+  cvh_min: 0.500
+  cvh_max: 0.500
+  lsm_min: 0.500
+  lsm_max: 0.500
+  cvl_mean: 0.500
+Correlation heatmap saved to: beijing_spearman_correlation_heatmap.png
+Top 20 correlations plot saved to: beijing_spearman_top_correlations.png
+
+================================================================================
+Beijing Multi-Meteorological Factor Pollution Change Spearman Correlation Analysis Report 
+================================================================================
+
+1. Data Overview:
+   - Data shape: (120, 89)
+   - Number of features: 87
+   - Number of samples: 120
+
+2. Feature Classification:
+   - Number of meteorological factors: 72
+   - Number of pollution indicators: 14
+
+3. Meteorological Factor Examples:
+   - u100_mean
+   - u100_std
+   - u100_min
+   - u100_max
+   - v100_mean
+   - v100_std
+   - v100_min
+   - v100_max
+   - u10_mean
+   - u10_std
+   ... and 62 other meteorological factors
+
+4. Pollution Indicators:
+   - pm25_mean
+   - pm10_mean
+   - aqi_mean
+   - pm25_max
+   - pm10_max
+   - aqi_max
+   - so2_mean
+   - co_mean
+   - o3_mean
+   - no2_mean
+   - so2_max
+   - co_max
+   - o3_max
+   - no2_max
+
+5. Spearman Correlation Analysis:
+   - Total number of correlations: 7569
+   - Mean correlation coefficient: 0.2095
+   - Standard deviation: 0.4461
+   Meteorological factors with strongest correlation to pm25_mean:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to pm10_mean:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to aqi_mean:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to pm25_max:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to pm10_max:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to aqi_max:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to so2_mean:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to co_mean:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to o3_mean:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to no2_mean:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to so2_max:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to co_max:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to o3_max:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+   Meteorological factors with strongest correlation to no2_max:
+     - cvh_min: 0.500
+     - cvh_max: 0.500
+     - lsm_min: 0.500
+
+6. Key Findings:
+   - Multiple meteorological factors show significant nonlinear correlations with pollution indicators, requiring seasonal interpretation
+   - Temperature and humidity have significant effects on pollution accumulation, wind field and boundary layer height affect pollution dispersion
+   - Precipitation and radiation flux may be related to pollution reduction, further analysis with time series recommended
+================================================================================
+
+Clearing cache directory...
+Cache directory cleared: cache
+Analysis workflow completed.

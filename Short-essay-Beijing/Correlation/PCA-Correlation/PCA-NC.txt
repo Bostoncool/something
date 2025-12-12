@@ -1,0 +1,266 @@
+PCA-NC
+
+Successfully loaded data from 3627 files
+Data loading completed!
+Preparing to combine data...
+Final data shape: (120, 89)
+Number of columns after merging: 89
+Total null values after merging: 0
+Meteorological parameter count: 72
+Meteorological parameter examples: ['u100_mean', 'u100_std', 'u100_min', 'u100_max', 'v100_mean', 'v100_std', 'v100_min', 'v100_max', 'u10_mean', 'u10_std'] ...
+Wind component parameter count: 16
+Pollution parameter count: 14
+Performing PCA analysis...
+Variance contribution ratio of the first 2 principal components:
+PC1: 0.3650 (36.50%), Cumulative: 0.3650 (36.50%)
+PC2: 0.1370 (13.70%), Cumulative: 0.5020 (50.20%)
+
+Principal component contribution analysis:
+
+Top 5 features contributing to PC1:
+  d2m_mean: 0.1801
+  d2m_min: 0.1796
+  tcwv_mean: 0.1790
+  mn2t_mean: 0.1769
+  mn2t_min: 0.1763
+
+Top 5 features contributing to PC2:
+  blh_mean: 0.2658
+  v10_std: 0.2565
+  str_min: -0.2486
+  blh_max: 0.2461
+  v100_std: 0.2374
+Analyzing correlations...
+Detected 14 pollution indicators and 72 meteorological factors
+
+Meteorological factors most correlated with pm25_mean:
+  sd_std: 0.148
+  sd_max: 0.119
+  v10_std: 0.117
+  v100_std: 0.114
+  tp_max: 0.111
+
+Meteorological factors most correlated with pm10_mean:
+  v10_std: 0.154
+  v100_std: 0.144
+  v100_max: 0.136
+  u100_max: 0.120
+  v10_max: 0.116
+
+Meteorological factors most correlated with aqi_mean:
+  sd_std: 0.166
+  t2m_std: 0.151
+  v100_min: 0.150
+  mn2t_std: 0.149
+  v10_min: 0.147
+
+Meteorological factors most correlated with pm25_max:
+  mn2t_std: 0.125
+  t2m_std: 0.123
+  sd_std: 0.095
+  u100_max: 0.093
+  blh_min: 0.088
+
+Meteorological factors most correlated with pm10_max:
+  sd_min: 0.138
+  v100_max: 0.137
+  u100_max: 0.117
+  v100_std: 0.116
+  v10_std: 0.113
+
+Meteorological factors most correlated with aqi_max:
+  t2m_std: 0.226
+  mn2t_std: 0.221
+  sd_std: 0.154
+  u100_max: 0.139
+  sp_std: 0.130
+
+Meteorological factors most correlated with so2_mean:
+  blh_max: 0.122
+  blh_std: 0.118
+  blh_min: 0.111
+  u10_max: 0.102
+  u100_std: 0.102
+
+Meteorological factors most correlated with co_mean:
+  sd_std: 0.138
+  sd_max: 0.133
+  blh_min: 0.132
+  blh_max: 0.117
+  blh_mean: 0.114
+
+Meteorological factors most correlated with o3_mean:
+  sd_max: 0.195
+  sd_std: 0.194
+  tcwv_mean: 0.191
+  str_mean: 0.186
+  str_min: 0.184
+
+Meteorological factors most correlated with no2_mean:
+  blh_max: 0.131
+  blh_mean: 0.115
+  blh_std: 0.107
+  str_mean: 0.105
+  sd_min: 0.103
+
+Meteorological factors most correlated with so2_max:
+  blh_min: 0.148
+  blh_mean: 0.115
+  sp_std: 0.104
+  tisr_max: 0.098
+  sp_mean: 0.098
+
+Meteorological factors most correlated with co_max:
+  blh_min: 0.155
+  str_min: 0.140
+  sd_max: 0.121
+  blh_mean: 0.121
+  sd_std: 0.118
+
+Meteorological factors most correlated with o3_max:
+  str_min: 0.171
+  avg_tprate_mean: 0.163
+  tp_mean: 0.163
+  str_mean: 0.159
+  sd_max: 0.148
+
+Meteorological factors most correlated with no2_max:
+  v100_mean: 0.176
+  v10_mean: 0.175
+  v100_max: 0.164
+  blh_std: 0.153
+  v10_max: 0.153
+Correlation heatmap saved to: beijing_correlation_heatmap.png
+PCA results plot saved to: beijing_pca_results_nc.png
+
+================================================================================
+Beijing Multi-Meteorological Factor Pollution Variation PCA Analysis Report 
+================================================================================
+
+1. Data Overview:
+   - Data shape: (120, 89)
+   - Number of features: 87
+   - Number of samples: 120
+
+2. Feature Classification:
+   - Number of meteorological factors: 72
+   - Number of pollution indicators: 14
+
+3. Meteorological Factor Examples:
+   - u100_mean
+   - u100_std
+   - u100_min
+   - u100_max
+   - v100_mean
+   - v100_std
+   - v100_min
+   - v100_max
+   - u10_mean
+   - u10_std
+   ... and 62 more meteorological factors
+
+4. Pollution Indicators:
+   - pm25_mean
+   - pm10_mean
+   - aqi_mean
+   - pm25_max
+   - pm10_max
+   - aqi_max
+   - so2_mean
+   - co_mean
+   - o3_mean
+   - no2_mean
+   - so2_max
+   - co_max
+   - o3_max
+   - no2_max
+
+5. Pearson Correlation Analysis:
+   - Total number of correlations: 6241
+   - Mean correlation coefficient: 0.0818
+   - Standard deviation: 0.4123
+   Meteorological factors most correlated with pm25_mean:
+     - sd_std: 0.148
+     - sd_max: 0.119
+     - v10_std: 0.117
+   Meteorological factors most correlated with pm10_mean:
+     - v10_std: 0.154
+     - v100_std: 0.144
+     - v100_max: 0.136
+   Meteorological factors most correlated with aqi_mean:
+     - sd_std: 0.166
+     - t2m_std: 0.151
+     - v100_min: 0.150
+   Meteorological factors most correlated with pm25_max:
+     - mn2t_std: 0.125
+     - t2m_std: 0.123
+     - sd_std: 0.095
+   Meteorological factors most correlated with pm10_max:
+     - sd_min: 0.138
+     - v100_max: 0.137
+     - u100_max: 0.117
+   Meteorological factors most correlated with aqi_max:
+     - t2m_std: 0.226
+     - mn2t_std: 0.221
+     - sd_std: 0.154
+   Meteorological factors most correlated with so2_mean:
+     - blh_max: 0.122
+     - blh_std: 0.118
+     - blh_min: 0.111
+   Meteorological factors most correlated with co_mean:
+     - sd_std: 0.138
+     - sd_max: 0.133
+     - blh_min: 0.132
+   Meteorological factors most correlated with o3_mean:
+     - sd_max: 0.195
+     - sd_std: 0.194
+     - tcwv_mean: 0.191
+   Meteorological factors most correlated with no2_mean:
+     - blh_max: 0.131
+     - blh_mean: 0.115
+     - blh_std: 0.107
+   Meteorological factors most correlated with so2_max:
+     - blh_min: 0.148
+     - blh_mean: 0.115
+     - sp_std: 0.104
+   Meteorological factors most correlated with co_max:
+     - blh_min: 0.155
+     - str_min: 0.140
+     - sd_max: 0.121
+   Meteorological factors most correlated with o3_max:
+     - str_min: 0.171
+     - avg_tprate_mean: 0.163
+     - tp_mean: 0.163
+   Meteorological factors most correlated with no2_max:
+     - v100_mean: 0.176
+     - v10_mean: 0.175
+     - v100_max: 0.164
+
+6. PCA Analysis Results:
+   - PC1 variance contribution ratio: 0.3650 (36.50%)
+   - PC2 variance contribution ratio: 0.1370 (13.70%)
+   - Cumulative variance contribution ratio: 0.5020 (50.20%)
+
+7. Physical Meaning of Principal Components (First 3 Principal Components):
+   Top 5 features contributing to PC1:
+     - d2m_mean: 0.1801
+     - d2m_min: 0.1796
+     - tcwv_mean: 0.1790
+     - mn2t_mean: 0.1769
+     - mn2t_min: 0.1763
+   Top 5 features contributing to PC2:
+     - blh_mean: 0.2658
+     - v10_std: 0.2565
+     - str_min: -0.2486
+     - blh_max: 0.2461
+     - v100_std: 0.2374
+
+8. Key Findings:
+   - Multiple meteorological factors jointly affect pollution level changes, PCA helps reveal underlying patterns
+   - Temperature, humidity, wind speed, and boundary layer height significantly affect pollutant dispersion
+   - Precipitation and radiation flux may be related to pollution reduction, requiring further interpretation with principal components
+================================================================================
+
+Clearing cache directory...
+Cache directory cleared: cache
+Analysis pipeline completed.
