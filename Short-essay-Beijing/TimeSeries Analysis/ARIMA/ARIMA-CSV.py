@@ -1,11 +1,9 @@
 import os
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import warnings
-import pickle
 from pathlib import Path
 import multiprocessing
 
@@ -25,9 +23,9 @@ except ImportError:
 
 # Time series libraries
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import acf as sm_acf, pacf as sm_pacf
 from scipy import stats
 
 # auto_arima
@@ -42,17 +40,33 @@ except ImportError:
 # Evaluation metrics
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
-# Set English fonts
-plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'sans-serif']
-plt.rcParams['axes.unicode_minus'] = False
-plt.rcParams['figure.dpi'] = 100
-
 # Set random seed
 np.random.seed(42)
 
 print("=" * 80)
 print("Beijing PM2.5 Concentration Prediction - ARIMA Model")
 print("=" * 80)
+
+# ---------------------------------------------------------------------------
+# Output helpers (统一 UTF-8-SIG)
+# ---------------------------------------------------------------------------
+def slugify_model_name(name: str) -> str:
+    """用于文件名的模型标识：小写 + 将特殊字符转为下划线。"""
+    return (
+        name.strip()
+        .lower()
+        .replace(" ", "_")
+        .replace("-", "_")
+        .replace("/", "_")
+    )
+
+
+def save_csv(df: pd.DataFrame, path: Path, index: bool = False):
+    """统一 CSV 输出（UTF-8-SIG），便于后续脚本读取与绘图。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=index, encoding="utf-8-sig")
+    print(f"✓ Saved CSV: {path}")
+
 
 # ============================== Part 1: Configuration and Path Setup ==============================
 print("\nConfiguring parameters...")
@@ -65,10 +79,6 @@ pollution_extra_path = '/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)'
 output_dir = Path('./output')
 output_dir.mkdir(exist_ok=True)
 
-# Model save path
-model_dir = Path('./models')
-model_dir.mkdir(exist_ok=True)
-
 # Date range
 start_date = datetime(2015, 1, 1)
 end_date = datetime(2024, 12, 31)
@@ -76,7 +86,6 @@ end_date = datetime(2024, 12, 31)
 print(f"Data time range: {start_date.date()} to {end_date.date()}")
 print(f"Target variable: PM2.5 concentration (time series)")
 print(f"Output directory: {output_dir}")
-print(f"Model save directory: {model_dir}")
 print(f"CPU cores: {CPU_COUNT}, parallel workers: {MAX_WORKERS}")
 
 # ============================== Part 2: Data Loading Functions ==============================
@@ -524,366 +533,195 @@ else:
 
 # ============================== Part 11: Visualization ==============================
 print("\n" + "=" * 80)
-print("Step 9: Generating Visualization Charts")
+print("Step 9: Export CSV Files for Plotting (No figures will be generated)")
 print("=" * 80)
 
-# 11.1 ACF and PACF plots (original series)
-print("Generating ACF/PACF plots...")
-fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-
-# Original series ACF
-plot_acf(pm25_series.dropna(), lags=40, ax=axes[0, 0])
-axes[0, 0].set_title('Original Series - Autocorrelation Function (ACF)', fontsize=13, fontweight='bold')
-axes[0, 0].set_xlabel('Lag', fontsize=11)
-axes[0, 0].set_ylabel('Autocorrelation', fontsize=11)
-
-# Original series PACF
-plot_pacf(pm25_series.dropna(), lags=40, ax=axes[0, 1])
-axes[0, 1].set_title('Original Series - Partial Autocorrelation Function (PACF)', fontsize=13, fontweight='bold')
-axes[0, 1].set_xlabel('Lag', fontsize=11)
-axes[0, 1].set_ylabel('Partial Autocorrelation', fontsize=11)
-
-# First-order differenced series ACF
+# 1) ACF/PACF 数据（替代 acf_pacf_plots.png）
+max_lag = 40
 pm25_diff = pm25_series.diff().dropna()
-plot_acf(pm25_diff, lags=40, ax=axes[1, 0])
-axes[1, 0].set_title('First-order Differenced Series - Autocorrelation Function (ACF)', fontsize=13, fontweight='bold')
-axes[1, 0].set_xlabel('Lag', fontsize=11)
-axes[1, 0].set_ylabel('Autocorrelation', fontsize=11)
 
-# First-order differenced series PACF
-plot_pacf(pm25_diff, lags=40, ax=axes[1, 1])
-axes[1, 1].set_title('First-order Differenced Series - Partial Autocorrelation Function (PACF)', fontsize=13, fontweight='bold')
-axes[1, 1].set_xlabel('Lag', fontsize=11)
-axes[1, 1].set_ylabel('Partial Autocorrelation', fontsize=11)
+acf_orig = sm_acf(pm25_series.dropna(), nlags=max_lag, fft=True)
+pacf_orig = sm_pacf(pm25_series.dropna(), nlags=max_lag, method="ywm")
+save_csv(
+    pd.DataFrame({"lag": np.arange(len(acf_orig)), "acf": acf_orig, "pacf": pacf_orig}),
+    output_dir / "plot_acf_pacf__original.csv",
+)
 
-plt.tight_layout()
-plt.savefig(output_dir / 'acf_pacf_plots.png', dpi=300, bbox_inches='tight')
-print("Saved: acf_pacf_plots.png")
-plt.close()
+acf_diff1 = sm_acf(pm25_diff, nlags=max_lag, fft=True)
+pacf_diff1 = sm_pacf(pm25_diff, nlags=max_lag, method="ywm")
+save_csv(
+    pd.DataFrame({"lag": np.arange(len(acf_diff1)), "acf": acf_diff1, "pacf": pacf_diff1}),
+    output_dir / "plot_acf_pacf__diff1.csv",
+)
 
-# 11.2 Residual diagnostics plots
-print("Generating residual diagnostics plots...")
-fig = plt.figure(figsize=(18, 12))
+# 2) Residual diagnostics（替代 residual_diagnostics.png 等）
+save_csv(
+    pd.DataFrame({"time": residuals_basic.index, "residual": residuals_basic.values}),
+    output_dir / "plot_residuals_ts__arima_basic.csv",
+)
+save_csv(
+    pd.DataFrame({"time": residuals_opt.index, "residual": residuals_opt.values}),
+    output_dir / "plot_residuals_ts__arima_optimized.csv",
+)
+save_csv(
+    lb_test_basic.reset_index(drop=True),
+    output_dir / "plot_ljungbox__arima_basic.csv",
+)
+save_csv(
+    lb_test_opt.reset_index(drop=True),
+    output_dir / "plot_ljungbox__arima_optimized.csv",
+)
+save_csv(
+    pd.DataFrame(
+        [
+            {"Model": "ARIMA_Basic", "JarqueBera_statistic": jb_test_basic[0], "JarqueBera_pvalue": jb_test_basic[1]},
+            {"Model": "ARIMA_Optimized", "JarqueBera_statistic": jb_test_opt[0], "JarqueBera_pvalue": jb_test_opt[1]},
+        ]
+    ),
+    output_dir / "plot_jarque_bera__all_models.csv",
+)
 
-# Basic model residual diagnostics
-# QQ plot
-ax1 = plt.subplot(3, 2, 1)
-stats.probplot(residuals_basic.dropna(), dist="norm", plot=plt)
-ax1.set_title('Basic Model - QQ Plot', fontsize=12, fontweight='bold')
-ax1.grid(True, alpha=0.3)
+# 3) Metrics（按模型/按数据集拆分）
+save_csv(all_results, output_dir / "metrics__all_models_train_validation_test.csv")
+for model in all_results["Model"].unique():
+    model_slug = slugify_model_name(model)
+    save_csv(all_results[all_results["Model"] == model], output_dir / f"metrics__{model_slug}__train_validation_test.csv")
+    for ds_name in all_results["Dataset"].unique():
+        part = all_results[(all_results["Model"] == model) & (all_results["Dataset"] == ds_name)]
+        if not part.empty:
+            save_csv(part, output_dir / f"metrics__{model_slug}__{ds_name.lower()}.csv")
 
-# Residual time series
-ax2 = plt.subplot(3, 2, 2)
-residuals_basic.plot(ax=ax2, color='blue', alpha=0.7)
-ax2.axhline(y=0, color='r', linestyle='--', linewidth=2)
-ax2.set_title('Basic Model - Residual Time Series', fontsize=12, fontweight='bold')
-ax2.set_xlabel('Date', fontsize=11)
-ax2.set_ylabel('Residual', fontsize=11)
-ax2.grid(True, alpha=0.3)
+test_ranking = (
+    all_results[all_results["Dataset"] == "Test"]
+    .sort_values("R²", ascending=False)
+    .reset_index(drop=True)
+)
+save_csv(test_ranking, output_dir / "plot_metrics_ranking__test_only.csv")
 
-# Residual ACF
-ax3 = plt.subplot(3, 2, 3)
-plot_acf(residuals_basic.dropna(), lags=30, ax=ax3)
-ax3.set_title('Basic Model - Residual ACF', fontsize=12, fontweight='bold')
-
-# Optimized model residual diagnostics
-# QQ plot
-ax4 = plt.subplot(3, 2, 4)
-stats.probplot(residuals_opt.dropna(), dist="norm", plot=plt)
-ax4.set_title('Optimized Model - QQ Plot', fontsize=12, fontweight='bold')
-ax4.grid(True, alpha=0.3)
-
-# Residual time series
-ax5 = plt.subplot(3, 2, 5)
-residuals_opt.plot(ax=ax5, color='green', alpha=0.7)
-ax5.axhline(y=0, color='r', linestyle='--', linewidth=2)
-ax5.set_title('Optimized Model - Residual Time Series', fontsize=12, fontweight='bold')
-ax5.set_xlabel('Date', fontsize=11)
-ax5.set_ylabel('Residual', fontsize=11)
-ax5.grid(True, alpha=0.3)
-
-# Residual ACF
-ax6 = plt.subplot(3, 2, 6)
-plot_acf(residuals_opt.dropna(), lags=30, ax=ax6)
-ax6.set_title('Optimized Model - Residual ACF', fontsize=12, fontweight='bold')
-
-plt.tight_layout()
-plt.savefig(output_dir / 'residual_diagnostics.png', dpi=300, bbox_inches='tight')
-print("Saved: residual_diagnostics.png")
-plt.close()
-
-# 11.3 Prediction vs actual scatter plots
-print("Generating prediction scatter plots...")
-fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-
+# 4) Scatter / Residuals / Error distribution（按模型 + 数据集拆分）
 models_data = [
-    ('Basic', y_train_pred_basic, y_train, 'Train'),
-    ('Basic', y_val_pred_basic, y_val, 'Val'),
-    ('Basic', y_test_pred_basic, y_test, 'Test'),
-    ('Optimized', y_train_pred_opt, y_train, 'Train'),
-    ('Optimized', y_val_pred_opt, y_val, 'Val'),
-    ('Optimized', y_test_pred_opt, y_test, 'Test')
+    ("ARIMA_Basic", y_train_pred_basic, y_train, "Train"),
+    ("ARIMA_Basic", y_val_pred_basic, y_val, "Validation"),
+    ("ARIMA_Basic", y_test_pred_basic, y_test, "Test"),
+    ("ARIMA_Optimized", y_train_pred_opt, y_train, "Train"),
+    ("ARIMA_Optimized", y_val_pred_opt, y_val, "Validation"),
+    ("ARIMA_Optimized", y_test_pred_opt, y_test, "Test"),
 ]
 
-for idx, (model_name, y_pred, y_true, dataset) in enumerate(models_data):
-    row = idx // 3
-    col = idx % 3
-    
-    ax = axes[row, col]
-    
-    y_true_vals = y_true.values if isinstance(y_true, pd.Series) else y_true
-    y_pred_vals = y_pred.values if isinstance(y_pred, pd.Series) else y_pred
-    
-    # Scatter plot
-    ax.scatter(y_true_vals, y_pred_vals, alpha=0.5, s=20, edgecolors='black', linewidth=0.3)
-    
-    # Ideal prediction line
-    min_val = min(y_true_vals.min(), y_pred_vals.min())
-    max_val = max(y_true_vals.max(), y_pred_vals.max())
-    ax.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='Ideal Prediction')
-    
-    # Calculate metrics
-    r2 = r2_score(y_true_vals, y_pred_vals)
-    rmse = np.sqrt(mean_squared_error(y_true_vals, y_pred_vals))
-    
-    ax.set_xlabel('Actual PM2.5 Concentration (μg/m³)', fontsize=11)
-    ax.set_ylabel('Predicted PM2.5 Concentration (μg/m³)', fontsize=11)
-    ax.set_title(f'ARIMA_{model_name} - {dataset}\nR²={r2:.4f}, RMSE={rmse:.2f}', 
-                 fontsize=11, fontweight='bold')
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.3)
+for model_name, y_pred, y_true, dataset in models_data:
+    model_slug = slugify_model_name(model_name)
+    ds_slug = dataset.lower()
 
-plt.tight_layout()
-plt.savefig(output_dir / 'prediction_scatter.png', dpi=300, bbox_inches='tight')
-print("Saved: prediction_scatter.png")
-plt.close()
+    scatter_df = pd.DataFrame(
+        {"Date": y_true.index, "Actual_PM25": y_true.values, "Predicted_PM25": (y_pred.values if isinstance(y_pred, pd.Series) else y_pred)}
+    )
+    save_csv(scatter_df, output_dir / f"plot_scatter__{model_slug}__{ds_slug}.csv")
 
-# 11.4 Time series prediction comparison
-print("Generating time series comparison plots...")
-fig, axes = plt.subplots(2, 1, figsize=(18, 10))
+    residual = scatter_df["Actual_PM25"].values - scatter_df["Predicted_PM25"].values
+    save_csv(scatter_df.assign(Residual=residual), output_dir / f"plot_residuals__{model_slug}__{ds_slug}.csv")
+    save_csv(scatter_df.assign(Error=residual), output_dir / f"plot_error_distribution__{model_slug}__{ds_slug}.csv")
 
-# Test set - basic model
-plot_range = min(300, len(y_test))
-plot_idx = range(len(y_test) - plot_range, len(y_test))
-time_idx = y_test.index[plot_idx]
+# 5) Time series（按 RF 命名规则：simple sampled + lastyear sampled）
+step = 4
 
-axes[0].plot(time_idx, y_test.iloc[plot_idx], 'k-', label='Actual', 
-             linewidth=2, alpha=0.8)
-axes[0].plot(time_idx, y_test_pred_basic.iloc[plot_idx], 'b--', label='Basic Model Prediction', 
-             linewidth=1.5, alpha=0.7)
-axes[0].set_xlabel('Date', fontsize=12)
-axes[0].set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
-axes[0].set_title('ARIMA Basic Model - Time Series Prediction Comparison (Last 300 Days of Test Set)', 
-                  fontsize=13, fontweight='bold')
-axes[0].legend(fontsize=10)
-axes[0].grid(True, alpha=0.3)
-plt.setp(axes[0].xaxis.get_majorticklabels(), rotation=45)
+def _export_ts_simple_sampled(model_slug: str, y_pred_test: pd.Series):
+    ts_df = (
+        pd.DataFrame({"time": y_test.index, "y_true": y_test.values, "y_pred": y_pred_test.values})
+        .sort_values("time")
+        .reset_index(drop=True)
+    )
+    save_csv(ts_df.iloc[::step].copy(), output_dir / f"plot_ts_simple_sampled__{model_slug}.csv")
 
-# Test set - optimized model
-axes[1].plot(time_idx, y_test.iloc[plot_idx], 'k-', label='Actual', 
-             linewidth=2, alpha=0.8)
-axes[1].plot(time_idx, y_test_pred_opt.iloc[plot_idx], 'g--', label='Optimized Model Prediction', 
-             linewidth=1.5, alpha=0.7)
-axes[1].set_xlabel('Date', fontsize=12)
-axes[1].set_ylabel('PM2.5 Concentration (μg/m³)', fontsize=12)
-axes[1].set_title('ARIMA Optimized Model - Time Series Prediction Comparison (Last 300 Days of Test Set)', 
-                  fontsize=13, fontweight='bold')
-axes[1].legend(fontsize=10)
-axes[1].grid(True, alpha=0.3)
-plt.setp(axes[1].xaxis.get_majorticklabels(), rotation=45)
 
-plt.tight_layout()
-plt.savefig(output_dir / 'timeseries_comparison.png', dpi=300, bbox_inches='tight')
-print("Saved: timeseries_comparison.png")
-plt.close()
+_export_ts_simple_sampled("arima_basic", y_test_pred_basic)
+_export_ts_simple_sampled("arima_optimized", y_test_pred_opt)
 
-# 11.5 Residual analysis scatter plots
-print("Generating residual analysis plots...")
-fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+plot_df = pd.DataFrame({"time": y_test.index, "y_true": y_test.values}).sort_values("time").reset_index(drop=True)
+plot_range = min(365, len(plot_df))
+plot_df_subset = plot_df.iloc[-plot_range:].copy()
+plot_df_sampled = plot_df_subset.iloc[::step].copy().reset_index(drop=True)
+x_axis = np.arange(len(plot_df_sampled))
 
-for idx, (model_name, y_pred, y_true, dataset) in enumerate(models_data):
-    row = idx // 3
-    col = idx % 3
-    
-    ax = axes[row, col]
-    
-    y_true_vals = y_true.values if isinstance(y_true, pd.Series) else y_true
-    y_pred_vals = y_pred.values if isinstance(y_pred, pd.Series) else y_pred
-    
-    residuals = y_true_vals - y_pred_vals
-    
-    ax.scatter(y_pred_vals, residuals, alpha=0.5, s=20, edgecolors='black', linewidth=0.3)
-    ax.axhline(y=0, color='r', linestyle='--', linewidth=2)
-    ax.set_xlabel('Predicted Value (μg/m³)', fontsize=11)
-    ax.set_ylabel('Residual (μg/m³)', fontsize=11)
-    ax.set_title(f'ARIMA_{model_name} - {dataset}\nMean Residual={residuals.mean():.2f}, Std={residuals.std():.2f}', 
-                 fontsize=11, fontweight='bold')
-    ax.grid(True, alpha=0.3)
+ts_common = pd.DataFrame({"x_axis": x_axis, "time": plot_df_sampled["time"].values, "y_true": plot_df_sampled["y_true"].values})
+save_csv(ts_common, output_dir / "plot_ts_lastyear_sampled__actual.csv")
 
-plt.tight_layout()
-plt.savefig(output_dir / 'residuals_analysis.png', dpi=300, bbox_inches='tight')
-print("Saved: residuals_analysis.png")
-plt.close()
+def _export_ts_lastyear_sampled(model_slug: str, y_pred_test: pd.Series):
+    pred_df = pd.DataFrame({"time": y_pred_test.index, "y_pred": y_pred_test.values}).sort_values("time").reset_index(drop=True)
+    pred_subset = pred_df.iloc[-plot_range:].copy()
+    pred_sampled = pred_subset.iloc[::step].copy().reset_index(drop=True)
+    save_csv(ts_common.assign(y_pred=pred_sampled["y_pred"].values), output_dir / f"plot_ts_lastyear_sampled__{model_slug}.csv")
 
-# 11.6 Model performance comparison bar charts
-print("Generating model comparison plots...")
-fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
-test_results_plot = all_results[all_results['Dataset'] == 'Test']
-models = test_results_plot['Model'].tolist()
-x_pos = np.arange(len(models))
-colors = ['blue', 'green']
-
-metrics = ['R²', 'RMSE', 'MAE', 'MAPE']
-for i, metric in enumerate(metrics):
-    axes[i].bar(x_pos, test_results_plot[metric], color=colors, alpha=0.7, 
-                edgecolor='black', linewidth=1.5)
-    axes[i].set_xticks(x_pos)
-    axes[i].set_xticklabels(['Basic', 'Optimized'], fontsize=11)
-    axes[i].set_ylabel(metric, fontsize=12)
-    
-    if metric == 'R²':
-        axes[i].set_title(f'{metric} Comparison\n(Higher is Better)', fontsize=12, fontweight='bold')
-    else:
-        axes[i].set_title(f'{metric} Comparison\n(Lower is Better)', fontsize=12, fontweight='bold')
-    
-    axes[i].grid(True, alpha=0.3, axis='y')
-    
-    # Display values
-    for j, v in enumerate(test_results_plot[metric]):
-        if metric == 'MAPE':
-            axes[i].text(j, v, f'{v:.1f}%', ha='center', va='bottom', 
-                         fontsize=10, fontweight='bold')
-        else:
-            axes[i].text(j, v, f'{v:.2f}', ha='center', va='bottom', 
-                         fontsize=10, fontweight='bold')
-
-plt.tight_layout()
-plt.savefig(output_dir / 'model_comparison.png', dpi=300, bbox_inches='tight')
-print("Saved: model_comparison.png")
-plt.close()
-
-# 11.7 Error distribution histograms
-print("Generating error distribution plots...")
-fig, axes = plt.subplots(1, 2, figsize=(16, 5))
-
-errors_basic = y_test.values - y_test_pred_basic.values
-errors_opt = y_test.values - y_test_pred_opt.values
-
-axes[0].hist(errors_basic, bins=50, color='blue', alpha=0.7, edgecolor='black')
-axes[0].axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='Zero Error')
-axes[0].set_xlabel('Prediction Error (μg/m³)', fontsize=12)
-axes[0].set_ylabel('Frequency', fontsize=12)
-axes[0].set_title(f'Basic Model - Prediction Error Distribution\nMean={errors_basic.mean():.2f}, Std={errors_basic.std():.2f}', 
-                  fontsize=13, fontweight='bold')
-axes[0].legend(fontsize=11)
-axes[0].grid(True, alpha=0.3, axis='y')
-
-axes[1].hist(errors_opt, bins=50, color='green', alpha=0.7, edgecolor='black')
-axes[1].axvline(x=0, color='r', linestyle='--', linewidth=2.5, label='Zero Error')
-axes[1].set_xlabel('Prediction Error (μg/m³)', fontsize=12)
-axes[1].set_ylabel('Frequency', fontsize=12)
-axes[1].set_title(f'Optimized Model - Prediction Error Distribution\nMean={errors_opt.mean():.2f}, Std={errors_opt.std():.2f}', 
-                  fontsize=13, fontweight='bold')
-axes[1].legend(fontsize=11)
-axes[1].grid(True, alpha=0.3, axis='y')
-
-plt.tight_layout()
-plt.savefig(output_dir / 'error_distribution.png', dpi=300, bbox_inches='tight')
-print("Saved: error_distribution.png")
-plt.close()
-
-# 11.8 AIC/BIC comparison plots
-print("Generating AIC/BIC comparison plots...")
-fig, ax = plt.subplots(1, 1, figsize=(10, 6))
-
-models_aic_bic = ['Basic', 'Optimized']
-aic_values = [fit_basic.aic, fit_optimized.aic]
-bic_values = [fit_basic.bic, fit_optimized.bic]
-
-x = np.arange(len(models_aic_bic))
-width = 0.35
-
-bars1 = ax.bar(x - width/2, aic_values, width, label='AIC', color='steelblue', 
-               edgecolor='black', linewidth=1.5)
-bars2 = ax.bar(x + width/2, bic_values, width, label='BIC', color='coral', 
-               edgecolor='black', linewidth=1.5)
-
-ax.set_ylabel('Information Criterion Value', fontsize=12)
-ax.set_title('Model Information Criterion Comparison (AIC/BIC)\nLower is Better', fontsize=13, fontweight='bold')
-ax.set_xticks(x)
-ax.set_xticklabels(models_aic_bic, fontsize=11)
-ax.legend(fontsize=11)
-ax.grid(True, alpha=0.3, axis='y')
-
-# Display values
-for bars in [bars1, bars2]:
-    for bar in bars:
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height,
-                f'{height:.0f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
-
-plt.tight_layout()
-plt.savefig(output_dir / 'aic_bic_comparison.png', dpi=300, bbox_inches='tight')
-print("Saved: aic_bic_comparison.png")
-plt.close()
+_export_ts_lastyear_sampled("arima_basic", y_test_pred_basic)
+_export_ts_lastyear_sampled("arima_optimized", y_test_pred_opt)
 
 # ============================== Part 12: Save Results ==============================
 print("\n" + "=" * 80)
 print("Step 10: Saving Results")
 print("=" * 80)
 
-# Save model performance
-all_results.to_csv(output_dir / 'model_performance.csv', index=False, encoding='utf-8-sig')
-print("Saved: model_performance.csv")
+save_csv(all_results, output_dir / "arima_model_performance.csv")
 
-# Save best parameters
-best_params_df = pd.DataFrame([{
-    'ARIMA_order_p': best_order[0],
-    'ARIMA_order_d': best_order[1],
-    'ARIMA_order_q': best_order[2],
-    'Seasonal_order_P': best_seasonal_order[0],
-    'Seasonal_order_D': best_seasonal_order[1],
-    'Seasonal_order_Q': best_seasonal_order[2],
-    'Seasonal_order_s': best_seasonal_order[3],
-    'AIC': fit_optimized.aic,
-    'BIC': fit_optimized.bic
-}])
-best_params_df.to_csv(output_dir / 'best_parameters.csv', index=False, encoding='utf-8-sig')
-print("Saved: best_parameters.csv")
+best_params_df = pd.DataFrame(
+    [
+        {
+            "ARIMA_order_p": best_order[0],
+            "ARIMA_order_d": best_order[1],
+            "ARIMA_order_q": best_order[2],
+            "Seasonal_order_P": best_seasonal_order[0],
+            "Seasonal_order_D": best_seasonal_order[1],
+            "Seasonal_order_Q": best_seasonal_order[2],
+            "Seasonal_order_s": best_seasonal_order[3],
+            "AIC": fit_optimized.aic,
+            "BIC": fit_optimized.bic,
+        }
+    ]
+)
+save_csv(best_params_df, output_dir / "arima_best_parameters.csv")
 
-# Save predictions
-predictions_df = pd.DataFrame({
-    'Date': y_test.index,
-    'Actual': y_test.values,
-    'Prediction_Basic': y_test_pred_basic.values,
-    'Prediction_Optimized': y_test_pred_opt.values,
-    'Error_Basic': y_test.values - y_test_pred_basic.values,
-    'Error_Optimized': y_test.values - y_test_pred_opt.values
-})
-predictions_df.to_csv(output_dir / 'predictions.csv', index=False, encoding='utf-8-sig')
-print("Saved: predictions.csv")
+pred_all = pd.DataFrame(
+    {
+        "Date": y_test.index,
+        "Actual_PM25": y_test.values,
+        "Predicted_ARIMA_Basic": y_test_pred_basic.values,
+        "Predicted_ARIMA_Optimized": y_test_pred_opt.values,
+        "Error_ARIMA_Basic": y_test.values - y_test_pred_basic.values,
+        "Error_ARIMA_Optimized": y_test.values - y_test_pred_opt.values,
+    }
+)
+save_csv(pred_all, output_dir / "arima_predictions_all_models.csv")
 
-# Save residual diagnostics results
-diagnostics_df = pd.DataFrame({
-    'Model': ['Basic', 'Optimized'],
-    'Residual_Mean': [residuals_basic.mean(), residuals_opt.mean()],
-    'Residual_Std': [residuals_basic.std(), residuals_opt.std()],
-    'Ljungbox_pvalue': [lb_test_basic['lb_pvalue'].iloc[-1], lb_test_opt['lb_pvalue'].iloc[-1]],
-    'JarqueBera_statistic': [jb_test_basic[0], jb_test_opt[0]],
-    'JarqueBera_pvalue': [jb_test_basic[1], jb_test_opt[1]]
-})
-diagnostics_df.to_csv(output_dir / 'diagnostics.csv', index=False, encoding='utf-8-sig')
-print("Saved: diagnostics.csv")
+pred_basic = pd.DataFrame(
+    {
+        "Date": y_test.index,
+        "Actual_PM25": y_test.values,
+        "Predicted_PM25": y_test_pred_basic.values,
+        "Error": y_test.values - y_test_pred_basic.values,
+    }
+)
+save_csv(pred_basic, output_dir / "arima_predictions__arima_basic.csv")
 
-# Save models
-with open(model_dir / 'arima_basic.pkl', 'wb') as f:
-    pickle.dump(fit_basic, f)
-print("Saved: arima_basic.pkl")
+pred_opt = pd.DataFrame(
+    {
+        "Date": y_test.index,
+        "Actual_PM25": y_test.values,
+        "Predicted_PM25": y_test_pred_opt.values,
+        "Error": y_test.values - y_test_pred_opt.values,
+    }
+)
+save_csv(pred_opt, output_dir / "arima_predictions__arima_optimized.csv")
 
-with open(model_dir / 'arima_optimized.pkl', 'wb') as f:
-    pickle.dump(fit_optimized, f)
-print("Saved: arima_optimized.pkl")
+diagnostics_df = pd.DataFrame(
+    {
+        "Model": ["Basic", "Optimized"],
+        "Residual_Mean": [residuals_basic.mean(), residuals_opt.mean()],
+        "Residual_Std": [residuals_basic.std(), residuals_opt.std()],
+        "Ljungbox_pvalue": [lb_test_basic["lb_pvalue"].iloc[-1], lb_test_opt["lb_pvalue"].iloc[-1]],
+        "JarqueBera_statistic": [jb_test_basic[0], jb_test_opt[0]],
+        "JarqueBera_pvalue": [jb_test_basic[1], jb_test_opt[1]],
+    }
+)
+save_csv(diagnostics_df, output_dir / "arima_diagnostics.csv")
 
 # ============================== Part 13: Summary Report ==============================
 print("\n" + "=" * 80)
@@ -898,18 +736,7 @@ print("  - predictions.csv             Prediction results")
 print("  - diagnostics.csv             Residual diagnostics results")
 
 print("\nChart files:")
-print("  - acf_pacf_plots.png          ACF/PACF analysis plots")
-print("  - residual_diagnostics.png    Residual diagnostics plots")
-print("  - prediction_scatter.png      Prediction vs actual scatter plots")
-print("  - timeseries_comparison.png   Time series comparison")
-print("  - residuals_analysis.png      Residual analysis")
-print("  - model_comparison.png        Model performance comparison")
-print("  - error_distribution.png      Error distribution")
-print("  - aic_bic_comparison.png      AIC/BIC comparison")
-
-print("\nModel files:")
-print("  - arima_basic.pkl             Basic ARIMA model")
-print("  - arima_optimized.pkl         Optimized ARIMA model")
+print("  (No figure files are generated; use exported CSVs to plot in a unified script)")
 
 # Best model information
 best_model = test_results.iloc[0]

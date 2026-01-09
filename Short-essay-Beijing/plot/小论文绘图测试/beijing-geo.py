@@ -6,14 +6,17 @@ import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import frykit.plot as fplt
 from functools import lru_cache
 from pathlib import Path
 
 # 获取脚本所在目录的绝对路径
 SCRIPT_DIR = Path(__file__).parent.absolute()
 
-# 配置中文字体支持
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'Microsoft YaHei']
+# 配置字体：统一使用 Times New Roman
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Times New Roman']
+plt.rcParams['font.size'] = 10
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 # Column names in source Excel files (Chinese)
@@ -116,8 +119,8 @@ def beijing_lcc_map():
     gl.ylocator = mticker.FixedLocator(lat_ticks)
     gl.xformatter = LongitudeFormatter(number_format=".1f")
     gl.yformatter = LatitudeFormatter(number_format=".1f")
-    gl.xlabel_style = {'size': 8}
-    gl.ylabel_style = {'size': 8}
+    gl.xlabel_style = {'size': 8, 'family': 'Times New Roman'}
+    gl.ylabel_style = {'size': 8, 'family': 'Times New Roman'}
 
     return fig, ax
 
@@ -137,8 +140,16 @@ def main():
                transform=ccrs.PlateCarree(),
                label=f'Air Quality Stations ({len(poll)})')
 
-    plt.legend(loc='upper left')
-    plt.title('Distribution of Meteorological and Air Quality Monitoring Stations in Beijing\n(Lambert Conformal Conic Projection)')
+    # 添加比例尺（位置在右下角，长度 50 km，适合北京区域）
+    scale_bar = fplt.add_scale_bar(ax, 0.7, 0.1, length=50)
+    scale_bar.set_xticks([0, 25, 50])  # 设置刻度
+    scale_bar.set_xlabel('km', fontfamily='Times New Roman')
+    scale_bar.tick_params(labelsize=10)
+    for label in scale_bar.get_xticklabels():
+        label.set_fontfamily('Times New Roman')
+
+    plt.legend(loc='upper left', prop={'family': 'Times New Roman'})
+    plt.title('Beijing Map\n(Lambert Conformal Conic Projection)', fontsize=16, fontweight='bold', fontfamily='Times New Roman', pad=8)
     plt.tight_layout()
     plt.savefig('beijing_stations_lcc.png', dpi=300)
     plt.show()

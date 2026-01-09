@@ -152,10 +152,12 @@ def solve_game_scores_optimized(n, y):
 # --- 如何使用 ---
 if __name__ == '__main__':
     # 示例：第 n 天，总分 y
-    n_test = 8
+    n_test = input("请输入天数: ")
+    n_test = int(n_test)
     # n 可以是 1 到 14 之间的任意整数
 
-    y_test = 8883
+    y_test = input("请输入总分: ")
+    y_test = int(y_test)
 
 
     start_time = time.time() # 开始计时
