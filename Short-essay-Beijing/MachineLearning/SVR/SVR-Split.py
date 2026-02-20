@@ -45,9 +45,9 @@ print("=" * 80)
 print("SVR PM2.5 Concentration Prediction Model (NetCDF ERA5)")
 print("=" * 80)
 
-pollution_all_path = '/root/autodl-tmp/Benchmark/all(AQI+PM2.5+PM10)'
-pollution_extra_path = '/root/autodl-tmp/Benchmark/extra(SO2+NO2+CO+O3)'
-era5_path = '/root/autodl-tmp/ERA5-Beijing-NC'
+pollution_all_path = 'E:/DATA Science/Benchmark/all(AQI+PM2.5+PM10)'
+pollution_extra_path = 'E:/DATA Science/Benchmark/extra(SO2+NO2+CO+O3)'
+era5_path = 'E:/DATA Science/ERA5-Beijing-NC'
 
 script_dir = Path(__file__).parent
 output_dir = script_dir / 'output'
@@ -836,6 +836,17 @@ if __name__ == '__main__':
     plt.close()
     print("  Saved: time_series_prediction.tif")
 
+    # 保存完整的时间序列预测结果到CSV文件
+    time_series_df = pd.DataFrame({
+        'Date': y_test.index,
+        'Actual_PM2.5': y_test.values,
+        'Predicted_PM2.5': y_test_pred,
+        'Residuals': y_test.values - y_test_pred,
+        'Absolute_Error': np.abs(y_test.values - y_test_pred)
+    })
+    time_series_df.to_csv(output_dir / 'time_series_prediction.csv', index=False, encoding='utf-8-sig')
+    print("  Saved: time_series_prediction.csv")
+
     print("\n" + "=" * 80)
     print("Saving Models")
     print("=" * 80)
@@ -914,6 +925,7 @@ if __name__ == '__main__':
     8. File List
        - SVR-NC.py: Main program
        - svr_model_comparison.csv: Model performance comparison
+       - time_series_prediction.csv: Time series prediction results (Date, Actual, Predicted, Residuals)
        - test_rmse_comparison.tif: Test set RMSE comparison chart
        - test_mae_comparison.tif: Test set MAE comparison chart
        - test_r2_comparison.tif: Test set R² comparison chart
@@ -944,6 +956,7 @@ if __name__ == '__main__':
     print("\nGenerated files:")
     print("\nCSV files (output directory):")
     print("  - svr_model_comparison.csv    Model performance comparison")
+    print("  - time_series_prediction.csv  Time series prediction results (Date, Actual, Predicted, Residuals)")
     print("  - feature_names.csv           Feature name list")
 
     print("\nChart files (output directory):")

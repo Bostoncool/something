@@ -3,8 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.dates import MonthLocator, DateFormatter
 
 # CSV file path
-path = r"H:\DATA Science\小论文Result\Fine_model\-XGBOOST\CSV\output\xgboost_predictions__xgboost_optimized__test.csv"
-
+path = r"E:\DATA Science\小论文Result\Fine_model\-RF\Split2\output\rf_predictions_nc.csv"
 # Read CSV
 df = pd.read_csv(path)
 
@@ -48,10 +47,13 @@ ax.plot(
 # Reference line y=75 (mild pollution threshold and above)
 ax.axhline(75, linestyle='--', linewidth=1.5, color='red', label=' 75 (µg/m³)')
 
+# Reference line y=35 (great and above)
+ax.axhline(35, linestyle='--', linewidth=1.5, color='blue', label=' 35 (µg/m³)')
+
 # Title and axis labels
-ax.set_title('XGBOOST-Optimized', fontsize=24, fontweight='bold', fontfamily='Times New Roman', pad=8)
-ax.set_xlabel('Date', fontsize=16, fontfamily='Times New Roman')
-ax.set_ylabel('PM2.5 Concentration (µg/m³)', fontsize=16, fontfamily='Times New Roman')
+ax.set_title('RF-Optimized', fontsize=24, fontweight='bold', fontfamily='Times New Roman', pad=8)
+ax.set_xlabel('Date', fontsize=24, fontfamily='Times New Roman')
+ax.set_ylabel('PM2.5 (µg/m³)', fontsize=24, fontfamily='Times New Roman')
 
 # X-axis formatting: rotate labels 45 degrees and show fewer months
 ax.xaxis.set_major_locator(MonthLocator(interval=2))
@@ -65,12 +67,12 @@ for spine in ax.spines.values():
     spine.set_linewidth(1.2)
 
 # Legend and layout
-ax.legend(prop={'family': 'Times New Roman', 'size': 14})
+ax.legend(prop={'family': 'Times New Roman', 'size': 20})
 plt.tight_layout()
 
 # Save figure (使用figure对象保存，避免show()的影响)
-out_path = "XGBOOST-Optimized.png"
-fig.savefig(out_path, dpi=300, bbox_inches='tight', facecolor='white')
+out_path = "RF-Optimized.svg"
+fig.savefig(out_path, format='svg', bbox_inches='tight', facecolor='white')
 # 显示图形
 plt.show()
 # 关闭图形以释放内存
