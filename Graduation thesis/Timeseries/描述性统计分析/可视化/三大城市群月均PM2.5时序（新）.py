@@ -278,7 +278,7 @@ def main() -> None:
     mpl.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial Unicode MS"]
     mpl.rcParams["axes.unicode_minus"] = False
 
-    output_dir = Path(__file__).resolve().parent
+    output_dir = Path(r"H:\DATA Science\大论文Result\大论文图\三大城市群\PM2.5_月均_时序图")
     cluster_monthly_df = build_cluster_monthly_series(csv_path)
     figure_path = plot_cluster_trends(cluster_monthly_df, output_dir=output_dir)
 

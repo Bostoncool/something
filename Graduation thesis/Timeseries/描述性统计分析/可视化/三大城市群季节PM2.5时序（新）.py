@@ -265,7 +265,8 @@ def main() -> None:
     mpl.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial Unicode MS"]
     mpl.rcParams["axes.unicode_minus"] = False
 
-    output_dir = Path(__file__).resolve().parent
+    output_dir = Path(r"H:\DATA Science\大论文Result\大论文图\三大城市群\PM2.5_季节_时序图")
+    output_dir.mkdir(parents=True, exist_ok=True)
     raw_df = read_city_wide_table(csv_path)
     cluster_monthly = build_cluster_monthly_from_wide_city_table(raw_df, city_col=raw_df.columns[0])
     seasonal_df = build_cluster_seasonal_yearly(cluster_monthly)

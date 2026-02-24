@@ -1,4 +1,6 @@
 import os
+import importlib
+import unicodedata
 import warnings
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
@@ -7,18 +9,141 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib import font_manager
 from statsmodels.tsa.seasonal import MSTL
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
-# 设置matplotlib中文字体
-plt.rcParams["font.sans-serif"] = ["SimHei", "Arial Unicode MS", "DejaVu Sans"]
-plt.rcParams["axes.unicode_minus"] = False
+def _load_lazy_pinyin():
+    try:
+        pypinyin_module = importlib.import_module("pypinyin")
+        return pypinyin_module.lazy_pinyin
+    except Exception:
+        return None
 
-# 设置seaborn风格
-sns.set_style("whitegrid")
-sns.set_palette("husl")
+
+lazy_pinyin = _load_lazy_pinyin()
+
+def configure_plot_fonts():
+    """
+    自动配置可用中文字体，避免图片中文显示为方块。
+    """
+    chinese_font_chain = [
+        "SimHei",
+        "Microsoft YaHei",
+        "Arial Unicode MS",
+        "SimSun",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+    ]
+    available_font_names = {font.name for font in font_manager.fontManager.ttflist}
+    available_in_chain = [name for name in chinese_font_chain if name in available_font_names]
+    if not available_in_chain:
+        print("Warning: No common Chinese font found. Chinese text may not render correctly.")
+
+    sns.set_theme(style="whitegrid", palette="husl")
+    plt.rcParams["font.family"] = "sans-serif"
+    plt.rcParams["font.sans-serif"] = chinese_font_chain
+    plt.rcParams["axes.unicode_minus"] = False
+    if available_in_chain:
+        print(f"Using plotting fonts: {', '.join(available_in_chain)}")
+
+
+configure_plot_fonts()
+
+
+CITY_PINYIN_MAP = {
+    "北京": "beijing",
+    "天津": "tianjin",
+    "石家庄": "shijiazhuang",
+    "唐山": "tangshan",
+    "秦皇岛": "qinhuangdao",
+    "邯郸": "handan",
+    "邢台": "xingtai",
+    "保定": "baoding",
+    "张家口": "zhangjiakou",
+    "承德": "chengde",
+    "沧州": "cangzhou",
+    "廊坊": "langfang",
+    "衡水": "hengshui",
+    "上海": "shanghai",
+    "南京": "nanjing",
+    "无锡": "wuxi",
+    "常州": "changzhou",
+    "苏州": "suzhou",
+    "南通": "nantong",
+    "盐城": "yancheng",
+    "扬州": "yangzhou",
+    "镇江": "zhenjiang",
+    "泰州": "taizhou",
+    "杭州": "hangzhou",
+    "宁波": "ningbo",
+    "温州": "wenzhou",
+    "嘉兴": "jiaxing",
+    "湖州": "huzhou",
+    "绍兴": "shaoxing",
+    "金华": "jinhua",
+    "舟山": "zhoushan",
+    "台州": "taizhou_zj",
+    "合肥": "hefei",
+    "芜湖": "wuhu",
+    "马鞍山": "maanshan",
+    "铜陵": "tongling",
+    "安庆": "anqing",
+    "滁州": "chuzhou",
+    "池州": "chizhou",
+    "宣城": "xuancheng",
+    "广州": "guangzhou",
+    "深圳": "shenzhen",
+    "珠海": "zhuhai",
+    "佛山": "foshan",
+    "江门": "jiangmen",
+    "肇庆": "zhaoqing",
+    "惠州": "huizhou",
+    "东莞": "dongguan",
+    "中山": "zhongshan",
+}
+
+ASCII_TO_CITY_MAP = {value: key for key, value in CITY_PINYIN_MAP.items()}
+
+
+def city_display_name(city_name):
+    """
+    将拼音城市名恢复为中文城市名（若可映射）。
+    """
+    return ASCII_TO_CITY_MAP.get(str(city_name), str(city_name))
+
+
+def city_to_ascii_name(city_name):
+    """
+    将城市名统一为ASCII拼音，避免中文渲染异常。
+    """
+    normalized = unicodedata.normalize("NFKC", str(city_name))
+    no_control_chars = "".join(
+        ch for ch in normalized if not unicodedata.category(ch).startswith("C")
+    )
+    compact = "".join(no_control_chars.split())
+    compact = compact if compact else str(city_name).strip()
+
+    mapped = CITY_PINYIN_MAP.get(compact)
+    if mapped:
+        return mapped
+
+    if lazy_pinyin is not None:
+        pinyin_tokens = lazy_pinyin(compact, errors="ignore")
+        pinyin_joined = "_".join(token.strip().lower() for token in pinyin_tokens if token.strip())
+        if pinyin_joined:
+            return pinyin_joined
+
+    fallback = []
+    for ch in compact:
+        if ch.isascii() and ch.isalnum():
+            fallback.append(ch.lower())
+        else:
+            fallback.append("_")
+    fallback_name = "_".join(part for part in "".join(fallback).split("_") if part)
+    return fallback_name if fallback_name else "unknown_city"
 
 
 def process_single_file(file_path):
@@ -39,7 +164,7 @@ def process_single_file(file_path):
 
         df = pd.read_csv(file_path, encoding="utf-8-sig")
 
-        city_columns = [
+        raw_city_columns = [
             col
             for col in df.columns
             if col not in ["date", "hour", "type", "__file__", "__missing_cols__"]
@@ -47,14 +172,15 @@ def process_single_file(file_path):
 
         realtime_types = ["PM2.5"]
         df_realtime = df[df["type"].isin(realtime_types)].copy()
-        daily_avg = df_realtime.groupby("type")[city_columns].mean()
+        daily_avg = df_realtime.groupby("type")[raw_city_columns].mean()
 
         month_data = {}
-        for city in city_columns:
+        for raw_city in raw_city_columns:
+            city = city_to_ascii_name(raw_city)
             month_data[city] = {}
             for pollutant in realtime_types:
                 if pollutant in daily_avg.index:
-                    value = daily_avg.loc[pollutant, city]
+                    value = daily_avg.loc[pollutant, raw_city]
                     if not pd.isna(value):
                         month_data[city][pollutant] = value
 
@@ -232,6 +358,7 @@ def plot_mstl_components(result, city, pollutant, save_path=None):
     """
     绘制MSTL分解各成分（支持多季节成分）
     """
+    city_label = city_display_name(city)
     seasonal_df = _get_seasonal_df(result)
     n_seasonal = seasonal_df.shape[1]
 
@@ -241,30 +368,30 @@ def plot_mstl_components(result, city, pollutant, save_path=None):
 
     axes[0].plot(result.observed, "b-", linewidth=1.5, alpha=0.8)
     axes[0].set_title(
-        f"{city} - {pollutant} Original Time Series", fontsize=13, fontweight="bold"
+        f"{city_label} - {pollutant} 原始时间序列", fontsize=13, fontweight="bold"
     )
-    axes[0].set_ylabel("Concentration")
+    axes[0].set_ylabel("浓度")
     axes[0].grid(True, alpha=0.3)
 
     axes[1].plot(result.trend, "r-", linewidth=1.5, alpha=0.8)
-    axes[1].set_title("Trend Component", fontsize=12, fontweight="bold")
+    axes[1].set_title("趋势项", fontsize=12, fontweight="bold")
     axes[1].set_ylabel("Trend")
     axes[1].grid(True, alpha=0.3)
 
     for idx, column in enumerate(seasonal_df.columns, start=2):
         axes[idx].plot(seasonal_df[column], "g-", linewidth=1.2, alpha=0.85)
         axes[idx].set_title(
-            f"Seasonal Component ({column})", fontsize=12, fontweight="bold"
+            f"季节项（{column}）", fontsize=12, fontweight="bold"
         )
-        axes[idx].set_ylabel("Seasonal")
+        axes[idx].set_ylabel("季节")
         axes[idx].grid(True, alpha=0.3)
 
     resid_axis = 2 + n_seasonal
     axes[resid_axis].plot(result.resid, color="orange", linewidth=1, alpha=0.7)
     axes[resid_axis].axhline(y=0, color="black", linestyle="--", alpha=0.5)
-    axes[resid_axis].set_title("Residual Component", fontsize=12, fontweight="bold")
-    axes[resid_axis].set_ylabel("Residual")
-    axes[resid_axis].set_xlabel("Time")
+    axes[resid_axis].set_title("残差项", fontsize=12, fontweight="bold")
+    axes[resid_axis].set_ylabel("残差")
+    axes[resid_axis].set_xlabel("时间")
     axes[resid_axis].grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -279,6 +406,7 @@ def plot_seasonal_analysis(result, city, pollutant, save_path=None):
     """
     季节性详细分析图（基于总季节项）
     """
+    city_label = city_display_name(city)
     seasonal_df = _get_seasonal_df(result)
     seasonal_total = seasonal_df.sum(axis=1)
 
@@ -286,41 +414,41 @@ def plot_seasonal_analysis(result, city, pollutant, save_path=None):
 
     seasonal_plot_df = pd.DataFrame(
         {
-            "Month": seasonal_total.index.month,
-            "Seasonal_Value": seasonal_total.values,
+            "月份": seasonal_total.index.month,
+            "季节值": seasonal_total.values,
         }
     )
 
-    sns.boxplot(data=seasonal_plot_df, x="Month", y="Seasonal_Value", ax=axes[0, 0])
+    sns.boxplot(data=seasonal_plot_df, x="月份", y="季节值", ax=axes[0, 0])
     axes[0, 0].set_title(
-        f"{city} - {pollutant} Total Seasonal by Month", fontsize=12, fontweight="bold"
+        f"{city_label} - {pollutant} 总季节项月度分布", fontsize=12, fontweight="bold"
     )
-    axes[0, 0].set_xlabel("Month")
-    axes[0, 0].set_ylabel("Seasonal Value")
+    axes[0, 0].set_xlabel("月份")
+    axes[0, 0].set_ylabel("季节值")
     axes[0, 0].grid(True, alpha=0.3)
 
-    sns.violinplot(data=seasonal_plot_df, x="Month", y="Seasonal_Value", ax=axes[0, 1])
-    axes[0, 1].set_title("Total Seasonal Distribution", fontsize=12, fontweight="bold")
-    axes[0, 1].set_xlabel("Month")
-    axes[0, 1].set_ylabel("Seasonal Value")
+    sns.violinplot(data=seasonal_plot_df, x="月份", y="季节值", ax=axes[0, 1])
+    axes[0, 1].set_title("总季节项分布密度", fontsize=12, fontweight="bold")
+    axes[0, 1].set_xlabel("月份")
+    axes[0, 1].set_ylabel("季节值")
     axes[0, 1].grid(True, alpha=0.3)
 
     trend_changes = result.trend.pct_change() * 100
     axes[1, 0].plot(trend_changes.index, trend_changes.values, "b-", alpha=0.7)
-    axes[1, 0].set_title("Trend Monthly Change Rate", fontsize=12, fontweight="bold")
-    axes[1, 0].set_xlabel("Time")
-    axes[1, 0].set_ylabel("Change Rate (%)")
+    axes[1, 0].set_title("趋势项月变化率", fontsize=12, fontweight="bold")
+    axes[1, 0].set_xlabel("时间")
+    axes[1, 0].set_ylabel("变化率(%)")
     axes[1, 0].axhline(y=0, color="red", linestyle="--", alpha=0.5)
     axes[1, 0].grid(True, alpha=0.3)
 
     axes[1, 1].hist(result.resid.values, bins=30, alpha=0.7, color="skyblue", edgecolor="black")
     axes[1, 1].axvline(x=0, color="red", linestyle="--", alpha=0.7)
-    axes[1, 1].set_title("Residual Distribution", fontsize=12, fontweight="bold")
-    axes[1, 1].set_xlabel("Residual Value")
-    axes[1, 1].set_ylabel("Frequency")
+    axes[1, 1].set_title("残差分布", fontsize=12, fontweight="bold")
+    axes[1, 1].set_xlabel("残差值")
+    axes[1, 1].set_ylabel("频次")
     axes[1, 1].grid(True, alpha=0.3)
 
-    plt.suptitle(f"{city} - {pollutant} MSTL Decomposition Detailed Analysis", fontsize=14, fontweight="bold")
+    plt.suptitle(f"{city_label} - {pollutant} MSTL分解详细分析", fontsize=14, fontweight="bold")
     plt.tight_layout()
 
     if save_path:
@@ -403,12 +531,12 @@ def main():
     print("PM2.5 Time Series MSTL Decomposition Analysis")
     print("=" * 60)
 
-    input_folder = r"E:\DATA Science\大论文Result\YZD\filtered_daily"
-    output_dir = r"E:\DATA Science\大论文Result\YZD\时间序列分解"
+    input_folder = r"H:\DATA Science\大论文Result\YZD\filtered_daily"
+    output_dir = r"H:\DATA Science\大论文Result\YZD\MSTL时间序列分解"
 
     # 当前脚本处理月度序列，推荐(12,)
     # 若后续改为日度序列，可改为(7, 365)
-    seasonal_periods = (12,)
+    seasonal_periods = (7,365)
 
     if not os.path.exists(input_folder):
         print(f"Error: Input folder does not exist: {input_folder}")
@@ -485,16 +613,17 @@ def main():
             analysis = analyze_mstl_results(mstl_result, city, target_pollutant)
             all_analyses.append(analysis)
 
-            city_output_dir = os.path.join(output_dir, city)
+            city_label = city_display_name(city)
+            city_output_dir = os.path.join(output_dir, city_label)
             os.makedirs(city_output_dir, exist_ok=True)
 
             mstl_plot_path = os.path.join(
-                city_output_dir, f"{city}_{target_pollutant}_MSTL_Decomposition.png"
+                city_output_dir, f"{city_label}_{target_pollutant}_MSTL分解.png"
             )
             plot_mstl_components(mstl_result, city, target_pollutant, mstl_plot_path)
 
             analysis_plot_path = os.path.join(
-                city_output_dir, f"{city}_{target_pollutant}_Seasonal_Analysis.png"
+                city_output_dir, f"{city_label}_{target_pollutant}_季节分析.png"
             )
             plot_seasonal_analysis(mstl_result, city, target_pollutant, analysis_plot_path)
 
