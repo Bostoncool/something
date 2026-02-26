@@ -327,7 +327,7 @@ def save_results_to_csv(sliding_t_results, months, output_dir):
 
     if sliding_t_data:
         df_sliding_t = pd.DataFrame(sliding_t_data)
-        sliding_t_path = os.path.join(output_dir, 'YZD_PM25_Monthly_Sliding_T_Test.csv')
+        sliding_t_path = os.path.join(output_dir, 'YRD_PM25_Monthly_Sliding_T_Test.csv')
         df_sliding_t.to_csv(sliding_t_path, index=False, encoding='utf-8-sig')
         print(f"月度滑动T检验结果已保存到: {sliding_t_path}")
 
@@ -403,10 +403,10 @@ def print_summary(sliding_t_results, months):
 # 主程序
 if __name__ == "__main__":
     # 设置文件夹路径（根据您的实际情况修改）
-    folder_path = r"E:\DATA Science\大论文Result\YZD\filtered_daily"
+    folder_path = r"E:\DATA Science\大论文Result\YRD\filtered_daily"
 
     # 输出目录路径
-    output_dir = r"E:\DATA Science\大论文Result\YZD\统计趋势检验"
+    output_dir = r"E:\DATA Science\大论文Result\YRD\统计趋势检验"
 
     # 设置滑动窗口大小（None表示自动计算，也可以指定具体数字，如12或24表示1-2年）
     window_size = None

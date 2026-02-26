@@ -16,7 +16,7 @@ def pettitt_test(data):
     返回:
     dict: 包含检验结果的字典
         - change_point: 突变点位置（索引，从0开始）
-        - change_season: 突变点季度
+        - change_month: 突变点月份
         - K: Pettitt统计量
         - p_value: p值
         - significant: 是否显著（p < 0.05）
@@ -27,7 +27,7 @@ def pettitt_test(data):
     if n < 4:  # 至少需要4个数据点
         return {
             'change_point': None,
-            'change_season': None,
+            'change_month': None,
             'K': np.nan,
             'p_value': np.nan,
             'significant': False,
@@ -51,7 +51,7 @@ def pettitt_test(data):
     abs_U = np.abs(U)
     max_idx = np.argmax(abs_U)
     K = abs_U[max_idx]
-    change_point = max_idx + 1  # 突变点位置（从1开始计数，对应第k季度之后）
+    change_point = max_idx + 1  # 突变点位置（从1开始计数，对应第k月之后）
 
     # 计算p值（近似正态分布）
     # p值计算公式：p = 2 * exp(-6 * K^2 / (n^3 + n^2))
@@ -86,7 +86,7 @@ def pettitt_test(data):
 
     return {
         'change_point': change_point if significant else None,
-        'change_season': None,  # 将在调用处设置
+        'change_month': None,  # 将在调用处设置
         'K': K,
         'p_value': p_value,
         'significant': significant,
@@ -96,40 +96,20 @@ def pettitt_test(data):
 
 def process_single_file(file_path):
     """
-    处理单个CSV文件，提取季度和城市污染物数据
+    处理单个CSV文件，提取月份和城市污染物数据
 
     参数:
     file_path: CSV文件路径
 
     返回:
-    (year_season, season_data) 元组，season_data是字典 {city: {pollutant: value}}
+    (year_month, month_data) 元组，month_data是字典 {city: {pollutant: value}}
     """
     try:
-        # 从文件名提取年月日
+        # 从文件名提取年月
         file_name = Path(file_path).stem
         # 假设文件名格式为: china_cities_YYYYMMDD.csv
-        date_str = file_name.split('_')[-1]  # YYYYMMDD格式
-        year = int(date_str[:4])
-        month = int(date_str[4:6])
-
-        # 根据月份确定季度
-        # 春：3-5月，夏：6-8月，秋：9-11月，冬：12-2月
-        if month in [3, 4, 5]:
-            season = '春'
-            season_code = f"{year}春"
-        elif month in [6, 7, 8]:
-            season = '夏'
-            season_code = f"{year}夏"
-        elif month in [9, 10, 11]:
-            season = '秋'
-            season_code = f"{year}秋"
-        elif month in [12, 1, 2]:
-            # 对于1-2月，属于下一年的冬季
-            season = '冬'
-            season_code = f"{year}冬" if month == 12 else f"{year+1}冬"
-        else:
-            print(f"无效月份: {month}")
-            return None
+        # 提取YYYYMM部分作为月份标识
+        year_month = file_name.split('_')[-1][:6]  # YYYYMM格式
 
         # 读取CSV文件
         df = pd.read_csv(file_path, encoding='utf-8-sig')
@@ -143,25 +123,25 @@ def process_single_file(file_path):
         df_pm25 = df[df['type'].isin(pm25_types)].copy()
 
         # 按小时计算平均值（对于每天的数据）
-        daily_avg = df_pm25.groupby('type')[city_columns].mean()
+        monthly_avg = df_pm25.groupby('type')[city_columns].mean()
 
-        # 存储季度的数据
-        season_data = {}
+        # 存储每月的数据
+        month_data = {}
 
-        # 对于每个城市，存储PM2.5的日均值（优先使用PM2.5_24h，如果没有则使用PM2.5）
+        # 对于每个城市，存储PM2.5的月均值（优先使用PM2.5_24h，如果没有则使用PM2.5）
         for city in city_columns:
-            season_data[city] = {}
+            month_data[city] = {}
             # 优先使用24小时平均值
-            if 'PM2.5' in daily_avg.index:
-                value = daily_avg.loc['PM2.5', city]
+            if 'PM2.5' in monthly_avg.index:
+                value = monthly_avg.loc['PM2.5', city]
                 if not pd.isna(value):
-                    season_data[city]['PM2.5'] = value
-            elif 'PM2.5_24h' in daily_avg.index:
-                value = daily_avg.loc['PM2.5_24h', city]
+                    month_data[city]['PM2.5'] = value
+            elif 'PM2.5_24h' in monthly_avg.index:
+                value = monthly_avg.loc['PM2.5_24h', city]
                 if not pd.isna(value):
-                    season_data[city]['PM2.5'] = value
+                    month_data[city]['PM2.5'] = value
 
-        return (season_code, season_data)
+        return (year_month, month_data)
 
     except Exception as e:
         print(f"处理文件 {file_path} 时出错: {e}")
@@ -169,7 +149,7 @@ def process_single_file(file_path):
 
 def calculate_pettitt_test(folder_path, n_processes=None):
     """
-    对每个城市PM2.5污染物数据执行Pettitt检验，检测突变点（按季度数据）
+    对每个城市PM2.5污染物数据执行Pettitt检验，检测突变点（按月度数据）
 
     参数:
     folder_path: CSV文件所在文件夹路径
@@ -177,10 +157,10 @@ def calculate_pettitt_test(folder_path, n_processes=None):
 
     返回:
     results: 字典，包含每个城市的Pettitt检验结果
-    seasons: 季度列表
+    months: 月份列表
     """
 
-    # 存储所有季度数据的字典
+    # 存储所有月份数据的字典
     all_data = {}
 
     # 1. 遍历文件夹中的所有CSV文件
@@ -202,99 +182,83 @@ def calculate_pettitt_test(folder_path, n_processes=None):
             unit="文件"
         ))
 
-    # 合并结果，按季度聚合数据
-    season_data_temp = {}  # 临时存储每个季度的日数据
+    # 合并结果
     for result in results:
         if result is not None:
-            season_code, day_data = result
-            if season_code not in season_data_temp:
-                season_data_temp[season_code] = {}
-            # 合并同一天的数据
-            for city, pollutants in day_data.items():
-                if city not in season_data_temp[season_code]:
-                    season_data_temp[season_code][city] = {}
-                season_data_temp[season_code][city].update(pollutants)
-
-    # 计算每个季度的平均值
-    for season_code, cities_data in season_data_temp.items():
-        if season_code not in all_data:
-            all_data[season_code] = {}
-        for city, pollutants in cities_data.items():
-            if city not in all_data[season_code]:
-                all_data[season_code][city] = {}
-            # 计算该季度该城市的平均PM2.5值
-            if 'PM2.5' in pollutants:
-                all_data[season_code][city]['PM2.5'] = pollutants['PM2.5']
+            year_month, month_data = result
+            if year_month not in all_data:
+                all_data[year_month] = {}
+            all_data[year_month].update(month_data)
 
     # 整理数据，执行Pettitt检验
-    seasons = sorted(all_data.keys())
-    print(f"处理了 {len(seasons)} 个季度的数据: {seasons[:5]}...{seasons[-5:] if len(seasons) > 10 else seasons[-len(seasons)+5:]}")
+    months = sorted(all_data.keys())
+    print(f"处理了 {len(months)} 个月的数据: {months[:5]}...{months[-5:] if len(months) > 10 else months[-len(months)+5:]}")
 
     # 对每个城市进行计算
     all_cities = set()
-    for season_data in all_data.values():
-        all_cities.update(season_data.keys())
+    for month_data in all_data.values():
+        all_cities.update(month_data.keys())
 
     print(f"\n正在对 {len(all_cities)} 个城市执行Pettitt检验...")
     pettitt_results = {}
 
     for city in tqdm(all_cities, desc="执行Pettitt检验", unit="城市"):
-        # 提取该城市各季度的PM2.5数据
+        # 提取该城市各月的PM2.5数据
         city_pm25_data = {}
-        for season in seasons:
-            if city in all_data[season] and 'PM2.5' in all_data[season][city]:
-                city_pm25_data[season] = all_data[season][city]['PM2.5']
+        for month in months:
+            if city in all_data[month] and 'PM2.5' in all_data[month][city]:
+                city_pm25_data[month] = all_data[month][city]['PM2.5']
 
-        # 至少需要4个季度的数据才能进行Pettitt检验
+        # 至少需要4个月的数据才能进行Pettitt检验
         if len(city_pm25_data) >= 4:
-            # 准备检验数据（按季度排序）
-            sorted_seasons = sorted(city_pm25_data.keys())
-            values_array = np.array([city_pm25_data[season] for season in sorted_seasons])
+            # 准备检验数据（按月份排序）
+            sorted_months = sorted(city_pm25_data.keys())
+            values_array = np.array([city_pm25_data[month] for month in sorted_months])
 
             # 执行Pettitt检验
             pettitt_result = pettitt_test(values_array)
 
-            # 设置突变点季度
+            # 设置突变点月份
             if pettitt_result['significant'] and pettitt_result['change_point'] is not None:
-                pettitt_result['change_season'] = sorted_seasons[pettitt_result['change_point'] - 1]
+                pettitt_result['change_month'] = sorted_months[pettitt_result['change_point'] - 1]
 
             # 存储结果
             pettitt_results[city] = {
-                'seasons': sorted_seasons,
+                'months': sorted_months,
                 'values': values_array.tolist(),
                 'change_point': pettitt_result['change_point'],  # 突变点位置（索引）
-                'change_season': pettitt_result['change_season'],  # 突变点季度
+                'change_month': pettitt_result['change_month'],  # 突变点月份
                 'K_statistic': pettitt_result['K'],  # Pettitt统计量
                 'p_value': pettitt_result['p_value'],  # p值
                 'significant': pettitt_result['significant'],  # 是否显著
                 'trend_before': pettitt_result['trend_before'],  # 突变点前趋势
                 'trend_after': pettitt_result['trend_after'],  # 突变点后趋势
-                'n_seasons': len(sorted_seasons)  # 数据季度数
+                'n_months': len(sorted_months)  # 数据月份数
             }
         else:
             # 数据不足，记录为NaN
             pettitt_results[city] = {
-                'seasons': list(city_pm25_data.keys()),
+                'months': list(city_pm25_data.keys()),
                 'values': list(city_pm25_data.values()),
                 'change_point': None,
-                'change_season': None,
+                'change_month': None,
                 'K_statistic': np.nan,
                 'p_value': np.nan,
                 'significant': False,
                 'trend_before': None,
                 'trend_after': None,
-                'n_seasons': len(city_pm25_data)
+                'n_months': len(city_pm25_data)
             }
 
-    return pettitt_results, seasons
+    return pettitt_results, months
 
-def save_results_to_csv(pettitt_results, seasons, output_dir):
+def save_results_to_csv(pettitt_results, months, output_dir):
     """
     将Pettitt检验结果保存为CSV文件
 
     参数:
     pettitt_results: Pettitt检验结果字典
-    seasons: 季度列表
+    months: 月份列表
     output_dir: 输出目录路径
     """
 
@@ -309,35 +273,35 @@ def save_results_to_csv(pettitt_results, seasons, output_dir):
         row = {
             'City': city,
             'Change_Point_Index': result['change_point'],  # 突变点位置（索引）
-            'Change_Season': result['change_season'],  # 突变点季度
+            'Change_Month': result['change_month'],  # 突变点月份
             'K_Statistic': result['K_statistic'],  # Pettitt统计量
             'P_Value': result['p_value'],  # p值
             'Significant': result['significant'],  # 是否显著
             'Trend_Before': result['trend_before'],  # 突变点前趋势
             'Trend_After': result['trend_after'],  # 突变点后趋势
-            'N_Seasons': result['n_seasons']  # 数据季度数
+            'N_Months': result['n_months']  # 数据月份数
         }
 
-        # 添加各季度的PM2.5浓度值
-        for i, season in enumerate(result['seasons']):
-            row[f'PM2.5_{season}'] = result['values'][i]
+        # 添加各月的PM2.5浓度值
+        for i, month in enumerate(result['months']):
+            row[f'PM2.5_{month}'] = result['values'][i]
 
         pettitt_data.append(row)
 
     if pettitt_data:
         df_pettitt = pd.DataFrame(pettitt_data)
-        pettitt_path = os.path.join(output_dir, 'YZD_PM25_Pettitt_Test_Seasonal.csv')
+        pettitt_path = os.path.join(output_dir, 'YRD_PM25_Pettitt_Test_Monthly.csv')
         df_pettitt.to_csv(pettitt_path, index=False, encoding='utf-8-sig')
         print(f"Pettitt检验结果已保存到: {pettitt_path}")
 
     print(f"\n所有结果已保存到目录: {output_dir}")
 
-def print_summary(pettitt_results, seasons):
+def print_summary(pettitt_results, months):
     """
     打印Pettitt检验结果摘要
     """
     print("\n" + "="*80)
-    print("PM2.5 Pettitt突变点检验分析摘要（季度数据）")
+    print("PM2.5 Pettitt突变点检验分析摘要（月度数据）")
     print("="*80)
 
     # 统计显著性分布
@@ -371,20 +335,20 @@ def print_summary(pettitt_results, seasons):
 
     for city, result in pettitt_results.items():
         print(f"\n城市: {city}")
-        print(f"  数据季度数: {result['n_seasons']}")
+        print(f"  数据月份数: {result['n_months']}")
 
         if result['significant']:
-            print(f"  突变点位置: 第{result['change_point']}个观测点（{result['change_season']}季度）")
+            print(f"  突变点位置: 第{result['change_point']}个观测点（{result['change_month']}月）")
             print(f"  Pettitt统计量 K: {result['K_statistic']:.4f}")
             print(f"  p值: {result['p_value']:.6f} (显著)")
             if result['trend_before'] and result['trend_after']:
                 print(f"  趋势变化: {result['trend_before']} → {result['trend_after']}")
 
-            # 显示各季度数据
-            print(f"  各季度PM2.5浓度:")
-            for i, season in enumerate(result['seasons']):
+            # 显示各月数据
+            print(f"  各月PM2.5浓度:")
+            for i, month in enumerate(result['months']):
                 marker = " ← 突变点" if i + 1 == result['change_point'] else ""
-                print(f"    {season}: {result['values'][i]:.2f} μg/m³{marker}")
+                print(f"    {month}: {result['values'][i]:.2f} μg/m³{marker}")
         else:
             print(f"  未检测到显著突变点")
             if not np.isnan(result['p_value']):
@@ -393,10 +357,10 @@ def print_summary(pettitt_results, seasons):
 # 主程序
 if __name__ == "__main__":
     # 设置文件夹路径（根据您的实际情况修改）
-    folder_path = r"E:\DATA Science\大论文Result\YZD\filtered_daily"
+    folder_path = r"E:\DATA Science\大论文Result\YRD\filtered_daily"
 
     # 输出目录路径
-    output_dir = r"E:\DATA Science\大论文Result\YZD\统计趋势检验"
+    output_dir = r"E:\DATA Science\大论文Result\YRD\统计趋势检验"
 
     # 设置进程数（None表示使用所有CPU核心，也可以指定具体数字，如4）
     n_processes = None
@@ -407,13 +371,13 @@ if __name__ == "__main__":
         print("请确保路径正确，或者修改脚本中的folder_path变量")
     else:
         # 执行Pettitt检验（使用多进程）
-        pettitt_results, seasons = calculate_pettitt_test(folder_path, n_processes=n_processes)
+        pettitt_results, months = calculate_pettitt_test(folder_path, n_processes=n_processes)
 
         # 打印摘要
-        print_summary(pettitt_results, seasons)
+        print_summary(pettitt_results, months)
 
         # 保存结果为CSV文件
-        save_results_to_csv(pettitt_results, seasons, output_dir)
+        save_results_to_csv(pettitt_results, months, output_dir)
 
         print("\nPettitt突变点检验完成！")
         print("\n说明:")
@@ -421,4 +385,4 @@ if __name__ == "__main__":
         print("- p值 < 0.05 表示在该置信水平下存在显著突变点")
         print("- 突变点表示污染水平发生显著变化的时间点")
         print("- 趋势变化显示突变点前后污染水平的变动方向")
-        print("- 季度数据比月度数据提供更稳定的季节性分析")
+        print("- 月度数据比年度数据提供更高的时间分辨率")

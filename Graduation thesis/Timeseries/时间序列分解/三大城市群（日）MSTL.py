@@ -430,7 +430,7 @@ def main() -> None:
     input_folders = [
         r"H:\DATA Science\大论文Result\BTH\filtered_daily",
         r"H:\DATA Science\大论文Result\PRD\filtered_daily",
-        r"H:\DATA Science\大论文Result\YZD\filtered_daily",
+        r"H:\DATA Science\大论文Result\YRD\filtered_daily",
     ]
     city_cluster_path = r"H:\DATA Science\大论文Result\大论文图\三大城市群\STL\城市归属_三大城市群.csv"
     output_dir = r"H:\DATA Science\大论文Result\大论文图\三大城市群\MSTL时间序列分解"

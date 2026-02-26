@@ -290,7 +290,7 @@ def save_results_to_csv(pettitt_results, years, output_dir):
 
     if pettitt_data:
         df_pettitt = pd.DataFrame(pettitt_data)
-        pettitt_path = os.path.join(output_dir, 'YZD_PM25_Pettitt_Test.csv')
+        pettitt_path = os.path.join(output_dir, 'YRD_PM25_Pettitt_Test.csv')
         df_pettitt.to_csv(pettitt_path, index=False, encoding='utf-8-sig')
         print(f"Pettitt检验结果已保存到: {pettitt_path}")
 
@@ -357,10 +357,10 @@ def print_summary(pettitt_results, years):
 # 主程序
 if __name__ == "__main__":
     # 设置文件夹路径（根据您的实际情况修改）
-    folder_path = r"E:\DATA Science\大论文Result\YZD\filtered_daily"
+    folder_path = r"E:\DATA Science\大论文Result\YRD\filtered_daily"
 
     # 输出目录路径
-    output_dir = r"E:\DATA Science\大论文Result\YZD\统计趋势检验"
+    output_dir = r"E:\DATA Science\大论文Result\YRD\统计趋势检验"
 
     # 设置进程数（None表示使用所有CPU核心，也可以指定具体数字，如4）
     n_processes = None

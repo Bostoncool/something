@@ -358,10 +358,10 @@ def print_summary(results, seasons):
 # 主程序
 if __name__ == "__main__":
     # 设置文件夹路径（根据您的实际情况修改）
-    folder_path = r"E:\DATA Science\大论文Result\YZD\filtered_daily"
+    folder_path = r"E:\DATA Science\大论文Result\YRD\filtered_daily"
 
     # 输出目录路径
-    output_dir = r"E:\DATA Science\大论文Result\YZD\描述性统计分析"
+    output_dir = r"E:\DATA Science\大论文Result\YRD\描述性统计分析"
 
     # 设置进程数（None表示使用所有CPU核心，也可以指定具体数字，如4）
     n_processes = None

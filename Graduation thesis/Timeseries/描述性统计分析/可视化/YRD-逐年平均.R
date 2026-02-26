@@ -42,7 +42,7 @@ geojson_files <- c(
   "E:/DATA Science/大论文Result/大论文图/3.长三角/具体城市/台州市.geojson"
 )
 
-pollution_dir <- "E:/DATA Science/大论文Result/YZD/filtered_daily"
+pollution_dir <- "E:/DATA Science/大论文Result/YRD/filtered_daily"
 output_dir <- "E:/DATA Science/大论文Result/大论文图/3.长三角/PM2.5_年均_逐年"
 years_target <- 2018:2023
 

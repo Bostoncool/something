@@ -8,25 +8,25 @@ from tqdm import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 
-def get_aqi_level(aqi_value):
-    """根据AQI值判断空气质量等级"""
-    if pd.isna(aqi_value):
+def get_pm25_level(pm25_value):
+    """根据PM2.5值判断空气质量等级（单位：μg/m³）"""
+    if pd.isna(pm25_value):
         return "数据缺失"
-    elif aqi_value <= 50:
+    elif pm25_value <= 35:
         return "优"
-    elif aqi_value <= 100:
+    elif pm25_value <= 75:
         return "良"
-    elif aqi_value <= 150:
+    elif pm25_value <= 115:
         return "轻度污染"
-    elif aqi_value <= 200:
+    elif pm25_value <= 150:
         return "中度污染"
-    elif aqi_value <= 300:
+    elif pm25_value <= 250:
         return "重度污染"
     else:
         return "严重污染"
 
 def process_single_file(file_path):
-    """处理单个CSV文件，提取AQI数据"""
+    """处理单个CSV文件，提取PM2.5数据"""
     try:
         # 读取CSV文件
         df = pd.read_csv(file_path, encoding='utf-8-sig')
@@ -39,39 +39,41 @@ def process_single_file(file_path):
         # 提取城市列（排除元数据列）
         city_columns = [col for col in df.columns if col not in ['date', 'hour', 'type', '__file__', '__missing_cols__']]
         
-        # 筛选AQI数据（排除24小时平均数据）
-        aqi_data = df[df['type'] == 'AQI'].copy()
+        # 筛选PM2.5数据（排除24小时平均数据）
+        pm25_data = df[df['type'] == 'PM2.5'].copy()
         
-        if aqi_data.empty:
-            # 如果没有AQI数据，尝试使用其他名称
-            if 'aqi' in df['type'].str.lower().unique():
-                aqi_data = df[df['type'].str.lower() == 'aqi'].copy()
+        if pm25_data.empty:
+            # 如果没有PM2.5数据，尝试使用其他名称
+            if 'pm2.5' in df['type'].str.lower().unique():
+                pm25_data = df[df['type'].str.lower() == 'pm2.5'].copy()
+            elif 'pm25' in df['type'].str.lower().unique():
+                pm25_data = df[df['type'].str.lower() == 'pm25'].copy()
             else:
                 return None
         
-        # 计算每个城市的日均AQI（当天所有小时的平均值）
-        daily_aqi = {}
+        # 计算每个城市的日均PM2.5（当天所有小时的平均值）
+        daily_pm25 = {}
         
         for city in city_columns:
-            # 获取该城市所有小时的AQI值
-            city_aqi_values = aqi_data[city].dropna()
+            # 获取该城市所有小时的PM2.5值
+            city_pm25_values = pm25_data[city].dropna()
             
-            if len(city_aqi_values) > 0:
+            if len(city_pm25_values) > 0:
                 # 计算日均值
-                daily_avg = city_aqi_values.mean()
+                daily_avg = city_pm25_values.mean()
                 # 判断空气质量等级
-                aqi_level = get_aqi_level(daily_avg)
+                pm25_level = get_pm25_level(daily_avg)
                 
-                daily_aqi[city] = {
+                daily_pm25[city] = {
                     'date': date_str,
                     'city': city,
-                    'daily_aqi': round(daily_avg, 2),
-                    'aqi_level': aqi_level
+                    'daily_pm25': round(daily_avg, 2),
+                    'pm25_level': pm25_level
                 }
         
         # 转换为DataFrame
-        if daily_aqi:
-            result_df = pd.DataFrame(list(daily_aqi.values()))
+        if daily_pm25:
+            result_df = pd.DataFrame(list(daily_pm25.values()))
             return result_df
         else:
             return None
@@ -106,22 +108,22 @@ def process_files_parallel(file_paths, num_processes=None):
     else:
         return pd.DataFrame()
 
-def analyze_aqi_trends(aqi_df):
-    """分析AQI趋势和统计"""
-    if aqi_df.empty:
+def analyze_pm25_trends(pm25_df):
+    """分析PM2.5趋势和统计"""
+    if pm25_df.empty:
         print("没有有效数据进行分析")
         return None
     
     # 将日期列转换为datetime格式
-    aqi_df['date'] = pd.to_datetime(aqi_df['date'], format='%Y%m%d', errors='coerce')
-    aqi_df['year'] = aqi_df['date'].dt.year
-    aqi_df['month'] = aqi_df['date'].dt.month
+    pm25_df['date'] = pd.to_datetime(pm25_df['date'], format='%Y%m%d', errors='coerce')
+    pm25_df['year'] = pm25_df['date'].dt.year
+    pm25_df['month'] = pm25_df['date'].dt.month
     
     # 按城市和年份统计
     city_stats = []
     
-    for city in aqi_df['city'].unique():
-        city_data = aqi_df[aqi_df['city'] == city].copy()
+    for city in pm25_df['city'].unique():
+        city_data = pm25_df[pm25_df['city'] == city].copy()
         
         # 按年份统计
         yearly_stats = []
@@ -129,15 +131,15 @@ def analyze_aqi_trends(aqi_df):
             year_data = city_data[city_data['year'] == year]
             
             # 计算年平均值
-            yearly_avg = year_data['daily_aqi'].mean()
+            yearly_avg = year_data['daily_pm25'].mean()
             
             # 计算各等级天数
-            level_counts = year_data['aqi_level'].value_counts()
+            level_counts = year_data['pm25_level'].value_counts()
             
             yearly_stats.append({
                 'city': city,
                 'year': year,
-                'yearly_avg_aqi': round(yearly_avg, 2),
+                'yearly_avg_pm25': round(yearly_avg, 2),
                 '优_天数': level_counts.get('优', 0),
                 '良_天数': level_counts.get('良', 0),
                 '轻度污染_天数': level_counts.get('轻度污染', 0),
@@ -154,8 +156,8 @@ def analyze_aqi_trends(aqi_df):
             yearly_stats_sorted = sorted(yearly_stats, key=lambda x: x['year'])
             
             for i in range(1, len(yearly_stats_sorted)):
-                prev_avg = yearly_stats_sorted[i-1]['yearly_avg_aqi']
-                curr_avg = yearly_stats_sorted[i]['yearly_avg_aqi']
+                prev_avg = yearly_stats_sorted[i-1]['yearly_avg_pm25']
+                curr_avg = yearly_stats_sorted[i]['yearly_avg_pm25']
                 
                 if prev_avg > 0:  # 避免除零错误
                     change_rate = ((curr_avg - prev_avg) / prev_avg * 100)
@@ -169,7 +171,7 @@ def analyze_aqi_trends(aqi_df):
     stats_df = pd.DataFrame(city_stats)
     
     # 重新排列列顺序
-    col_order = ['city', 'year', 'yearly_avg_aqi', '相对于前一年变化率(%)', 
+    col_order = ['city', 'year', 'yearly_avg_pm25', '相对于前一年变化率(%)', 
                  '优_天数', '良_天数', '轻度污染_天数', '中度污染_天数', 
                  '重度污染_天数', '严重污染_天数', '数据缺失_天数', '总天数']
     
@@ -181,7 +183,7 @@ def analyze_aqi_trends(aqi_df):
 
 def main():
     # 设置文件夹路径
-    folder_path = r"E:\DATA Science\大论文Result\YZD\filtered_daily"
+    folder_path = r"E:\DATA Science\大论文Result\YRD\filtered_daily"
     
     # 检查文件夹是否存在
     if not os.path.exists(folder_path):
@@ -199,66 +201,66 @@ def main():
     print(f"找到 {len(csv_files)} 个CSV文件")
     
     # 多进程处理文件
-    aqi_results = process_files_parallel(csv_files)
+    pm25_results = process_files_parallel(csv_files)
     
-    if aqi_results.empty:
-        print("没有提取到有效的AQI数据")
+    if pm25_results.empty:
+        print("没有提取到有效的PM2.5数据")
         return
     
-    print(f"\n成功处理了 {len(aqi_results['date'].unique())} 天的数据")
-    print(f"包含 {len(aqi_results['city'].unique())} 个城市")
+    print(f"\n成功处理了 {len(pm25_results['date'].unique())} 天的数据")
+    print(f"包含 {len(pm25_results['city'].unique())} 个城市")
     
-    # 保存原始AQI数据
-    output_file1 = r"E:\DATA Science\大论文Result\YZD\daily_aqi_data.csv"
-    aqi_results.to_csv(output_file1, index=False, encoding='utf-8-sig')
-    print(f"\n日均AQI数据已保存到: {output_file1}")
+    # 保存原始PM2.5数据
+    output_file1 = r"E:\DATA Science\大论文Result\YRD\daily_pm25_data.csv"
+    pm25_results.to_csv(output_file1, index=False, encoding='utf-8-sig')
+    print(f"\n日均PM2.5数据已保存到: {output_file1}")
     
-    # 分析AQI趋势
-    stats_results = analyze_aqi_trends(aqi_results)
+    # 分析PM2.5趋势
+    stats_results = analyze_pm25_trends(pm25_results)
     
     if stats_results is not None and not stats_results.empty:
         # 保存统计分析结果
-        output_file2 = r"E:\DATA Science\大论文Result\YZD\aqi_statistics.csv"
+        output_file2 = r"E:\DATA Science\大论文Result\YRD\pm25_statistics.csv"
         stats_results.to_csv(output_file2, index=False, encoding='utf-8-sig')
-        print(f"AQI统计分析结果已保存到: {output_file2}")
+        print(f"PM2.5统计分析结果已保存到: {output_file2}")
         
         # 打印摘要统计
         print("\n" + "="*80)
-        print("AQI统计分析摘要")
+        print("PM2.5统计分析摘要")
         print("="*80)
         
         # 按城市打印统计
         for city in stats_results['city'].unique():
             city_stats = stats_results[stats_results['city'] == city]
-            print(f"\n{city} - AQI统计:")
+            print(f"\n{city} - PM2.5统计:")
             print("-"*40)
             print(city_stats.to_string(index=False))
     
     # 生成各城市空气质量等级分布汇总
-    if not aqi_results.empty:
+    if not pm25_results.empty:
         # 计算各城市各等级天数占比
         level_distribution = pd.crosstab(
-            aqi_results['city'], 
-            aqi_results['aqi_level'],
+            pm25_results['city'], 
+            pm25_results['pm25_level'],
             normalize='index'
         ).round(4) * 100
         
-        # 添加平均AQI
-        avg_aqi = aqi_results.groupby('city')['daily_aqi'].mean().round(2)
-        level_distribution['平均AQI'] = avg_aqi
+        # 添加平均PM2.5
+        avg_pm25 = pm25_results.groupby('city')['daily_pm25'].mean().round(2)
+        level_distribution['平均PM2.5'] = avg_pm25
         
         # 重新排列列
         level_order = ['优', '良', '轻度污染', '中度污染', '重度污染', '严重污染', '数据缺失']
         existing_levels = [l for l in level_order if l in level_distribution.columns]
-        level_distribution = level_distribution[existing_levels + ['平均AQI']]
+        level_distribution = level_distribution[existing_levels + ['平均PM2.5']]
         
         # 保存等级分布
-        output_file3 = r"E:\DATA Science\大论文Result\YZD\aqi_level_distribution.csv"
+        output_file3 = r"E:\DATA Science\大论文Result\YRD\pm25_level_distribution.csv"
         level_distribution.to_csv(output_file3, encoding='utf-8-sig')
-        print(f"\n空气质量等级分布已保存到: {output_file3}")
+        print(f"\nPM2.5空气质量等级分布已保存到: {output_file3}")
         
         print("\n" + "="*80)
-        print("各城市空气质量等级分布(%)")
+        print("各城市PM2.5空气质量等级分布(%)")
         print("="*80)
         print(level_distribution.round(2).to_string())
 

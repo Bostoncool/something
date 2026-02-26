@@ -153,7 +153,7 @@ def plot_single_cluster_seasonal_series(
 def main() -> None:
     csv_paths = {
         "京津冀城市群(BTH)": r"H:\DATA Science\大论文Result\BTH\描述性统计分析\Seasonal_Means.csv",
-        "长江三角洲城市群(YZD)": r"H:\DATA Science\大论文Result\YZD\描述性统计分析\Seasonal_Means.csv",
+        "长江三角洲城市群(YRD)": r"H:\DATA Science\大论文Result\YRD\描述性统计分析\Seasonal_Means.csv",
         "珠江三角洲城市群(PRD)": r"H:\DATA Science\大论文Result\PRD\描述性统计分析\Seasonal_Means.csv",
     }
 
@@ -162,7 +162,7 @@ def main() -> None:
 
     color_map = {
         "京津冀城市群(BTH)": "#d62828",
-        "长江三角洲城市群(YZD)": "#1d3557",
+        "长江三角洲城市群(YRD)": "#1d3557",
         "珠江三角洲城市群(PRD)": "#2a9d8f",
     }
 

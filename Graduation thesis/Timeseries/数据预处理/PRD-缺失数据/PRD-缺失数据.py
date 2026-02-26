@@ -4,7 +4,7 @@ from __future__ import annotations
 """
 统计数据缺失情况：根据文件名称，统计数据缺失的具体天数
 
-参考 YZD-抽取城市.py 的读取方式，分析数据完整性
+参考 YRD-抽取城市.py 的读取方式，分析数据完整性
 """
 
 import sys

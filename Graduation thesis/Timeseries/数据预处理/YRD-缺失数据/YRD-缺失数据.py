@@ -4,7 +4,7 @@ from __future__ import annotations
 """
 统计数据缺失情况：根据文件名称，统计数据缺失的具体天数
 
-参考 YZD-抽取城市.py 的读取方式，分析数据完整性
+参考 YRD-抽取城市.py 的读取方式，分析数据完整性
 """
 
 import sys
@@ -38,7 +38,7 @@ except ImportError:
 
 # 数据根目录（包含 CSV 文件的目录）
 # TODO: 改成你的真实数据路径
-INPUT_ROOT = Path(r"E:\DATA Science\大论文Result\YZD")  # 相对路径示例，需要根据实际情况调整
+INPUT_ROOT = Path(r"E:\DATA Science\大论文Result\YRD")  # 相对路径示例，需要根据实际情况调整
 
 # 需要检查的城市列表
 CITIES = [

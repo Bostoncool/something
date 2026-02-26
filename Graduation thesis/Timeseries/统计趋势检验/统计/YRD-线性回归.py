@@ -233,7 +233,7 @@ def save_results_to_csv(regression_results, years, output_dir):
     
     if regression_data:
         df_regression = pd.DataFrame(regression_data)
-        regression_path = os.path.join(output_dir, 'YZD_PM25_Linear_Regression.csv')
+        regression_path = os.path.join(output_dir, 'YRD_PM25_Linear_Regression.csv')
         df_regression.to_csv(regression_path, index=False, encoding='utf-8-sig')
         print(f"线性回归结果已保存到: {regression_path}")
     
@@ -287,10 +287,10 @@ def print_summary(regression_results, years):
 # 主程序
 if __name__ == "__main__":
     # 设置文件夹路径（根据您的实际情况修改）
-    folder_path = r"E:\DATA Science\大论文Result\YZD\filtered_daily"
+    folder_path = r"E:\DATA Science\大论文Result\YRD\filtered_daily"
     
     # 输出目录路径
-    output_dir = r"E:\DATA Science\大论文Result\YZD\统计趋势检验"
+    output_dir = r"E:\DATA Science\大论文Result\YRD\统计趋势检验"
     
     # 设置进程数（None表示使用所有CPU核心，也可以指定具体数字，如4）
     n_processes = None
