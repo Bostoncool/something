@@ -6,8 +6,8 @@ def xls_to_csv_advanced(folder_path, output_folder=None, encoding='utf-8', recur
     """
     高级版本：支持子文件夹递归和多Sheet处理
     """
-    source_dir = Path(r"C:\Users\IU\Desktop\大论文图\五大城市群的具体人口与占地面积")
-    output_dir = Path(r"C:\Users\IU\Desktop\1") if output_folder else source_dir
+    source_dir = Path(r"F:\1.模型要用的\2017-2023[新能源汽车保有量数据(各省市)]")
+    output_dir = Path(r"F:\1.模型要用的\2017-2023[新能源汽车保有量数据(各省市)]") if output_folder else source_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     
     converted_count = 0
