@@ -13,4 +13,4 @@ def create_folders(base_path):
             print(f"Failed to create folder {folder_path}: {e}")
 
 # 使用你想要的路径替换 'your/base/path'
-create_folders(r'F:\1.模型要用的\2018-2023[工业用地]')
+create_folders(r'F:\1.模型要用的\2018-2023[工业排放清单]')
