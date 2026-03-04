@@ -16,12 +16,12 @@ import pandas as pd
 from tqdm import tqdm
 
 
-DEFAULT_INPUT_DIR = Path(r"F:\1.模型要用的\2018-2023[ERA5_PM2.5]")
-DEFAULT_OUTPUT_LONG_CSV = Path(r"F:\1.模型要用的\era5_daily_summary_long_2018_2023.csv")
-DEFAULT_OUTPUT_WIDE_CSV = Path(r"F:\1.模型要用的\era5_daily_summary_wide_2018_2023.csv")
+DEFAULT_INPUT_DIR = Path(r"F:\1.模型要用的\Year")
+DEFAULT_OUTPUT_LONG_CSV = Path(r"F:\1.模型要用的\era5_yearly_summary_long_2018_2023.csv")
+DEFAULT_OUTPUT_WIDE_CSV = Path(r"F:\1.模型要用的\era5_yearly_summary_wide_2018_2023.csv")
 
-DATE_START = "2018-01-01"
-DATE_END = "2023-12-31"
+YEAR_START = 2018
+YEAR_END = 2023
 
 TIME_DIM_CANDIDATES = ("time", "valid_time", "forecast_time", "verification_time")
 COORD_VAR_NAMES = {
@@ -37,8 +37,7 @@ COORD_VAR_NAMES = {
     "expver",
     "surface",
 }
-DATE_PATTERN_DAY = re.compile(r"(\d{8})")
-DATE_PATTERN_MONTH = re.compile(r"(\d{6})")
+YEAR_PATTERN = re.compile(r"(20\d{2})")
 
 # ERA5 变量单位转换：原始单位 -> 目标单位
 # 参考：https://cds.climate.copernicus.eu/
@@ -128,11 +127,11 @@ def _path_for_netcdf(path: Path) -> str:
 
 
 @dataclass(frozen=True)
-class DailyRecord:
+class YearlyRecord:
     file_path: str
     folder_name: str
     variable_name: str
-    date: str
+    year: str
     mean: float
     std: float
     min: float
@@ -167,23 +166,10 @@ def _safe_stat(func, values: np.ndarray, axis: int = 1) -> np.ndarray:
     return func(values, axis=axis)
 
 
-def parse_date_candidates_from_filename(file_name: str) -> tuple[Optional[str], Optional[str]]:
-    """
-    从文件名提取可能的日期：
-    - day_candidate: YYYY-MM-DD
-    - month_candidate: YYYY-MM-01
-    """
-    day_match = DATE_PATTERN_DAY.search(file_name)
-    if day_match:
-        day_str = day_match.group(1)
-        return f"{day_str[0:4]}-{day_str[4:6]}-{day_str[6:8]}", None
-
-    month_match = DATE_PATTERN_MONTH.search(file_name)
-    if month_match:
-        month_str = month_match.group(1)
-        return None, f"{month_str[0:4]}-{month_str[4:6]}-01"
-
-    return None, None
+def parse_year_from_filename(file_name: str) -> str:
+    """从文件名提取年份 YYYY，提取失败时返回空字符串。"""
+    match = YEAR_PATTERN.search(file_name)
+    return match.group(1) if match else ""
 
 
 def resolve_target_variable_name(dataset: nc.Dataset, folder_name: str) -> Optional[str]:
@@ -217,9 +203,9 @@ def resolve_target_variable_name(dataset: nc.Dataset, folder_name: str) -> Optio
     return None
 
 
-def extract_time_strings(dataset: nc.Dataset, var: nc.Variable) -> Optional[list[str]]:
+def extract_year_strings(dataset: nc.Dataset, var: nc.Variable) -> Optional[list[str]]:
     """
-    根据变量维度找到时间维并转为 YYYY-MM-DD 列表。
+    根据变量维度找到时间维并转为 YYYY 列表。
     找不到时间维时返回 None。
     """
     time_dim_name = next((d for d in var.dimensions if d in TIME_DIM_CANDIDATES), None)
@@ -234,31 +220,31 @@ def extract_time_strings(dataset: nc.Dataset, var: nc.Variable) -> Optional[list
         calendar = getattr(time_var, "calendar", "standard")
         raw = time_var[:]
         dt_values = nc.num2date(raw, units=units, calendar=calendar)
-        return [pd.Timestamp(item).strftime("%Y-%m-%d") for item in dt_values]
+        return [str(pd.Timestamp(item).year) for item in dt_values]
     except Exception:
         try:
             values = pd.to_datetime(time_var[:], errors="coerce")
-            return [pd.Timestamp(v).strftime("%Y-%m-%d") for v in values if pd.notna(v)]
+            return [str(pd.Timestamp(v).year) for v in values if pd.notna(v)]
         except Exception:
             return None
 
 
-def build_daily_records(file_path_str: str) -> list[DailyRecord]:
+def build_yearly_records(file_path_str: str) -> list[YearlyRecord]:
     """
-    读取单个 .nc 文件，按“日”计算栅格统计量（mean/std/min/max/valid_count）。
-    返回该文件对应的多条 DailyRecord（若文件里包含多个时间步）。
+    读取单个 .nc 文件，按“年”计算栅格统计量（mean/std/min/max/valid_count）。
+    返回该文件对应的多条 YearlyRecord（若文件里包含多个时间步）。
     """
     file_path = Path(file_path_str)
     folder_name = file_path.parent.name
-    day_candidate, month_candidate = parse_date_candidates_from_filename(file_path.name)
+    year_candidate = parse_year_from_filename(file_path.name)
 
     if not file_path.exists():
         return [
-            DailyRecord(
+            YearlyRecord(
                 file_path=str(file_path),
                 folder_name=folder_name,
                 variable_name="",
-                date=day_candidate or month_candidate or "",
+                year=year_candidate,
                 mean=float("nan"),
                 std=float("nan"),
                 min=float("nan"),
@@ -275,11 +261,11 @@ def build_daily_records(file_path_str: str) -> list[DailyRecord]:
             var_name = resolve_target_variable_name(ds, folder_name=folder_name)
             if var_name is None:
                 return [
-                    DailyRecord(
+                    YearlyRecord(
                         file_path=str(file_path),
                         folder_name=folder_name,
                         variable_name="",
-                        date=day_candidate or month_candidate or "",
+                        year=year_candidate,
                         mean=float("nan"),
                         std=float("nan"),
                         min=float("nan"),
@@ -314,15 +300,15 @@ def build_daily_records(file_path_str: str) -> list[DailyRecord]:
             time_axis = next((i for i, d in enumerate(var.dimensions) if d in TIME_DIM_CANDIDATES), None)
             if time_axis is None:
                 flat = data.reshape(1, -1)
-                date_strings = [day_candidate or month_candidate or ""]
+                year_strings = [year_candidate]
             else:
                 time_first = np.moveaxis(data, time_axis, 0)
                 flat = time_first.reshape(time_first.shape[0], -1)
-                date_strings = extract_time_strings(ds, var)
-                if date_strings is None or len(date_strings) != flat.shape[0]:
-                    # 时间解码失败时，尽量从文件名补一个日期，再兜底为空串
-                    fallback_date = day_candidate or month_candidate or ""
-                    date_strings = [fallback_date for _ in range(flat.shape[0])]
+                year_strings = extract_year_strings(ds, var)
+                if year_strings is None or len(year_strings) != flat.shape[0]:
+                    # 时间解码失败时，尽量从文件名补一个年份，再兜底为空串
+                    fallback_year = year_candidate
+                    year_strings = [fallback_year for _ in range(flat.shape[0])]
 
             valid = np.where(np.isfinite(flat), flat, np.nan)
             valid_count = np.sum(np.isfinite(valid), axis=1).astype(int)
@@ -332,14 +318,14 @@ def build_daily_records(file_path_str: str) -> list[DailyRecord]:
             min_values = _safe_stat(np.nanmin, valid)
             max_values = _safe_stat(np.nanmax, valid)
 
-            records: list[DailyRecord] = []
+            records: list[YearlyRecord] = []
             for idx in range(flat.shape[0]):
                 records.append(
-                    DailyRecord(
+                    YearlyRecord(
                         file_path=str(file_path),
                         folder_name=folder_name,
                         variable_name=var_name,
-                        date=date_strings[idx],
+                        year=year_strings[idx],
                         mean=float(mean_values[idx]) if np.isfinite(mean_values[idx]) else float("nan"),
                         std=float(std_values[idx]) if np.isfinite(std_values[idx]) else float("nan"),
                         min=float(min_values[idx]) if np.isfinite(min_values[idx]) else float("nan"),
@@ -352,11 +338,11 @@ def build_daily_records(file_path_str: str) -> list[DailyRecord]:
             return records
     except Exception as exc:  # pylint: disable=broad-except
         return [
-            DailyRecord(
+            YearlyRecord(
                 file_path=str(file_path),
                 folder_name=folder_name,
                 variable_name="",
-                date=day_candidate or month_candidate or "",
+                year=year_candidate,
                 mean=float("nan"),
                 std=float("nan"),
                 min=float("nan"),
@@ -368,12 +354,13 @@ def build_daily_records(file_path_str: str) -> list[DailyRecord]:
         ]
 
 
-def to_dataframe(records: Iterable[DailyRecord]) -> pd.DataFrame:
+def to_dataframe(records: Iterable[YearlyRecord]) -> pd.DataFrame:
     df = pd.DataFrame([asdict(record) for record in records])
     if df.empty:
         return df
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df.sort_values(["date", "folder_name", "file_path"], kind="mergesort").reset_index(drop=True)
+    df["_year_num"] = pd.to_numeric(df["year"], errors="coerce")
+    df = df.sort_values(["_year_num", "folder_name", "file_path"], kind="mergesort").reset_index(drop=True)
+    df = df.drop(columns=["_year_num"])
     return df
 
 
@@ -398,8 +385,8 @@ def _add_wind_derived_columns(wide: pd.DataFrame) -> pd.DataFrame:
 def build_wide_table(df_long: pd.DataFrame) -> pd.DataFrame:
     """
     从长表生成宽表：
-    - 行：date
-    - 列：每个 folder_name 对应的日均值（mean）
+    - 行：year
+    - 列：每个 folder_name 对应的年均值（mean）
     - 若存在 u10、v10，则额外计算 wind_speed_ms、wind_direction_deg
     """
     ok_df = df_long[df_long["status"] == "ok"].copy()
@@ -407,7 +394,7 @@ def build_wide_table(df_long: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     wide = ok_df.pivot_table(
-        index="date",
+        index="year",
         columns="folder_name",
         values="mean",
         aggfunc="mean",
@@ -420,7 +407,7 @@ def build_wide_table(df_long: pd.DataFrame) -> pd.DataFrame:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="并行读取 ERA5 气象 NetCDF 文件，按日输出统计（2018-2023）。"
+        description="并行读取 ERA5 气象 NetCDF 文件，按年输出统计（2018-2023）。"
     )
     parser.add_argument(
         "--input-dir",
@@ -453,16 +440,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="multiprocessing imap_unordered 的 chunksize（默认: 4）",
     )
     parser.add_argument(
-        "--date-start",
-        type=str,
-        default=DATE_START,
-        help=f"起始日期（默认: {DATE_START}）",
+        "--year-start",
+        type=int,
+        default=YEAR_START,
+        help=f"起始年份（默认: {YEAR_START}）",
     )
     parser.add_argument(
-        "--date-end",
-        type=str,
-        default=DATE_END,
-        help=f"结束日期（默认: {DATE_END}）",
+        "--year-end",
+        type=int,
+        default=YEAR_END,
+        help=f"结束年份（默认: {YEAR_END}）",
     )
     parser.add_argument(
         "--test",
@@ -530,11 +517,11 @@ def main() -> int:
     print("=" * 80)
 
     file_args = [str(path) for path in nc_files]
-    all_records: list[DailyRecord] = []
+    all_records: list[YearlyRecord] = []
 
     try:
         with mp.Pool(processes=processes) as pool:
-            iterator = pool.imap_unordered(build_daily_records, file_args, chunksize=chunksize)
+            iterator = pool.imap_unordered(build_yearly_records, file_args, chunksize=chunksize)
             for batch_records in tqdm(iterator, total=len(file_args), desc="读取进度", unit="file"):
                 all_records.extend(batch_records)
 
@@ -547,21 +534,25 @@ def main() -> int:
             print("[ERROR] 无可输出结果。")
             return 3
 
-        date_start = pd.to_datetime(args.date_start, errors="coerce")
-        date_end = pd.to_datetime(args.date_end, errors="coerce")
-        if pd.notna(date_start) and pd.notna(date_end):
+        year_start = int(args.year_start)
+        year_end = int(args.year_end)
+        if year_start <= year_end:
             before_filter = len(df_long)
-            valid_dates = df_long["date"].notna()
-            in_range = (df_long["date"] >= date_start) & (df_long["date"] <= date_end)
-            df_filtered = df_long[valid_dates & in_range].copy()
+            year_num = pd.to_numeric(df_long["year"], errors="coerce")
+            valid_years = year_num.notna()
+            in_range = (year_num >= year_start) & (year_num <= year_end)
+            df_filtered = df_long[valid_years & in_range].copy()
             if len(df_filtered) == 0 and before_filter > 0:
-                n_valid = int(valid_dates.sum())
-                print(f"[WARN] 日期过滤 ({args.date_start} ~ {args.date_end}) 移除了全部 {before_filter} 条记录。")
-                print(f"       有效日期: {n_valid} 条，无效(NaT): {before_filter - n_valid} 条。")
+                n_valid = int(valid_years.sum())
+                print(f"[WARN] 年份过滤 ({year_start} ~ {year_end}) 移除了全部 {before_filter} 条记录。")
+                print(f"       有效年份: {n_valid} 条，无效: {before_filter - n_valid} 条。")
                 if n_valid > 0:
-                    valid_df = df_long[valid_dates]
-                    print(f"       数据日期范围: {valid_df['date'].min()} ~ {valid_df['date'].max()}")
-                print(f"       已跳过日期过滤，输出全部数据。")
+                    valid_df = df_long.loc[valid_years].copy()
+                    valid_year_num = pd.to_numeric(valid_df["year"], errors="coerce")
+                    print(
+                        f"       数据年份范围: {int(valid_year_num.min())} ~ {int(valid_year_num.max())}"
+                    )
+                print("       已跳过年份过滤，输出全部数据。")
             else:
                 df_long = df_filtered
 

@@ -13,16 +13,17 @@ import pandas as pd
 from tqdm import tqdm
 
 
-DEFAULT_INPUT_DIR = Path(r"F:\1.模型要用的\2018-2023[PM2.5-china]\Day")
-DEFAULT_OUTPUT_CSV = Path(r"F:\1.模型要用的\pm25_daily_summary_2018_2023.csv")
-FILENAME_PATTERN = re.compile(r"CHAP_PM2\.5_D1K_(\d{8})_V4\.nc$", re.IGNORECASE)
+DEFAULT_INPUT_DIR = Path(r"F:\1.模型要用的\2018-2023[PM2.5-china]\Year")
+DEFAULT_OUTPUT_CSV = Path(r"F:\1.模型要用的\pm25_yearly_summary_2018_2023.csv")
+# 年度数据：Y1K 格式，文件名如 CHAP_PM2.5_Y1K_2018_V4.nc
+FILENAME_PATTERN = re.compile(r"CHAP_PM2\.5_Y1K_(\d{4})(?:_V\d+)?\.nc$", re.IGNORECASE)
 PM25_VAR_CANDIDATES = ("PM2.5", "pm25", "PM25")
 
 
 @dataclass(frozen=True)
 class ReadResult:
     file_path: str
-    date: str
+    year: str
     status: str
     rows: int
     cols: int
@@ -42,8 +43,8 @@ def find_nc_files(root_dir: Path) -> list[Path]:
     return sorted(path for path in root_dir.rglob("*.nc") if path.is_file())
 
 
-def parse_date_from_name(file_path: Path) -> str:
-    """从文件名提取 YYYYMMDD，提取失败时返回空字符串。"""
+def parse_year_from_name(file_path: Path) -> str:
+    """从文件名提取年份 YYYY，提取失败时返回空字符串。"""
     match = FILENAME_PATTERN.search(file_path.name)
     return match.group(1) if match else ""
 
@@ -65,14 +66,14 @@ def _safe_stat(func, values: np.ndarray) -> float:
 
 def process_one_file(file_path_str: str) -> ReadResult:
     """
-    读取单个 PM2.5 nc 文件并返回日尺度统计结果。
+    读取单个 PM2.5 nc 文件并返回年尺度统计结果。
 
     说明：
     - 为控制内存，本函数仅返回统计量，不返回整幅栅格。
     - 自动处理 _FillValue / missing_value / scale_factor / add_offset。
     """
     file_path = Path(file_path_str)
-    date_str = parse_date_from_name(file_path)
+    year_str = parse_year_from_name(file_path)
 
     try:
         with nc.Dataset(file_path, mode="r") as ds:
@@ -80,7 +81,7 @@ def process_one_file(file_path_str: str) -> ReadResult:
             if pm_var_name is None:
                 return ReadResult(
                     file_path=str(file_path),
-                    date=date_str,
+                    year=year_str,
                     status="failed",
                     rows=0,
                     cols=0,
@@ -118,7 +119,7 @@ def process_one_file(file_path_str: str) -> ReadResult:
 
             return ReadResult(
                 file_path=str(file_path),
-                date=date_str,
+                year=year_str,
                 status="ok",
                 rows=rows,
                 cols=cols,
@@ -135,7 +136,7 @@ def process_one_file(file_path_str: str) -> ReadResult:
     except Exception as exc:  # pylint: disable=broad-except
         return ReadResult(
             file_path=str(file_path),
-            date=date_str,
+            year=year_str,
             status="failed",
             rows=0,
             cols=0,
@@ -153,7 +154,7 @@ def process_one_file(file_path_str: str) -> ReadResult:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="并行读取 2018-2023 每日 PM2.5 NetCDF 文件并输出统计汇总"
+        description="并行读取 2018-2023 年度 PM2.5 NetCDF 文件并输出统计汇总"
     )
     parser.add_argument(
         "--input-dir",
@@ -186,8 +187,8 @@ def to_dataframe(results: Iterable[ReadResult]) -> pd.DataFrame:
     df = pd.DataFrame([result.__dict__ for result in results])
     if df.empty:
         return df
-    # 按日期和路径排序，便于后续追踪异常文件
-    sort_cols = [col for col in ("date", "file_path") if col in df.columns]
+    # 按年份和路径排序，便于后续追踪异常文件
+    sort_cols = [col for col in ("year", "file_path") if col in df.columns]
     return df.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
 
 
