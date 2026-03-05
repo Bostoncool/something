@@ -25,7 +25,12 @@ TARGET_CITIES = [
 ]
 
 # 构建匹配用的城市名集合（数据中城市列格式为"XX市"）
-TARGET_CITY_NAMES = {f"{city}市" for city in TARGET_CITIES}
+def normalize_city_text(city_name: str) -> str:
+    """统一城市名称：去空白、去“市/地区”后缀，便于跨年份口径匹配。"""
+    return str(city_name).strip().replace("市", "").replace("地区", "")
+
+
+TARGET_CITY_KEYS = {normalize_city_text(city) for city in TARGET_CITIES}
 
 
 def load_and_filter_newpower(data_dir: Path = None) -> pd.DataFrame:
@@ -57,9 +62,17 @@ def load_and_filter_newpower(data_dir: Path = None) -> pd.DataFrame:
         except UnicodeDecodeError:
             df = pd.read_csv(file_path, encoding="gbk")
 
-        # 筛选目标城市（城市列格式为"XX市"）
-        mask = df["城市"].astype(str).isin(TARGET_CITY_NAMES)
+        df.columns = [str(col).strip() for col in df.columns]
+        city_col = "城市" if "城市" in df.columns else ("city" if "city" in df.columns else None)
+        if city_col is None:
+            continue
+
+        # 兼容“北京/北京市”两种口径
+        city_key = df[city_col].astype(str).map(normalize_city_text)
+        mask = city_key.isin(TARGET_CITY_KEYS)
         df_filtered = df.loc[mask].copy()
+        # 输出统一为“XX市”，下游代码保持不变
+        df_filtered["城市"] = city_key.loc[mask].map(lambda x: f"{x}市")
         dfs.append(df_filtered)
 
     result = pd.concat(dfs, ignore_index=True)

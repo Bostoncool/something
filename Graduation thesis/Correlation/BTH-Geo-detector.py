@@ -11,6 +11,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from matplotlib.colors import LinearSegmentedColormap
+try:
+    import rasterio
+    from rasterio.mask import mask as rio_mask
+except Exception:  # pylint: disable=broad-except
+    rasterio = None
+    rio_mask = None
 try:
     import geopandas as gpd
 except Exception:  # pylint: disable=broad-except
@@ -56,6 +63,17 @@ CITY_TO_PROVINCE = {
     "沧州": "hebei",
     "廊坊": "hebei",
     "衡水": "hebei",
+}
+
+PROVINCE_NAME_ALIASES = {
+    "beijing": ["北京", "北京市", "beijing"],
+    "tianjin": ["天津", "天津市", "tianjin"],
+    "hebei": ["河北", "河北省", "hebei"],
+    "shanghai": ["上海", "上海市", "shanghai"],
+    "jiangsu": ["江苏", "江苏省", "jiangsu"],
+    "zhejiang": ["浙江", "浙江省", "zhejiang"],
+    "anhui": ["安徽", "安徽省", "anhui"],
+    "guangdong": ["广东", "广东省", "guangdong"],
 }
 
 # 目录锚点：优先使用脚本所在项目的相对路径，避免机器间迁移失效
@@ -174,6 +192,32 @@ def _extract_2d_pm25(da: Any) -> Any:
     return data
 
 
+def _extract_2d_spatial_field(da: Any) -> Any:
+    data = da
+    while data.ndim > 2:
+        data = data.mean(dim=data.dims[0], skipna=True)
+    if data.ndim != 2:
+        raise ValueError(f"空间变量维度异常: {da.dims}")
+    if "latitude" not in data.dims or "longitude" not in data.dims:
+        raise ValueError(f"空间变量缺少经纬度维度: {data.dims}")
+    return data
+
+
+def _choose_spatial_var(ds: Any, preferred_names: list[str] | None = None) -> str:
+    preferred_names = preferred_names or []
+    var_names = list(ds.data_vars)
+    if not var_names:
+        raise ValueError("NC 文件中未找到数据变量。")
+    for name in preferred_names:
+        if name in ds.data_vars:
+            return name
+    for name in var_names:
+        dims = set(ds[name].dims)
+        if {"latitude", "longitude"}.issubset(dims):
+            return name
+    return var_names[0]
+
+
 def _discover_yearly_nc_files(nc_dir: Path) -> list[tuple[int, Path]]:
     year_file_map: dict[int, Path] = {}
     for nc_file in sorted(nc_dir.glob("*.nc")):
@@ -276,6 +320,46 @@ def _extract_pm25_by_city_from_nc(nc_file: Path, city_gdf_wgs84: Any) -> pd.Data
     )
 
 
+def _extract_city_mean_from_2d_field(da2d: Any, city_gdf_wgs84: Any, value_col: str) -> pd.DataFrame:
+    lon = da2d["longitude"].to_numpy()
+    lat = da2d["latitude"].to_numpy()
+    values = da2d.to_numpy().astype(float, copy=False)
+
+    lat_is_desc = lat[0] > lat[-1]
+    lon_min, lat_min, lon_max, lat_max = city_gdf_wgs84.total_bounds
+    if lat_is_desc:
+        lat_idx = np.where((lat <= lat_max) & (lat >= lat_min))[0]
+    else:
+        lat_idx = np.where((lat >= lat_min) & (lat <= lat_max))[0]
+    lon_idx = np.where((lon >= lon_min) & (lon <= lon_max))[0]
+    if len(lat_idx) == 0 or len(lon_idx) == 0:
+        raise ValueError("NC 与目标城市范围无重叠。")
+
+    lat_sub = lat[lat_idx]
+    lon_sub = lon[lon_idx]
+    val_sub = values[np.ix_(lat_idx, lon_idx)]
+    points = gpd.GeoDataFrame(
+        {value_col: val_sub.ravel()},
+        geometry=gpd.points_from_xy(np.tile(lon_sub, len(lat_sub)), np.repeat(lat_sub, len(lon_sub))),
+        crs="EPSG:4326",
+    ).dropna(subset=[value_col])
+
+    joined = gpd.sjoin(
+        points,
+        city_gdf_wgs84[["city", "city_norm", "geometry"]],
+        how="inner",
+        predicate="intersects",
+    )
+    if joined.empty:
+        raise ValueError("NC 像元未匹配到任何目标城市边界。")
+
+    return (
+        joined.groupby(["city_norm", "city"], as_index=False)
+        .agg(**{value_col: (value_col, "mean")})
+        .dropna(subset=[value_col])
+    )
+
+
 def build_pm25_city_year_from_nc(nc_dir: Path, city_geojson_dir: Path, target_cities: list[str]) -> pd.DataFrame:
     if xr is None or gpd is None:
         raise ImportError("地图读取模式需要安装 xarray 与 geopandas。")
@@ -361,6 +445,86 @@ def _match_col(columns: list[str], patterns: list[str], exclude: list[str] | Non
     return None
 
 
+def _sanitize_factor_name(name: str) -> str:
+    text = re.sub(r"[^\w]+", "_", str(name).strip().lower())
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "unknown"
+
+
+def _normalize_province_token(text: str) -> str:
+    normalized = str(text).strip().lower()
+    normalized = re.sub(r"[()\[\]{}（）【】\s_\-]+", "", normalized)
+    for suffix in ("省", "市", "特别行政区", "自治区", "壮族", "回族", "维吾尔"):
+        normalized = normalized.replace(suffix, "")
+    return normalized
+
+
+def _normalize_province_key(province_key: str) -> str:
+    province_token = _normalize_province_token(province_key)
+    for canonical_key, aliases in PROVINCE_NAME_ALIASES.items():
+        alias_tokens = {_normalize_province_token(alias) for alias in [canonical_key, *aliases]}
+        if province_token in alias_tokens:
+            return canonical_key
+    return province_token
+
+
+def _match_province_columns(columns: list[str], target_province_keys: list[str]) -> dict[str, str]:
+    normalized_cols = {col: _normalize_province_token(col) for col in columns}
+    province_cols: dict[str, str] = {}
+
+    for province_key in target_province_keys:
+        aliases = PROVINCE_NAME_ALIASES.get(province_key, [])
+        alias_tokens = {_normalize_province_token(alias) for alias in [province_key, *aliases] if str(alias).strip()}
+        if not alias_tokens:
+            continue
+
+        matched = next((col for col, token in normalized_cols.items() if token in alias_tokens), None)
+        if matched is None:
+            matched = next(
+                (
+                    col for col, token in normalized_cols.items()
+                    if any(alias and (alias in token or token in alias) for alias in alias_tokens)
+                ),
+                None,
+            )
+        if matched is not None:
+            province_cols[province_key] = matched
+
+    return province_cols
+
+
+def _extract_pollutant_from_filename(file_name: str) -> str:
+    stem = Path(file_name).stem
+    if "_" in stem:
+        return stem.split("_", 1)[1].strip()
+    return stem
+
+
+def _fill_city_year_linear(df: pd.DataFrame, value_col: str, all_years: list[int]) -> pd.DataFrame:
+    if df.empty:
+        return df
+    base = df.copy()
+    base["year"] = pd.to_numeric(base["year"], errors="coerce").astype("Int64")
+    base[value_col] = pd.to_numeric(base[value_col], errors="coerce")
+    cities = sorted(base["city"].dropna().astype(str).unique().tolist())
+    if not cities or not all_years:
+        return base
+
+    full_idx = pd.MultiIndex.from_product([cities, sorted(all_years)], names=["city", "year"])
+    aligned = (
+        base.drop_duplicates(subset=["city", "year"], keep="last")
+        .set_index(["city", "year"])
+        .reindex(full_idx)
+        .reset_index()
+    )
+    aligned[value_col] = (
+        aligned.groupby("city", observed=True)[value_col]
+        .transform(lambda s: s.interpolate(method="linear", limit_direction="both"))
+    )
+    aligned["year"] = pd.to_numeric(aligned["year"], errors="coerce").astype("Int64")
+    return aligned[["city", "year", value_col]]
+
+
 def load_industrial_land_factor(data_read_dir: Path) -> pd.DataFrame:
     module = load_module_from_path(data_read_dir / "Industryland.py")
     if not hasattr(module, "load_industrial_land_with_city_info"):
@@ -417,7 +581,7 @@ def load_landuse_factor(data_read_dir: Path) -> pd.DataFrame:
 
     tmp = landuse_df.copy()
     tmp["year"] = pd.to_numeric(tmp["year"], errors="coerce").astype("Int64")
-    tmp["province"] = tmp["province"].astype(str).str.strip().str.lower()
+    tmp["province"] = tmp["province"].map(_normalize_province_key)
     tmp["valid_ratio"] = pd.to_numeric(tmp.get("valid_pixel_count"), errors="coerce") / pd.to_numeric(
         tmp.get("pixel_count"), errors="coerce"
     ).replace(0, np.nan)
@@ -431,7 +595,10 @@ def load_landuse_factor(data_read_dir: Path) -> pd.DataFrame:
     )
 
     city_map = pd.DataFrame({"city": BTH_CITIES})
-    city_map["province"] = city_map["city"].map(CITY_TO_PROVINCE)
+    city_map["province"] = city_map["city"].map(CITY_TO_PROVINCE).map(_normalize_province_key)
+    missing_provinces = sorted(set(city_map["province"].dropna()) - set(year_province["province"].dropna()))
+    if missing_provinces:
+        print(f"[WARN] 土地利用缺少省份数据，相关城市将为空值: {missing_provinces}")
     out = city_map.merge(year_province, on="province", how="left")
     return out[["city", "year", "landuse_unique_class_count", "landuse_valid_ratio"]].dropna(
         subset=["year"], how="any"
@@ -440,71 +607,141 @@ def load_landuse_factor(data_read_dir: Path) -> pd.DataFrame:
 
 def load_fvc_factor(data_read_dir: Path) -> pd.DataFrame:
     module = load_module_from_path(data_read_dir / "FVC.py")
-    if not hasattr(module, "load_fvc_data"):
+    if gpd is None or rasterio is None or rio_mask is None:
+        print("[WARN] 未安装 geopandas/rasterio，跳过 FVC 城市裁切。")
         return pd.DataFrame()
+    if not hasattr(module, "find_fvc_tif_files"):
+        return pd.DataFrame()
+
+    city_geojson_dir = PM25_CITY_GEOJSON_DIR.expanduser()
+    if not city_geojson_dir.exists():
+        print(f"[WARN] 未找到城市边界目录，跳过 FVC 城市裁切: {city_geojson_dir}")
+        return pd.DataFrame()
+    city_gdf_wgs84 = _load_city_geojson(city_geojson_dir, BTH_CITIES)
+
     try:
-        fvc_data = module.load_fvc_data()
+        fvc_dir = Path(getattr(module, "FVC_PATH", ""))
+        if not fvc_dir.exists():
+            return pd.DataFrame()
+        year_files = module.find_fvc_tif_files(fvc_dir)
     except Exception as exc:  # pylint: disable=broad-except
         print(f"[WARN] FVC 接口读取失败，已跳过: {exc}")
         return pd.DataFrame()
+    if not year_files:
+        return pd.DataFrame()
 
-    rows: list[dict[str, float | int]] = []
-    for year, (arr, _) in fvc_data.items():
+    rows: list[dict[str, Any]] = []
+    for year, tif_path in year_files:
         try:
-            fvc_mean = float(np.ma.mean(arr))
-        except Exception:  # pylint: disable=broad-except
-            fvc_mean = float(np.nanmean(np.asarray(arr, dtype=float)))
-        rows.append({"year": int(year), "fvc_mean": fvc_mean})
-    return pd.DataFrame(rows)
+            with rasterio.open(tif_path) as src:
+                city_gdf = city_gdf_wgs84.to_crs(src.crs) if str(src.crs) != "EPSG:4326" else city_gdf_wgs84
+                for _, city_row in city_gdf.iterrows():
+                    geom = city_row.geometry
+                    if geom is None or geom.is_empty:
+                        continue
+                    masked, _ = rio_mask(src, [geom.__geo_interface__], crop=True, filled=False)
+                    city_band = masked[0]
+                    city_values = city_band.compressed() if hasattr(city_band, "compressed") else city_band.ravel()
+                    if city_values.size == 0:
+                        fvc_mean = np.nan
+                    else:
+                        fvc_mean = float(np.nanmean(city_values.astype(float)))
+                    rows.append(
+                        {
+                            "city": normalize_city_text(city_row["city"]),
+                            "year": int(year),
+                            "fvc_mean": fvc_mean,
+                        }
+                    )
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"[WARN] FVC 城市裁切失败，已跳过: {tif_path.name} | {exc}")
+            continue
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows)
+    out["city"] = normalize_city_name(out["city"])
+    out["year"] = pd.to_numeric(out["year"], errors="coerce").astype("Int64")
+    out["fvc_mean"] = pd.to_numeric(out["fvc_mean"], errors="coerce")
+    return out.dropna(subset=["city", "year"]).drop_duplicates(subset=["city", "year"], keep="first")
 
 
 def load_meteorology_factor(data_read_dir: Path) -> pd.DataFrame:
     module = load_module_from_path(data_read_dir / "Meteorology.py")
-    wide_df = pd.DataFrame()
-
-    default_wide_csv = Path(getattr(module, "DEFAULT_OUTPUT_WIDE_CSV", ""))
-    if str(default_wide_csv).strip() and default_wide_csv.exists():
-        try:
-            wide_df = pd.read_csv(default_wide_csv, encoding="utf-8-sig")
-        except Exception as exc:  # pylint: disable=broad-except
-            print(f"[WARN] 气象宽表 CSV 读取失败，尝试实时构建: {exc}")
-
-    if wide_df.empty and all(hasattr(module, attr) for attr in ("find_nc_files", "build_yearly_records", "to_dataframe", "build_wide_table")):
-        input_dir = Path(getattr(module, "DEFAULT_INPUT_DIR", ""))
-        if input_dir.exists():
-            try:
-                nc_files = module.find_nc_files(input_dir)
-                records = []
-                for nc_file in nc_files:
-                    records.extend(module.build_yearly_records(str(nc_file)))
-                long_df = module.to_dataframe(records)
-                wide_df = module.build_wide_table(long_df)
-            except Exception as exc:  # pylint: disable=broad-except
-                print(f"[WARN] 气象接口读取失败，已跳过: {exc}")
-                return pd.DataFrame()
-
-    if wide_df.empty:
+    if xr is None or gpd is None:
+        print("[WARN] 未安装 xarray 或 geopandas，跳过气象城市裁切。")
         return pd.DataFrame()
 
-    wide_df.columns = [str(c).strip() for c in wide_df.columns]
-    if "year" not in wide_df.columns:
+    nc_root = Path(getattr(module, "DEFAULT_INPUT_DIR", ""))
+    if not nc_root.exists():
         return pd.DataFrame()
-    wide_df["year"] = pd.to_numeric(wide_df["year"], errors="coerce").astype("Int64")
 
-    preferred_cols = []
-    for col in wide_df.columns:
-        if col == "year":
+    city_geojson_dir = PM25_CITY_GEOJSON_DIR.expanduser()
+    if not city_geojson_dir.exists():
+        print(f"[WARN] 未找到城市边界目录，跳过气象城市裁切: {city_geojson_dir}")
+        return pd.DataFrame()
+    city_gdf_wgs84 = _load_city_geojson(city_geojson_dir, BTH_CITIES)
+
+    nc_files = sorted(path for path in nc_root.rglob("*.nc") if path.is_file())
+    if not nc_files:
+        return pd.DataFrame()
+
+    alias_map = {
+        "2m_dewpoint_temperature": ["d2m"],
+        "2m_temperature": ["t2m"],
+        "10m_u_component_of_wind": ["u10"],
+        "10m_v_component_of_wind": ["v10"],
+        "mean_sea_level_pressure": ["msl"],
+        "total_cloud_cover": ["tcc"],
+        "total_precipitation": ["tp"],
+    }
+    unit_conversions = getattr(module, "UNIT_CONVERSIONS", {})
+
+    rows: list[pd.DataFrame] = []
+    for nc_file in nc_files:
+        year_match = re.search(r"(20\d{2})", nc_file.name)
+        if not year_match:
             continue
-        col_text = col.lower()
-        if any(key in col_text for key in ("temperature", "t2m", "precipitation", "tp", "wind_speed", "msl", "pressure", "tcc")):
-            preferred_cols.append(col)
-    if not preferred_cols:
-        preferred_cols = [c for c in wide_df.columns if c != "year" and pd.api.types.is_numeric_dtype(wide_df[c])]
-    preferred_cols = preferred_cols[:8]
-    keep_cols = ["year", *preferred_cols]
-    out = wide_df[keep_cols].copy()
-    rename_map = {col: f"met_{col}" for col in preferred_cols}
-    return out.rename(columns=rename_map)
+        year_val = int(year_match.group(1))
+        folder_name = nc_file.parent.name.strip()
+        preferred = [folder_name, *alias_map.get(folder_name, [])]
+        da2d = None
+        open_errors: list[str] = []
+        for engine in ("h5netcdf", "netcdf4"):
+            try:
+                with xr.open_dataset(nc_file, engine=engine, decode_times=True) as ds:
+                    ds = _standardize_nc_coords(ds)
+                    var_name = _choose_spatial_var(ds, preferred_names=preferred)
+                    da2d = _extract_2d_spatial_field(ds[var_name]).load()
+                    convert_fn = unit_conversions.get(folder_name) or unit_conversions.get(var_name)
+                    if callable(convert_fn):
+                        da2d = convert_fn(da2d)
+                break
+            except Exception as exc:  # pylint: disable=broad-except
+                open_errors.append(f"{engine}: {exc!r}")
+                continue
+        if da2d is None:
+            print(f"[WARN] 气象 NC 读取失败，已跳过: {nc_file.name} | {'; '.join(open_errors[:2])}")
+            continue
+
+        factor_col = f"met_{_sanitize_factor_name(folder_name)}"
+        try:
+            city_factor = _extract_city_mean_from_2d_field(da2d, city_gdf_wgs84, factor_col)
+        except Exception as exc:  # pylint: disable=broad-except
+            print(f"[WARN] 气象城市裁切失败，已跳过: {nc_file.name} | {exc}")
+            continue
+        city_factor["city"] = normalize_city_name(city_factor["city"])
+        city_factor["year"] = int(year_val)
+        rows.append(city_factor[["city", "year", factor_col]].copy())
+
+    if not rows:
+        return pd.DataFrame()
+    long_df = pd.concat(rows, ignore_index=True)
+    long_df = long_df.drop_duplicates(subset=["city", "year", *[c for c in long_df.columns if c not in {"city", "year"}]], keep="first")
+    wide_df = (
+        long_df.groupby(["city", "year"], as_index=False)
+        .agg({c: "mean" for c in long_df.columns if c not in {"city", "year"}})
+    )
+    return wide_df
 
 
 def load_industrial_emission_factor(data_read_dir: Path) -> tuple[pd.DataFrame, bool]:
@@ -537,39 +774,94 @@ def load_industrial_emission_factor(data_read_dir: Path) -> tuple[pd.DataFrame, 
         return pd.DataFrame(), False
 
     raw_df.columns = [str(c).strip() for c in raw_df.columns]
+    raw_df["pollutant"] = raw_df["source_file"].map(_extract_pollutant_from_filename)
+    raw_df = raw_df[~raw_df["pollutant"].str.contains("definition", case=False, na=False)].copy()
+    if raw_df.empty:
+        return pd.DataFrame(), False
     if "year" not in raw_df.columns:
         return pd.DataFrame(), False
     raw_df["year"] = pd.to_numeric(raw_df["year"], errors="coerce").astype("Int64")
+    month_col = _match_col(list(raw_df.columns), [r"^month$", r"月份", r"月"])
+    if month_col is not None:
+        month_text = raw_df[month_col].astype(str).str.strip().str.lower()
+        month_num = pd.to_numeric(raw_df[month_col], errors="coerce")
+        annual_mask = month_text.str.contains(r"annual|全年|年度|年总") | month_num.isin([0])
+        if annual_mask.any():
+            raw_df = raw_df[annual_mask].copy()
+
     city_col = _match_col(
         list(raw_df.columns),
         [r"^city$", r"城市", r"市名", r"地级市", r"地区", r"region"],
         exclude=[r"编码", r"代码", r"code"],
     )
-    emission_cols = [
-        col
-        for col in raw_df.columns
-        if re.search(r"排放|emission|so2|nox|voc|co2|pm2?\.?5|pm10", col, flags=re.IGNORECASE)
-    ]
-    numeric_cols = [col for col in emission_cols if pd.api.types.is_numeric_dtype(raw_df[col])]
-    if not numeric_cols:
-        exclude_cols = {"year", "source_file", city_col}
-        numeric_cols = [c for c in raw_df.columns if c not in exclude_cols and pd.api.types.is_numeric_dtype(raw_df[c])]
-    if not numeric_cols:
-        return pd.DataFrame(), city_col is not None
-    numeric_cols = numeric_cols[:6]
 
     if city_col is not None:
         out = raw_df.rename(columns={city_col: "city"}).copy()
         out["city"] = normalize_city_name(out["city"])
-        grouped = out.groupby(["city", "year"], as_index=False)[numeric_cols].mean()
-        rename_map = {col: f"ind_emis_{col}" for col in numeric_cols}
-        grouped = grouped.rename(columns=rename_map)
-        return grouped, True
+        value_cols = [
+            c for c in raw_df.columns
+            if c not in {"year", "source_file", "pollutant", month_col, city_col}
+            and pd.api.types.is_numeric_dtype(raw_df[c])
+        ]
+        if not value_cols:
+            return pd.DataFrame(), True
+        value_col = value_cols[0]
+        city_pollutant = (
+            out.groupby(["city", "year", "pollutant"], as_index=False)[value_col]
+            .sum(min_count=1)
+            .rename(columns={value_col: "emission"})
+        )
+        city_pollutant["factor"] = city_pollutant["pollutant"].map(lambda x: f"ind_emis_{_sanitize_factor_name(x)}")
+        city_wide = (
+            city_pollutant.pivot_table(index=["city", "year"], columns="factor", values="emission", aggfunc="mean")
+            .reset_index()
+        )
+        city_wide.columns.name = None
+        return city_wide, True
 
-    grouped_year = raw_df.groupby("year", as_index=False)[numeric_cols].mean()
-    rename_map = {col: f"ind_emis_{col}" for col in numeric_cols}
-    grouped_year = grouped_year.rename(columns=rename_map)
-    return grouped_year, False
+    target_province_keys = sorted(
+        {
+            _normalize_province_key(province_key)
+            for province_key in CITY_TO_PROVINCE.values()
+            if str(province_key).strip()
+        }
+    )
+    province_cols = _match_province_columns(list(raw_df.columns), target_province_keys)
+    if not province_cols:
+        return pd.DataFrame(), False
+    missing_provinces = sorted(set(target_province_keys) - set(province_cols.keys()))
+    if missing_provinces:
+        print(f"[WARN] 工业排放缺少省份列，相关城市将为空值: {missing_provinces}")
+
+    city_rows: list[pd.DataFrame] = []
+    city_map_df = pd.DataFrame({"city": BTH_CITIES})
+    city_map_df["province_key"] = city_map_df["city"].map(CITY_TO_PROVINCE).map(_normalize_province_key)
+    city_map_df = city_map_df[city_map_df["province_key"].isin(province_cols.keys())].copy()
+
+    for _, row in city_map_df.iterrows():
+        province_key = row["province_key"]
+        province_col = province_cols[province_key]
+        city_name = row["city"]
+        tmp = raw_df[["year", "pollutant", province_col]].copy()
+        tmp = tmp.rename(columns={province_col: "emission"})
+        tmp["city"] = city_name
+        city_rows.append(tmp)
+    if not city_rows:
+        return pd.DataFrame(), False
+
+    city_emission = pd.concat(city_rows, ignore_index=True)
+    city_emission["emission"] = pd.to_numeric(city_emission["emission"], errors="coerce")
+    city_pollutant = (
+        city_emission.groupby(["city", "year", "pollutant"], as_index=False)["emission"]
+        .sum(min_count=1)
+    )
+    city_pollutant["factor"] = city_pollutant["pollutant"].map(lambda x: f"ind_emis_{_sanitize_factor_name(x)}")
+    city_wide = (
+        city_pollutant.pivot_table(index=["city", "year"], columns="factor", values="emission", aggfunc="mean")
+        .reset_index()
+    )
+    city_wide.columns.name = None
+    return city_wide, True
 
 
 def build_panel_from_interfaces(data_read_dir: Path, pm25_city_year_csv: Path) -> pd.DataFrame:
@@ -620,6 +912,12 @@ def build_panel_from_interfaces(data_read_dir: Path, pm25_city_year_csv: Path) -
     newpower_long["year"] = pd.to_numeric(newpower_long["year"], errors="coerce").astype("Int64")
     newpower_long["new_energy_vehicles"] = pd.to_numeric(newpower_long["new_energy_vehicles"], errors="coerce")
     newpower_long = newpower_long[["city", "year", "new_energy_vehicles"]]
+    panel_years = sorted(pd.to_numeric(panel["year"], errors="coerce").dropna().astype(int).unique().tolist())
+    before_missing = int(newpower_long["new_energy_vehicles"].isna().sum())
+    newpower_long = _fill_city_year_linear(newpower_long, value_col="new_energy_vehicles", all_years=panel_years)
+    after_missing = int(newpower_long["new_energy_vehicles"].isna().sum())
+    if after_missing < before_missing:
+        print(f"[INFO] 新能源汽车缺失已按城市年度线性插值补齐: {before_missing - after_missing} 条")
 
     road_module = load_module_from_path(data_read_dir / "Road.py")
     road_df = road_module.load_road_density_data()
@@ -699,16 +997,24 @@ def build_panel_from_interfaces(data_read_dir: Path, pm25_city_year_csv: Path) -
     try:
         fvc_df = load_fvc_factor(data_read_dir)
         if not fvc_df.empty:
-            extra_year_tables.append(fvc_df)
-            print(f"[INFO] 已接入 FVC 年度因子: {set(fvc_df.columns) - {'year'}}")
+            if {"city", "year"}.issubset(set(fvc_df.columns)):
+                extra_city_year_tables.append(fvc_df)
+                print(f"[INFO] 已接入 FVC 城市因子: {set(fvc_df.columns) - {'city', 'year'}}")
+            else:
+                extra_year_tables.append(fvc_df)
+                print(f"[INFO] 已接入 FVC 年度因子: {set(fvc_df.columns) - {'year'}}")
     except Exception as exc:  # pylint: disable=broad-except
         print(f"[WARN] FVC 因子接入失败，已跳过: {exc}")
 
     try:
         met_df = load_meteorology_factor(data_read_dir)
         if not met_df.empty:
-            extra_year_tables.append(met_df)
-            print(f"[INFO] 已接入气象年度因子: {set(met_df.columns) - {'year'}}")
+            if {"city", "year"}.issubset(set(met_df.columns)):
+                extra_city_year_tables.append(met_df)
+                print(f"[INFO] 已接入气象城市因子: {set(met_df.columns) - {'city', 'year'}}")
+            else:
+                extra_year_tables.append(met_df)
+                print(f"[INFO] 已接入气象年度因子: {set(met_df.columns) - {'year'}}")
     except Exception as exc:  # pylint: disable=broad-except
         print(f"[WARN] 气象因子接入失败，已跳过: {exc}")
 
@@ -809,18 +1115,71 @@ def run_interaction_detector(y: pd.Series, strata_map: dict[str, pd.Series], fac
     return pd.DataFrame(rows).sort_values("q_interaction", ascending=False)
 
 
+def build_soft_blue_red_cmap() -> LinearSegmentedColormap:
+    # 低饱和蓝-白-红，兼顾印刷友好与数值层次感（低值冷色，高值暖色）
+    return LinearSegmentedColormap.from_list(
+        "soft_blue_red",
+        [
+            "#5C88C5",
+            "#A9C3E8",
+            "#F7F7F7",
+            "#E8B0B0",
+            "#CF6F6F",
+        ],
+        N=256,
+    )
+
+
+def _paper_plot_style() -> None:
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "font.serif": ["Times New Roman", "DejaVu Serif"],
+            "axes.titlesize": 13,
+            "axes.labelsize": 11,
+            "xtick.labelsize": 9,
+            "ytick.labelsize": 9,
+            "figure.dpi": 300,
+            "savefig.dpi": 300,
+            "savefig.bbox": "tight",
+            "savefig.pad_inches": 0.04,
+        }
+    )
+
+
 def plot_factor_heatmap(q_by_year: pd.DataFrame, output_png: Path) -> None:
     if q_by_year.empty:
         return
     pivot = q_by_year.pivot(index="factor", columns="year", values="q").sort_index()
-    plt.figure(figsize=(max(8, pivot.shape[1] * 1.2), max(4, pivot.shape[0] * 0.45)))
-    sns.heatmap(pivot, annot=True, fmt=".2f", cmap="YlOrRd", vmin=0, vmax=1, linewidths=0.3)
-    plt.title("BTH Geo-detector q Heatmap")
+    cmap = build_soft_blue_red_cmap()
+    _paper_plot_style()
+    cell_size = 0.55
+    fig_w = max(8, pivot.shape[1] * cell_size + 3)
+    fig_h = max(4, pivot.shape[0] * cell_size + 2)
+    plt.figure(figsize=(fig_w, fig_h))
+    cbar_ticks = np.linspace(0, 1, 6)
+    sns.heatmap(
+        pivot,
+        annot=True,
+        fmt=".2f",
+        cmap=cmap,
+        vmin=0,
+        vmax=1,
+        center=0.5,
+        linewidths=0.5,
+        linecolor="#F2F2F2",
+        square=True,
+        annot_kws={"size": 8.5, "color": "#2F2F2F"},
+        cbar_kws={"shrink": 0.9, "pad": 0.02, "ticks": cbar_ticks, "label": "q value"},
+    )
+    plt.title("BTH Geo-detector q Heatmap", pad=10)
     plt.xlabel("Year")
     plt.ylabel("Factor")
+    plt.xticks(rotation=0)
+    plt.yticks(rotation=0)
     plt.tight_layout()
     output_png.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_png, dpi=300)
+    plt.savefig(output_png, facecolor="white")
     plt.close()
 
 
@@ -833,17 +1192,40 @@ def plot_interaction_heatmap(inter_df: pd.DataFrame, output_png: Path) -> None:
         matrix.loc[row["factor_1"], row["factor_2"]] = row["q_interaction"]
         matrix.loc[row["factor_2"], row["factor_1"]] = row["q_interaction"]
     np.fill_diagonal(matrix.values, 1.0)
-    plt.figure(figsize=(max(8, len(factors) * 0.7), max(6, len(factors) * 0.7)))
-    sns.heatmap(matrix, annot=True, fmt=".2f", cmap="RdPu", vmin=0, vmax=1, linewidths=0.3)
-    plt.title("BTH Interaction q Heatmap")
+    mask_upper = np.triu(np.ones_like(matrix.values, dtype=bool), k=1)
+    cmap = build_soft_blue_red_cmap()
+    _paper_plot_style()
+    cell_size = 0.62
+    fig_side = max(8, len(factors) * cell_size + 2)
+    plt.figure(figsize=(fig_side, fig_side))
+    annot_size = float(np.clip(9.5 - len(factors) * 0.2, 6.8, 8.8))
+    cbar_ticks = np.linspace(0, 1, 6)
+    sns.heatmap(
+        matrix,
+        mask=mask_upper,
+        annot=True,
+        fmt=".2f",
+        cmap=cmap,
+        vmin=0,
+        vmax=1,
+        center=0.5,
+        linewidths=0.5,
+        linecolor="#F2F2F2",
+        square=True,
+        annot_kws={"size": annot_size, "color": "#2F2F2F"},
+        cbar_kws={"shrink": 0.9, "pad": 0.02, "ticks": cbar_ticks, "label": "q value"},
+    )
+    plt.title("BTH Interaction q Heatmap", pad=10)
+    plt.xticks(rotation=45, ha="right")
+    plt.yticks(rotation=0)
     plt.tight_layout()
     output_png.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_png, dpi=300)
+    plt.savefig(output_png, facecolor="white")
     plt.close()
 
 
 def main() -> int:
-    sns.set_theme(style="white")
+    sns.set_theme(style="white", context="paper")
 
     output_dir = OUTPUT_DIR.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
