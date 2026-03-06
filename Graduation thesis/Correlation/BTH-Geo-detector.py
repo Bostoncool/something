@@ -76,6 +76,64 @@ PROVINCE_NAME_ALIASES = {
     "guangdong": ["广东", "广东省", "guangdong"],
 }
 
+# 三大城市群 英文(UC_NM_MN) -> 中文，用于工业用地等数据源
+BTH_EN_TO_ZH = {
+    # BTH 京津冀 13 城
+    "beijing": "北京",
+    "tianjin": "天津",
+    "shijiazhuang": "石家庄",
+    "tangshan": "唐山",
+    "qinhuangdao": "秦皇岛",
+    "handan": "邯郸",
+    "xingtai": "邢台",
+    "baoding": "保定",
+    "zhangjiakou": "张家口",
+    "chengde": "承德",
+    "cangzhou": "沧州",
+    "langfang": "廊坊",
+    "hengshui": "衡水",
+    "xian": "西安",
+    "xi'an": "西安",
+    # PRD 珠三角 9 城
+    "guangzhou": "广州",
+    "shenzhen": "深圳",
+    "foshan": "佛山",
+    "dongguan": "东莞",
+    "zhongshan": "中山",
+    "huizhou": "惠州",
+    "zhuhai": "珠海",
+    "jiangmen": "江门",
+    "zhaoqing": "肇庆",
+    # YRD 长三角 27 城
+    "nanjing": "南京",
+    "wuxi": "无锡",
+    "nantong": "南通",
+    "yancheng": "盐城",
+    "yangzhou": "扬州",
+    "zhenjiang": "镇江",
+    "changzhou": "常州",
+    "suzhou": "苏州",
+    "taizhou": "泰州",
+    "hangzhou": "杭州",
+    "ningbo": "宁波",
+    "jiaxing": "嘉兴",
+    "huzhou": "湖州",
+    "shaoxing": "绍兴",
+    "jinhua": "金华",
+    "zhoushan": "舟山",
+    "taizhou_zj": "台州",
+    "wenzhou": "温州",
+    "hefei": "合肥",
+    "wuhu": "芜湖",
+    "maanshan": "马鞍山",
+    "tongling": "铜陵",
+    "anqing": "安庆",
+    "chuzhou": "滁州",
+    "chizhou": "池州",
+    "xuancheng": "宣城",
+    "shanghai": "上海",
+}
+
 # 目录锚点：优先使用脚本所在项目的相对路径，避免机器间迁移失效
 SCRIPT_DIR = Path(__file__).resolve().parent
 THESIS_DIR = SCRIPT_DIR.parent
@@ -127,6 +185,18 @@ def normalize_city_text(city_name: str) -> str:
     return (
         str(city_name).strip().replace("市", "").replace("地区", "")
     )
+
+
+def _map_english_city_to_chinese(series: pd.Series, mapping: dict[str, str]) -> pd.Series:
+    """将英文城市名映射为中文（用于工业用地等数据源）。"""
+
+    def map_one(val: Any) -> Any:
+        if pd.isna(val) or not isinstance(val, str):
+            return val
+        key = str(val).strip().lower().replace(" ", "").replace("-", "").replace("'", "")
+        return mapping.get(key, val)
+
+    return series.map(map_one)
 
 
 def _discover_pm25_candidates(start_dir: Path) -> list[Path]:
@@ -538,15 +608,18 @@ def load_industrial_land_factor(data_read_dir: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
     land_df.columns = [str(c).strip() for c in land_df.columns]
+    # 优先 UC_NM_MN（城市英文名），排除 CTR_MN_NM（其为 "China" 国家级）
     city_col = _match_col(
         list(land_df.columns),
-        [r"^city$", r"城市", r"市名", r"CTR_MN_NM", r"UC_NM_MN"],
+        [r"^city$", r"城市", r"市名", r"UC_NM_MN"],
+        exclude=[r"CTR_MN_NM"],
     )
     if city_col is None or "year" not in land_df.columns:
         return pd.DataFrame()
 
     out = land_df.rename(columns={city_col: "city"}).copy()
     out["city"] = normalize_city_name(out["city"])
+    out["city"] = _map_english_city_to_chinese(out["city"], BTH_EN_TO_ZH)
     out["year"] = pd.to_numeric(out["year"], errors="coerce").astype("Int64")
 
     out["industrial_land_pixels"] = pd.to_numeric(out.get("industrial_pixel_count"), errors="coerce")
