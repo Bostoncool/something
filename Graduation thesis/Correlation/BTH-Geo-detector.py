@@ -871,6 +871,7 @@ def load_industrial_emission_factor(data_read_dir: Path) -> tuple[pd.DataFrame, 
     if city_col is not None:
         out = raw_df.rename(columns={city_col: "city"}).copy()
         out["city"] = normalize_city_name(out["city"])
+        out["city"] = _map_english_city_to_chinese(out["city"], BTH_EN_TO_ZH)
         value_cols = [
             c for c in raw_df.columns
             if c not in {"year", "source_file", "pollutant", month_col, city_col}
