@@ -79,6 +79,65 @@ class SinusoidalPositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
+class SpatialSelfAttentionBlock(nn.Module):
+    """Spatial self-attention over city tokens."""
+
+    def __init__(
+        self,
+        city_embed_dim: int,
+        d_model: int,
+        nhead: int,
+        num_layers: int,
+        dim_feedforward: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        self.city_proj = nn.Linear(city_embed_dim, d_model)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=False,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=max(1, num_layers))
+
+    def forward(self, city_tokens: "torch.Tensor") -> "torch.Tensor":
+        # city_tokens: (B, N_city, city_embed_dim)
+        return self.encoder(self.city_proj(city_tokens))
+
+
+class UnifiedSTAttentionBlock(nn.Module):
+    """Unified attention over temporal + spatial tokens."""
+
+    def __init__(
+        self,
+        d_model: int,
+        nhead: int,
+        num_layers: int,
+        dim_feedforward: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=False,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=max(1, num_layers))
+
+    def forward(self, temporal_tokens: "torch.Tensor", spatial_tokens: "torch.Tensor") -> "torch.Tensor":
+        # temporal_tokens: (B, T, d_model), spatial_tokens: (B, N_city, d_model)
+        unified_tokens = torch.cat([temporal_tokens, spatial_tokens], dim=1)
+        return self.encoder(unified_tokens)
+
+
 class STTransformerRegressor(nn.Module):
     """Temporal Transformer + city embedding for sequence regression. Input (B, T, F)."""
 
@@ -93,13 +152,30 @@ class STTransformerRegressor(nn.Module):
         dim_feedforward: int = 256,
         dropout: float = 0.2,
         city_embed_dim: int = 16,
+        attention_mode: str = "temporal_only",
+        spatial_heads: int = 4,
+        spatial_layers: int = 1,
+        unified_heads: int = 4,
+        unified_layers: int = 1,
+        fusion_dropout: float = 0.1,
         seed: int = 42,
     ) -> None:
         super().__init__()
         torch.manual_seed(seed)
         self._input_size = input_size
         self._seq_len = seq_len
+        self._n_cities = max(1, n_cities)
+        self.attention_mode = str(attention_mode).strip().lower() or "temporal_only"
+        if self.attention_mode not in {"temporal_only", "spatial_temporal", "unified_st"}:
+            raise ValueError("attention_mode must be one of: temporal_only, spatial_temporal, unified_st")
+
         self.d_model = d_model
+        if d_model % nhead != 0:
+            raise ValueError(f"d_model ({d_model}) must be divisible by nhead ({nhead}).")
+        if d_model % max(1, spatial_heads) != 0:
+            raise ValueError(f"d_model ({d_model}) must be divisible by spatial_heads ({spatial_heads}).")
+        if d_model % max(1, unified_heads) != 0:
+            raise ValueError(f"d_model ({d_model}) must be divisible by unified_heads ({unified_heads}).")
         self.input_proj = nn.Linear(input_size, d_model)
         self.pos_enc = SinusoidalPositionalEncoding(d_model, max_len=seq_len + 10, dropout=0.0)
         self.city_embed = nn.Embedding(max(1, n_cities), city_embed_dim)
@@ -114,20 +190,74 @@ class STTransformerRegressor(nn.Module):
             norm_first=False,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+        self.spatial_block = SpatialSelfAttentionBlock(
+            city_embed_dim=city_embed_dim,
+            d_model=d_model,
+            nhead=max(1, spatial_heads),
+            num_layers=max(1, spatial_layers),
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+        )
+        self.unified_block = UnifiedSTAttentionBlock(
+            d_model=d_model,
+            nhead=max(1, unified_heads),
+            num_layers=max(1, unified_layers),
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+        )
+        self.sample_to_city = nn.Linear(d_model, city_embed_dim)
+        self.gate_fc = nn.Linear(d_model * 2, 1)
+        self.fusion_dropout = nn.Dropout(p=fusion_dropout)
         self.dropout = nn.Dropout(p=dropout)
         self.fc = nn.Linear(d_model, 1)
 
+    def _build_spatial_context(self, temporal_tokens: "torch.Tensor", city_id: "torch.Tensor") -> "torch.Tensor":
+        # temporal_tokens: (B, T, d_model), city_id: (B,)
+        summary = temporal_tokens.mean(dim=1)  # (B, d_model)
+        summary_bias = self.sample_to_city(summary)  # (B, city_embed_dim)
+        base_city_tokens = self.city_embed.weight.unsqueeze(0).expand(summary.shape[0], -1, -1)
+        city_tokens = base_city_tokens + summary_bias.unsqueeze(1)
+        spatial_tokens = self.spatial_block(city_tokens)  # (B, N_city, d_model)
+        gather_idx = city_id.clamp(0, self._n_cities - 1).view(-1, 1, 1).expand(-1, 1, self.d_model)
+        return spatial_tokens.gather(dim=1, index=gather_idx).squeeze(1)  # (B, d_model)
+
+    def _fuse_repr(self, temporal_repr: "torch.Tensor", spatial_repr: "torch.Tensor") -> "torch.Tensor":
+        gate = torch.sigmoid(self.gate_fc(torch.cat([temporal_repr, spatial_repr], dim=-1)))
+        fused = gate * temporal_repr + (1.0 - gate) * spatial_repr
+        return self.fusion_dropout(fused)
+
     def forward(self, x: "torch.Tensor", city_id: "torch.Tensor") -> "torch.Tensor":
         # x: (B, T, F), city_id: (B,) long
-        B, T, _ = x.shape
+        _, T, _ = x.shape
         x = self.input_proj(x)
         x = self.pos_enc(x)
-        city_emb = self.city_embed(city_id.clamp(0, self.city_embed.num_embeddings - 1))
-        city_emb = city_emb.unsqueeze(1).expand(-1, T, -1)
-        x = self.embed_proj(torch.cat([x, city_emb], dim=-1))
-        x = self.transformer(x)
-        out = self.dropout(x.mean(dim=1))
-        return self.fc(out).squeeze(-1)
+        city_emb = self.city_embed(city_id.clamp(0, self.city_embed.num_embeddings - 1)).unsqueeze(1).expand(-1, T, -1)
+        temporal_tokens = self.embed_proj(torch.cat([x, city_emb], dim=-1))
+
+        if self.attention_mode == "temporal_only":
+            temporal_out = self.transformer(temporal_tokens)
+            out = self.dropout(temporal_out.mean(dim=1))
+            return self.fc(out).squeeze(-1)
+
+        if self.attention_mode == "spatial_temporal":
+            temporal_out = self.transformer(temporal_tokens)
+            temporal_repr = temporal_out.mean(dim=1)
+            spatial_repr = self._build_spatial_context(temporal_tokens, city_id)
+            fused = self._fuse_repr(temporal_repr, spatial_repr)
+            return self.fc(fused).squeeze(-1)
+
+        # unified_st mode
+        summary = temporal_tokens.mean(dim=1)
+        summary_bias = self.sample_to_city(summary)
+        city_tokens = self.city_embed.weight.unsqueeze(0).expand(summary.shape[0], -1, -1) + summary_bias.unsqueeze(1)
+        spatial_tokens = self.spatial_block(city_tokens)
+        unified_out = self.unified_block(temporal_tokens, spatial_tokens)
+        temporal_repr = unified_out[:, :T, :].mean(dim=1)
+        spatial_out = unified_out[:, T:, :]
+        gather_idx = city_id.clamp(0, self._n_cities - 1).view(-1, 1, 1).expand(-1, 1, self.d_model)
+        spatial_repr = spatial_out.gather(dim=1, index=gather_idx).squeeze(1)
+        fused = self._fuse_repr(temporal_repr, spatial_repr)
+        return self.fc(fused).squeeze(-1)
 
 
 def build_st_dataloaders(
@@ -196,6 +326,12 @@ def train_st_transformer(
         dim_feedforward=getattr(args, "dim_feedforward", 256),
         dropout=getattr(args, "dropout", 0.2),
         city_embed_dim=getattr(args, "city_embed_dim", 16),
+        attention_mode=getattr(args, "attention_mode", "temporal_only"),
+        spatial_heads=getattr(args, "spatial_heads", 4),
+        spatial_layers=getattr(args, "spatial_layers", 1),
+        unified_heads=getattr(args, "unified_heads", 4),
+        unified_layers=getattr(args, "unified_layers", 1),
+        fusion_dropout=getattr(args, "fusion_dropout", 0.1),
         seed=args.seed,
     ).to(device)
     criterion = nn.MSELoss()
@@ -309,6 +445,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dim-feedforward", type=int, default=256, help="Transformer feedforward dim.")
     parser.add_argument("--dropout", type=float, default=0.2, help="Dropout rate.")
     parser.add_argument("--city-embed-dim", type=int, default=16, help="City embedding dimension.")
+    parser.add_argument(
+        "--attention-mode",
+        type=str,
+        default="temporal_only",
+        choices=["temporal_only", "spatial_temporal", "unified_st"],
+        help="Attention mode: temporal_only, spatial_temporal, unified_st.",
+    )
+    parser.add_argument("--spatial-heads", type=int, default=4, help="Spatial attention heads.")
+    parser.add_argument("--spatial-layers", type=int, default=1, help="Spatial attention layers.")
+    parser.add_argument("--unified-heads", type=int, default=4, help="Unified ST attention heads.")
+    parser.add_argument("--unified-layers", type=int, default=1, help="Unified ST attention layers.")
+    parser.add_argument("--fusion-dropout", type=float, default=0.1, help="Dropout rate after temporal-spatial fusion.")
     parser.add_argument("--early-stopping-patience", type=int, default=15, help="Early stopping patience (epochs).")
     parser.add_argument("--device", type=str, default="", help="Device: 'cuda', 'gpu', or 'cpu'. Default: auto-detect.")
     return parser
@@ -428,6 +576,12 @@ def main() -> int:
         "dim_feedforward": args.dim_feedforward,
         "dropout": args.dropout,
         "city_embed_dim": args.city_embed_dim,
+        "attention_mode": args.attention_mode,
+        "spatial_heads": args.spatial_heads,
+        "spatial_layers": args.spatial_layers,
+        "unified_heads": args.unified_heads,
+        "unified_layers": args.unified_layers,
+        "fusion_dropout": args.fusion_dropout,
         "early_stopping_patience": args.early_stopping_patience,
         "daily_input": args.daily_input or [],
         "pm25_day_dir": str(pm25_day_dir),
