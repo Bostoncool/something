@@ -10,7 +10,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 # 夜间灯光数据文件路径
-NIGHTLIGHT_PATH = r"F:\1.模型要用的\1992-2023[全国省、市、县域夜间灯光数据]\要用的_2018-2023筛选.xlsx"
+NIGHTLIGHT_PATH = r"F:\1.模型要用的\2018-2023[全国省、市、县域夜间灯光数据]\要用的_2018-2023筛选.xlsx"
 
 
 def load_nightlight_data(sheet_name: int | str = 0) -> pd.DataFrame:

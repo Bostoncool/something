@@ -12,7 +12,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 # 数据文件夹路径
-DATA_DIR = Path(r"F:\1.模型要用的\2017-2023[新能源汽车保有量数据(各省市)]")
+DATA_DIR = Path(r"F:\1.模型要用的\2018-2023[新能源汽车保有量数据(各省市)]")
 
 # 目标城市列表（用户提供的城市名，数据中格式为"城市名+市"）
 TARGET_CITIES = [

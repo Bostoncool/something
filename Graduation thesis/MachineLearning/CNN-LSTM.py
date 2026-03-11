@@ -61,13 +61,15 @@ def get_device(args: argparse.Namespace) -> "torch.device":
 
 
 class CNNLSTMRegressor(nn.Module):
-    """CNN on time dimension then LSTM for sequence regression. Input (B, T, F)."""
+    """2D CNN on (time, feature) grid then LSTM for sequence regression. Input (B, T, F)."""
 
     def __init__(
         self,
         input_size: int,
         seq_len: int,
         cnn_channels: int = 64,
+        cnn_kernel_time: int = 3,
+        cnn_kernel_feature: int = 3,
         lstm_hidden: int = 128,
         lstm_layers: int = 2,
         dropout: float = 0.2,
@@ -77,8 +79,15 @@ class CNNLSTMRegressor(nn.Module):
         torch.manual_seed(seed)
         self._input_size = input_size
         self._seq_len = seq_len
-        self.cnn = nn.Conv1d(input_size, cnn_channels, kernel_size=3, padding=1)
-        cnn_out_len = seq_len
+        time_padding = cnn_kernel_time // 2
+        feature_padding = cnn_kernel_feature // 2
+        self.cnn = nn.Conv2d(
+            in_channels=1,
+            out_channels=cnn_channels,
+            kernel_size=(cnn_kernel_time, cnn_kernel_feature),
+            stride=(1, 1),
+            padding=(time_padding, feature_padding),
+        )
         self.lstm = nn.LSTM(
             cnn_channels,
             lstm_hidden,
@@ -90,9 +99,11 @@ class CNNLSTMRegressor(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x: "torch.Tensor") -> "torch.Tensor":
-        # x: (B, T, F) -> (B, F, T)
-        x = x.permute(0, 2, 1)
+        # x: (B, T, F) -> (B, 1, T, F)
+        x = x.unsqueeze(1)
         x = torch.relu(self.cnn(x))
+        # (B, C, T, F) -> compress feature axis -> (B, C, T)
+        x = x.mean(dim=3)
         # (B, C, T) -> (B, T, C)
         x = x.permute(0, 2, 1)
         out, _ = self.lstm(x)
@@ -152,6 +163,8 @@ def train_cnn_lstm(
         input_size=n_features,
         seq_len=seq_len,
         cnn_channels=getattr(args, "cnn_channels", 64),
+        cnn_kernel_time=getattr(args, "cnn_kernel_time", 3),
+        cnn_kernel_feature=getattr(args, "cnn_kernel_feature", 3),
         lstm_hidden=getattr(args, "lstm_hidden", 128),
         lstm_layers=getattr(args, "lstm_layers", 2),
         dropout=getattr(args, "dropout", 0.2),
@@ -251,6 +264,10 @@ def compute_feature_importance_last_step(
     grad = X_t.grad
     if grad is None:
         return np.zeros(len(feature_cols), dtype=np.float64)
+    if grad.ndim != 3 or grad.shape[2] != len(feature_cols):
+        raise ValueError(
+            f"Unexpected gradient shape {tuple(grad.shape)} for {len(feature_cols)} features."
+        )
     last_step = grad[:, -1, :]
     imp = (X_t[:, -1, :].detach().abs() * last_step.abs()).mean(dim=0).cpu().numpy()
     return np.asarray(imp, dtype=np.float64)
@@ -276,7 +293,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=200, help="Max training epochs.")
     parser.add_argument("--batch-size", type=int, default=512, help="Batch size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
-    parser.add_argument("--cnn-channels", type=int, default=64, help="CNN 1D output channels.")
+    parser.add_argument("--cnn-channels", type=int, default=64, help="CNN 2D output channels.")
+    parser.add_argument("--cnn-kernel-time", type=int, default=3, help="CNN kernel size on time axis.")
+    parser.add_argument("--cnn-kernel-feature", type=int, default=3, help="CNN kernel size on feature axis.")
     parser.add_argument("--lstm-hidden", type=int, default=128, help="LSTM hidden size.")
     parser.add_argument("--lstm-layers", type=int, default=2, help="LSTM num layers.")
     parser.add_argument("--dropout", type=float, default=0.2, help="Dropout rate.")
@@ -395,6 +414,8 @@ def main() -> int:
         "batch_size": args.batch_size,
         "lr": args.lr,
         "cnn_channels": args.cnn_channels,
+        "cnn_kernel_time": args.cnn_kernel_time,
+        "cnn_kernel_feature": args.cnn_kernel_feature,
         "lstm_hidden": args.lstm_hidden,
         "lstm_layers": args.lstm_layers,
         "dropout": args.dropout,

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 
 from daily_ml_pipeline import (
     DEFAULT_CITY_GEOJSON_DIR,
@@ -50,20 +51,61 @@ def train_lightgbm(
     x_valid: pd.DataFrame,
     y_valid: pd.Series,
     args: argparse.Namespace,
-) -> Any:
+) -> tuple[Any, dict[str, Any]]:
     if LGBMRegressor is None:
         raise ImportError("lightgbm is not installed. Please run: pip install lightgbm")
 
-    model = LGBMRegressor(
+    base_params = dict(
         objective="regression",
-        n_estimators=args.n_estimators,
-        learning_rate=args.learning_rate,
-        num_leaves=args.num_leaves,
-        subsample=args.subsample,
-        colsample_bytree=args.colsample_bytree,
         random_state=args.seed,
         n_jobs=args.n_jobs,
     )
+    train_params = {
+        "n_estimators": args.n_estimators,
+        "learning_rate": args.learning_rate,
+        "num_leaves": args.num_leaves,
+        "subsample": args.subsample,
+        "colsample_bytree": args.colsample_bytree,
+    }
+
+    if args.enable_grid_search:
+        param_grid = {
+            "n_estimators": [800, 1200],
+            "learning_rate": [0.03, 0.05],
+            "num_leaves": [31, 63],
+            "subsample": [0.8, 0.9],
+            "colsample_bytree": [0.8, 0.9],
+            "min_child_samples": [20, 40],
+        }
+        cv_splitter = TimeSeriesSplit(n_splits=args.cv_splits)
+        search = GridSearchCV(
+            estimator=LGBMRegressor(**base_params),
+            param_grid=param_grid,
+            scoring=args.grid_search_scoring,
+            cv=cv_splitter,
+            n_jobs=args.n_jobs,
+            verbose=args.grid_search_verbose,
+            refit=args.grid_search_refit,
+        )
+        search.fit(x_train, y_train)
+        if args.grid_search_refit:
+            model = search.best_estimator_
+        else:
+            best_params = search.cv_results_["params"][search.best_index_]
+            model = LGBMRegressor(**base_params, **best_params)
+            model.fit(x_train, y_train)
+        results_df = pd.DataFrame(search.cv_results_).sort_values("rank_test_score", kind="mergesort")
+        search_info = {
+            "enabled": True,
+            "best_params": search.best_params_,
+            "best_score": float(search.best_score_),
+            "cv_splits": args.cv_splits,
+            "scoring": args.grid_search_scoring,
+            "results_df": results_df,
+        }
+        return model, search_info
+
+    model = LGBMRegressor(**base_params, **train_params)
 
     fit_kwargs: dict[str, Any] = {}
     if not x_valid.empty and args.early_stopping_rounds > 0:
@@ -72,7 +114,7 @@ def train_lightgbm(
         if early_stopping is not None:
             fit_kwargs["callbacks"] = [early_stopping(stopping_rounds=args.early_stopping_rounds, verbose=False)]
     model.fit(x_train, y_train, **fit_kwargs)
-    return model
+    return model, {"enabled": False}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -135,6 +177,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--colsample-bytree", type=float, default=0.9, help="Column sampling ratio.")
     parser.add_argument("--early-stopping-rounds", type=int, default=100, help="Early stopping rounds.")
     parser.add_argument("--n-jobs", type=int, default=-1, help="Parallel jobs for model fitting.")
+    parser.add_argument("--enable-grid-search", action="store_true", help="Enable GridSearchCV on train split.")
+    parser.add_argument("--cv-splits", type=int, default=5, help="TimeSeriesSplit fold count for grid search.")
+    parser.add_argument(
+        "--grid-search-scoring",
+        type=str,
+        default="neg_root_mean_squared_error",
+        help="GridSearchCV scoring metric.",
+    )
+    parser.add_argument(
+        "--grid-search-verbose",
+        type=int,
+        default=1,
+        help="Verbose level for GridSearchCV.",
+    )
+    parser.add_argument(
+        "--grid-search-refit",
+        dest="grid_search_refit",
+        action="store_true",
+        help="Refit best estimator after grid search.",
+    )
+    parser.add_argument(
+        "--no-grid-search-refit",
+        dest="grid_search_refit",
+        action="store_false",
+        help="Disable automatic refit in GridSearchCV and fit manually with best params.",
+    )
+    parser.set_defaults(grid_search_refit=True)
     parser.add_argument("--disable-shap", action="store_true", help="Disable SHAP explainability outputs.")
     parser.add_argument("--shap-max-samples", type=int, default=3000, help="Max rows used for SHAP.")
     parser.add_argument("--shap-max-display", type=int, default=20, help="Max displayed SHAP features.")
@@ -175,7 +244,7 @@ def main() -> int:
         test_df=test_df,
     )
 
-    model = train_lightgbm(x_train, y_train, x_valid, y_valid, args)
+    model, grid_search_info = train_lightgbm(x_train, y_train, x_valid, y_valid, args)
     pred_train = model.predict(x_train)
     pred_valid = model.predict(x_valid)
     pred_test = model.predict(x_test)
@@ -237,6 +306,15 @@ def main() -> int:
         encoding="utf-8-sig",
     )
     importance_df.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
+    if grid_search_info.get("enabled"):
+        grid_results_df = grid_search_info.get("results_df")
+        if isinstance(grid_results_df, pd.DataFrame):
+            keep_cols = [col for col in ["rank_test_score", "mean_test_score", "std_test_score", "params"] if col in grid_results_df.columns]
+            grid_results_df.loc[:, keep_cols].to_csv(
+                output_dir / "grid_search_results.csv",
+                index=False,
+                encoding="utf-8-sig",
+            )
 
     run_info = {
         "model": "LightGBM",
@@ -256,6 +334,11 @@ def main() -> int:
         "monthly_factor_rule": "divide_by_days_in_month",
         "generalization_level": str(generalization_df.loc[0, "generalization_level"]) if not generalization_df.empty else "",
         "shap_status": shap_status,
+        "grid_search_enabled": bool(grid_search_info.get("enabled", False)),
+        "grid_search_cv_splits": int(args.cv_splits),
+        "grid_search_scoring": args.grid_search_scoring,
+        "grid_search_best_score": grid_search_info.get("best_score"),
+        "grid_search_best_params": grid_search_info.get("best_params", {}),
     }
     with open(output_dir / "run_info.json", "w", encoding="utf-8") as file:
         json.dump(run_info, file, ensure_ascii=False, indent=2)
@@ -277,6 +360,8 @@ def main() -> int:
     print("       - shap_values_wide.csv")
     print("       - shap_beeswarm_data_long.csv")
     print("       - shap_importance_bar_data.csv")
+    if grid_search_info.get("enabled"):
+        print("       - grid_search_results.csv")
     print("       - run_info.json")
     print("=" * 90)
     return 0
