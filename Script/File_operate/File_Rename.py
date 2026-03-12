@@ -47,8 +47,8 @@ def batch_rename_files(folder_path, old_keyword, new_keyword):
 
 if __name__ == "__main__":
     # 示例用法
-    folder = r"C:\Users\IU\Desktop\Moderately Polluted\AQI-200"
-    old_kw = "AQI_200+"
-    new_kw = "AQI_200+ "
+    folder = r"G:\基本用不到\SO2\Day\2018"
+    old_kw = "D10K"
+    new_kw = "D1K"
     
     batch_rename_files(folder, old_kw, new_kw)
