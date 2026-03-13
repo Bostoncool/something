@@ -1,0 +1,311 @@
+{
+  "train_end_year": 2021,
+  "valid_year": 2022,
+  "test_year": 2023,
+  "seed": 42,
+  "include_era5_daily": true,
+  "device": "cuda",
+  "clusters": {
+    "YRD": {
+      "display_name": "长三角",
+      "dataset_types": {
+        "pm25": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/pm25/yrd_daily/"
+          ],
+          "column_map": {
+            "city": "城市名",
+            "date": "日期",
+            "pm25": "PM2.5"
+          }
+        },
+        "era5": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/era5/yrd/"
+          ]
+        },
+        "industry_emission": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/industry_emission/yrd/"
+          ]
+        },
+        "energy": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/energy/yrd/"
+          ]
+        },
+        "road_density": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/road_density/yrd/"
+          ]
+        },
+        "night_light": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/night_light/yrd/"
+          ]
+        },
+        "map_vector": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/map_vector/yrd/"
+          ]
+        },
+        "industrial_land": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/industrial_land/yrd/"
+          ]
+        },
+        "land_use": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/land_use/yrd/"
+          ]
+        },
+        "gdp_population": {
+          "priority": "unused",
+          "enabled": false,
+          "paths": []
+        },
+        "nev_stock": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/nev_stock/yrd/"
+          ]
+        },
+        "vegetation": {
+          "priority": "unused",
+          "enabled": false,
+          "paths": []
+        }
+      }
+    },
+    "PRD": {
+      "display_name": "珠三角",
+      "dataset_types": {
+        "pm25": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/pm25/prd_daily.csv"
+          ],
+          "column_map": {
+            "city": "city_name",
+            "date": "datetime",
+            "pm25": "pm25_value"
+          }
+        },
+        "era5": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/era5/prd/"
+          ]
+        },
+        "industry_emission": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/industry_emission/prd/"
+          ]
+        },
+        "energy": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/energy/prd/"
+          ]
+        },
+        "road_density": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/road_density/prd/"
+          ]
+        },
+        "night_light": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/night_light/prd/"
+          ]
+        },
+        "map_vector": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/map_vector/prd/"
+          ]
+        },
+        "industrial_land": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/industrial_land/prd/"
+          ]
+        },
+        "land_use": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/land_use/prd/"
+          ]
+        },
+        "gdp_population": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/gdp_population/prd/"
+          ]
+        },
+        "nev_stock": {
+          "priority": "unused",
+          "enabled": false,
+          "paths": []
+        },
+        "vegetation": {
+          "priority": "unused",
+          "enabled": false,
+          "paths": []
+        }
+      }
+    },
+    "BTH": {
+      "display_name": "京津冀",
+      "dataset_types": {
+        "pm25": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/pm25/bth_daily.parquet"
+          ],
+          "column_map": {}
+        },
+        "era5": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/era5/bth/"
+          ]
+        },
+        "industry_emission": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/industry_emission/bth/"
+          ]
+        },
+        "energy": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/energy/bth/"
+          ]
+        },
+        "road_density": {
+          "priority": "core",
+          "enabled": true,
+          "paths": [
+            "D:/road_density/bth/"
+          ]
+        },
+        "night_light": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/night_light/bth/"
+          ]
+        },
+        "map_vector": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/map_vector/bth/"
+          ]
+        },
+        "industrial_land": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/industrial_land/bth/"
+          ]
+        },
+        "land_use": {
+          "priority": "unused",
+          "enabled": false,
+          "paths": []
+        },
+        "gdp_population": {
+          "priority": "aux",
+          "enabled": true,
+          "paths": [
+            "D:/gdp_population/bth/"
+          ]
+        },
+        "nev_stock": {
+          "priority": "unused",
+          "enabled": false,
+          "paths": []
+        },
+        "vegetation": {
+          "priority": "unused",
+          "enabled": false,
+          "paths": []
+        }
+      }
+    }
+  },
+  "models": {
+    "xgboost": {
+      "enabled": true,
+      "extra_args": {
+        "n-estimators": 1500,
+        "learning-rate": 0.03
+      }
+    },
+    "lightgbm": {
+      "enabled": true,
+      "extra_args": {
+        "n-estimators": 1200,
+        "learning-rate": 0.03,
+        "num-leaves": 63
+      }
+    },
+    "cnn_lstm": {
+      "enabled": true,
+      "extra_args": {
+        "seq-len": 14,
+        "epochs": 200,
+        "batch-size": 512,
+        "lr": 0.001
+      }
+    },
+    "st_transformer": {
+      "enabled": true,
+      "extra_args": {
+        "seq-len": 14,
+        "epochs": 200,
+        "batch-size": 512,
+        "lr": 0.001,
+        "d-model": 64,
+        "nhead": 4
+      }
+    }
+  }
+}
