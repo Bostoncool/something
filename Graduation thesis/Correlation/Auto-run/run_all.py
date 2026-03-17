@@ -18,12 +18,13 @@ script_list = [
     "PRD-Geo-detector.py",
 ]
 
-# 获取当前脚本所在目录（确保能找到其他脚本）
+# 获取 Correlation 目录（9 个脚本所在目录，即 run_all.py 的上一级）
 current_dir = os.path.dirname(os.path.abspath(__file__))
+correlation_dir = os.path.dirname(current_dir)  # Correlation 文件夹
 
 # 遍历并执行每个脚本
 for idx, script in enumerate(script_list, 1):
-    script_path = os.path.join(current_dir, script)
+    script_path = os.path.join(correlation_dir, script)
 
     # 检查脚本文件是否存在
     if not os.path.exists(script_path):
@@ -35,7 +36,7 @@ for idx, script in enumerate(script_list, 1):
         # 执行脚本（stdout和stderr实时输出）
         result = subprocess.run(
             [sys.executable, script_path],
-            cwd=current_dir,
+            cwd=correlation_dir,
             check=True,
             stdout=sys.stdout,
             stderr=sys.stderr,

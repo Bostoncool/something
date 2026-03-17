@@ -137,6 +137,9 @@ BTH_EN_TO_ZH = {
 # 目录锚点：优先使用脚本所在项目的相对路径，避免机器间迁移失效
 SCRIPT_DIR = Path(__file__).resolve().parent
 THESIS_DIR = SCRIPT_DIR.parent
+AUTO_RUN_DIR = SCRIPT_DIR / "Auto-run"
+sys.path.insert(0, str(AUTO_RUN_DIR))
+from data_cache import load_df_cached
 
 # =========================
 # 内嵌路径配置（直接修改这里）
@@ -1221,10 +1224,22 @@ def _paper_plot_style() -> None:
     )
 
 
-def plot_factor_heatmap(q_by_year: pd.DataFrame, output_png: Path) -> None:
+def plot_factor_heatmap(
+    q_by_year: pd.DataFrame,
+    output_png: Path,
+    factor_subset: list[str] | None = None,
+) -> None:
     if q_by_year.empty:
         return
-    pivot = q_by_year.pivot(index="factor", columns="year", values="q").sort_index()
+
+    data = q_by_year
+    if factor_subset is not None:
+        factor_subset_set = set(factor_subset)
+        data = data[data["factor"].isin(factor_subset_set)].copy()
+    if data.empty:
+        return
+
+    pivot = data.pivot(index="factor", columns="year", values="q").sort_index()
     cmap = build_soft_blue_red_cmap()
     _paper_plot_style()
     cell_size = 0.55
@@ -1304,17 +1319,17 @@ def main() -> int:
     output_dir = OUTPUT_DIR.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if USE_PANEL_CSV:
-        panel_csv = resolve_existing_path(
-            PANEL_CSV_PATH,
-            path_desc="面板文件",
-            fallback_candidates=[
-                SCRIPT_DIR / "bth_panel.csv",
-                OUTPUT_DIR / "bth_panel_from_interfaces.csv",
-            ],
-        )
-        panel = pd.read_csv(panel_csv, encoding="utf-8-sig")
-    else:
+    def _load_panel() -> pd.DataFrame:
+        if USE_PANEL_CSV:
+            panel_csv = resolve_existing_path(
+                PANEL_CSV_PATH,
+                path_desc="面板文件",
+                fallback_candidates=[
+                    SCRIPT_DIR / "bth_panel.csv",
+                    OUTPUT_DIR / "bth_panel_from_interfaces.csv",
+                ],
+            )
+            return pd.read_csv(panel_csv, encoding="utf-8-sig")
         pm25_discovered = _discover_pm25_candidates(THESIS_DIR)
         pm25_csv_config = PM25_CITY_YEAR_CSV_PATH.expanduser().resolve()
         if not pm25_csv_config.exists():
@@ -1331,7 +1346,6 @@ def main() -> int:
                 pm25_csv_config.parent.mkdir(parents=True, exist_ok=True)
                 pm25_city_year_df.to_csv(pm25_csv_config, index=False, encoding="utf-8-sig")
                 print(f"[INFO] 已生成 PM2.5 城市年均 CSV: {pm25_csv_config}")
-
         try:
             pm25_csv = resolve_existing_path(
                 PM25_CITY_YEAR_CSV_PATH,
@@ -1357,10 +1371,22 @@ def main() -> int:
             path_desc="Data Read 目录",
             fallback_candidates=[THESIS_DIR / "Data Read"],
         )
-        panel = build_panel_from_interfaces(
+        p = build_panel_from_interfaces(
             data_read_dir=data_read_dir,
             pm25_city_year_csv=pm25_csv,
         )
+        p.to_csv(output_dir / "bth_panel_from_interfaces.csv", index=False, encoding="utf-8-sig")
+        return p
+
+    if USE_PANEL_CSV:
+        panel = _load_panel()
+    else:
+        config = {
+            "region": "BTH",
+            "use_panel_csv": USE_PANEL_CSV,
+            "pm25_csv": str(PM25_CITY_YEAR_CSV_PATH.expanduser().resolve()),
+        }
+        panel = load_df_cached("bth_panel", _load_panel, {}, config)
         panel.to_csv(output_dir / "bth_panel_from_interfaces.csv", index=False, encoding="utf-8-sig")
 
     panel.columns = [str(c).strip() for c in panel.columns]
@@ -1413,7 +1439,36 @@ def main() -> int:
     inter_q.to_csv(output_dir / "bth_interaction_detector.csv", index=False, encoding="utf-8-sig")
     q_by_year.to_csv(output_dir / "bth_factor_q_by_year.csv", index=False, encoding="utf-8-sig")
 
+    # 原始全量热力图（保留，便于整体查看）
     plot_factor_heatmap(q_by_year, output_dir / "bth_factor_q_heatmap.png")
+
+    # 按因子平均 q 值从大到小排序，并拆分为“重要因子 / 次要因子”两组
+    if not q_by_year.empty:
+        factor_rank = (
+            q_by_year.groupby("factor", as_index=False)["q"]
+            .mean()
+            .sort_values("q", ascending=False)
+        )
+        all_factors = factor_rank["factor"].tolist()
+        if all_factors:
+            mid = max(1, len(all_factors) // 2)
+            factors_top = all_factors[:mid]
+            factors_bottom = all_factors[mid:]
+
+            # 重要因子热力图
+            plot_factor_heatmap(
+                q_by_year,
+                output_dir / "bth_factor_q_heatmap_top.png",
+                factor_subset=factors_top,
+            )
+
+            # 次要因子热力图
+            if factors_bottom:
+                plot_factor_heatmap(
+                    q_by_year,
+                    output_dir / "bth_factor_q_heatmap_bottom.png",
+                    factor_subset=factors_bottom,
+                )
     plot_interaction_heatmap(inter_q, output_dir / "bth_interaction_q_heatmap.png")
 
     print("=" * 80)

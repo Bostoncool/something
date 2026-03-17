@@ -6,10 +6,20 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+
+AUTO_RUN_DIR = Path(__file__).resolve().parent / "Auto-run"
+_data_cache_spec = importlib.util.spec_from_file_location(
+    "data_cache", AUTO_RUN_DIR / "data_cache.py"
+)
+_data_cache = importlib.util.module_from_spec(_data_cache_spec)
+_data_cache_spec.loader.exec_module(_data_cache)
+load_df_cached = _data_cache.load_df_cached
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from joblib import Parallel, delayed
 from matplotlib.colors import LinearSegmentedColormap
+from tqdm import tqdm
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -28,6 +38,9 @@ PM25_CITY_GEOJSON_DIR = Path(r"F:\1.模型要用的\地图数据")
 DISCRETIZE_BINS = 6
 OUTPUT_DIR = SCRIPT_DIR / "outputs" / "mutual_info_bth"
 GEO_SCRIPT_PATH = SCRIPT_DIR / "BTH-Geo-detector.py"
+MI_PERM_N = 500
+MI_PERM_ALPHA = 0.05
+MI_N_JOBS = -1  # -1 使用全部核心，1 为串行
 
 
 def load_module_from_path(module_path: Path) -> Any:
@@ -49,8 +62,19 @@ def discretize_series(series: pd.Series, bins: int = 6) -> pd.Series:
         return strata
 
     k = int(min(max(2, bins), valid.nunique()))
-    ranked = numeric.rank(method="first")
-    return pd.qcut(ranked, q=k, duplicates="drop").astype("object")
+    try:
+        ranked = numeric.rank(method="first")
+        return pd.qcut(ranked, q=k, duplicates="drop").astype("object")
+    except (ValueError, TypeError):
+        # 当 qcut 因重复值/边界情况失败时，改用百分位 + cut
+        percentiles = np.linspace(0, 100, k + 1)
+        edges = np.percentile(valid, percentiles)
+        edges = np.unique(edges)
+        if len(edges) < 2:
+            strata = pd.Series(np.nan, index=numeric.index, dtype="object")
+            strata.loc[numeric.notna()] = "all"
+            return strata
+        return pd.cut(numeric, bins=edges, include_lowest=True).astype("object")
 
 
 def compute_entropy(probabilities: np.ndarray) -> float:
@@ -58,6 +82,62 @@ def compute_entropy(probabilities: np.ndarray) -> float:
     if probs.size == 0:
         return 0.0
     return float(-np.sum(probs * np.log2(probs)))
+
+
+def _discretize_numpy(arr: np.ndarray, bins: int) -> np.ndarray:
+    """将一维数组离散化为 bin 索引 (0..k-1)，与 discretize_series 逻辑一致。"""
+    valid_mask = np.isfinite(arr)
+    valid = arr[valid_mask]
+    if valid.size < 3:
+        out = np.full_like(arr, -1, dtype=np.int32)
+        return out
+    k = min(max(2, bins), int(np.unique(valid).size))
+    if k < 2:
+        return np.full(arr.shape[0], -1, dtype=np.int32)
+    percentiles = np.linspace(0, 100, k + 1)
+    edges = np.percentile(valid, percentiles)
+    edges = np.unique(edges)
+    if len(edges) < 2:
+        return np.full(arr.shape[0], -1, dtype=np.int32)
+    # searchsorted 得到 0-based bin 索引
+    idx = np.searchsorted(edges[1:], arr[valid_mask], side="right") - 1
+    idx = np.clip(idx, 0, len(edges) - 2).astype(np.int32)
+    out = np.full(arr.shape[0], -1, dtype=np.int32)
+    out[valid_mask] = idx
+    return out
+
+
+def _compute_mi_numpy(x_bins: np.ndarray, y: np.ndarray, bins: int) -> float:
+    """纯 NumPy 的 NMI 计算，用于 permutation 内循环加速。x_bins 已预离散化。"""
+    valid = (x_bins >= 0) & np.isfinite(y)
+    xv = x_bins[valid].astype(np.int32)
+    yv = y[valid].astype(np.float64)
+    n = int(np.sum(valid))
+    if n < 3:
+        return 0.0
+    y_bins = _discretize_numpy(yv, bins)
+    keep = y_bins >= 0
+    if np.sum(keep) < 3:
+        return 0.0
+    xv, yv = xv[keep], y_bins[keep]
+    n = len(xv)
+    # 联合计数：用 (x_bin * max_y + y_bin) 编码
+    max_y = int(np.max(yv)) + 1
+    joint = xv.astype(np.int64) * max_y + yv.astype(np.int64)
+    _, cnt_joint = np.unique(joint, return_counts=True)
+    _, cnt_x = np.unique(xv, return_counts=True)
+    _, cnt_y = np.unique(yv, return_counts=True)
+    p_xy = cnt_joint.astype(float) / n
+    p_x = cnt_x.astype(float) / n
+    p_y = cnt_y.astype(float) / n
+    h_x = compute_entropy(p_x)
+    h_y = compute_entropy(p_y)
+    h_xy = compute_entropy(p_xy)
+    mi_raw = max(0.0, h_x + h_y - h_xy)
+    denom = min(h_x, h_y)
+    if denom <= 0:
+        return 0.0
+    return float(np.clip(mi_raw / denom, 0.0, 1.0))
 
 
 def compute_mi(x: pd.Series, y: pd.Series, bins: int = 6) -> dict[str, float]:
@@ -71,6 +151,7 @@ def compute_mi(x: pd.Series, y: pd.Series, bins: int = 6) -> dict[str, float]:
     if n_samples < 3:
         return {
             "mi": np.nan,
+            "mi_raw": np.nan,
             "entropy_x": np.nan,
             "entropy_y": np.nan,
             "joint_entropy": np.nan,
@@ -84,14 +165,19 @@ def compute_mi(x: pd.Series, y: pd.Series, bins: int = 6) -> dict[str, float]:
     if n_binned < 3:
         return {
             "mi": np.nan,
+            "mi_raw": np.nan,
             "entropy_x": np.nan,
             "entropy_y": np.nan,
             "joint_entropy": np.nan,
             "n_samples": n_binned,
         }
 
-    p_x = binned["x_bin"].value_counts(normalize=True).to_numpy(dtype=float)
-    p_y = binned["y_bin"].value_counts(normalize=True).to_numpy(dtype=float)
+    p_x = (
+        binned["x_bin"].astype(str).value_counts(normalize=True).to_numpy(dtype=float)
+    )
+    p_y = (
+        binned["y_bin"].astype(str).value_counts(normalize=True).to_numpy(dtype=float)
+    )
     p_xy = (
         binned.groupby(["x_bin", "y_bin"], observed=True)
         .size()
@@ -102,13 +188,82 @@ def compute_mi(x: pd.Series, y: pd.Series, bins: int = 6) -> dict[str, float]:
     h_x = compute_entropy(p_x)
     h_y = compute_entropy(p_y)
     h_xy = compute_entropy(p_xy)
-    mi_value = float(max(0.0, h_x + h_y - h_xy))
+
+    mi_raw = float(max(0.0, h_x + h_y - h_xy))
+    denom = min(h_x, h_y)
+    if denom > 0.0:
+        mi_nmi = mi_raw / denom
+        mi_nmi = float(max(0.0, min(1.0, mi_nmi)))
+    else:
+        mi_nmi = np.nan
+
     return {
-        "mi": mi_value,
+        "mi": mi_nmi,
+        "mi_raw": mi_raw,
         "entropy_x": h_x,
         "entropy_y": h_y,
         "joint_entropy": h_xy,
         "n_samples": n_binned,
+    }
+
+
+def permutation_test_mi(
+    x: pd.Series,
+    y: pd.Series,
+    bins: int = 6,
+    n_perm: int = MI_PERM_N,
+    random_state: int | None = None,
+) -> dict[str, float]:
+    """Permutation test for NMI between x and y, returning empirical p-value."""
+    obs_stats = compute_mi(x, y, bins=bins)
+    mi_obs = obs_stats["mi"]
+    if not np.isfinite(mi_obs):
+        return {
+            "mi": mi_obs,
+            "mi_p_value": np.nan,
+            "mi_perm_mean": np.nan,
+            "mi_perm_p95": np.nan,
+        }
+
+    x_numeric = np.asarray(pd.to_numeric(x, errors="coerce"), dtype=float)
+    y_numeric = np.asarray(pd.to_numeric(y, errors="coerce"), dtype=float)
+    valid = np.isfinite(x_numeric) & np.isfinite(y_numeric)
+    x_valid = x_numeric[valid]
+    y_valid = y_numeric[valid].copy()
+    if y_valid.size < 3 or n_perm <= 0:
+        return {
+            "mi": mi_obs,
+            "mi_p_value": np.nan,
+            "mi_perm_mean": np.nan,
+            "mi_perm_p95": np.nan,
+        }
+
+    # 预计算 x 的 bins（permutation 中 x 不变）
+    x_bins = _discretize_numpy(x_valid, bins)
+    if np.any(x_bins < 0) or np.sum(x_bins >= 0) < 3:
+        return {
+            "mi": mi_obs,
+            "mi_p_value": np.nan,
+            "mi_perm_mean": np.nan,
+            "mi_perm_p95": np.nan,
+        }
+
+    rng = np.random.default_rng(random_state)
+    perm_vals = np.empty(n_perm, dtype=float)
+    for i in range(n_perm):
+        rng.shuffle(y_valid)
+        perm_vals[i] = _compute_mi_numpy(x_bins, y_valid, bins)
+
+    perm_vals_sorted = np.sort(perm_vals)
+    p_value = float((1.0 + np.sum(perm_vals >= mi_obs)) / (1.0 + n_perm))
+    perm_mean = float(np.mean(perm_vals))
+    perm_p95 = float(perm_vals_sorted[int(0.95 * (n_perm - 1))])
+
+    return {
+        "mi": mi_obs,
+        "mi_p_value": p_value,
+        "mi_perm_mean": perm_mean,
+        "mi_perm_p95": perm_p95,
     }
 
 
@@ -148,11 +303,21 @@ def set_paper_plot_style() -> None:
     )
 
 
-def plot_factor_mi_heatmap(mi_by_year: pd.DataFrame, output_png: Path) -> None:
+def plot_factor_mi_heatmap(
+    mi_by_year: pd.DataFrame,
+    output_png: Path,
+    factor_subset: list[str] | None = None,
+) -> None:
     if mi_by_year.empty:
         return
 
-    pivot = mi_by_year.pivot(index="factor", columns="year", values="mi").sort_index()
+    data = mi_by_year
+    if factor_subset is not None:
+        data = data[data["factor"].isin(set(factor_subset))].copy()
+    if data.empty:
+        return
+
+    pivot = data.pivot(index="factor", columns="year", values="mi").sort_index()
     if pivot.empty:
         return
 
@@ -192,13 +357,37 @@ def plot_factor_mi_heatmap(mi_by_year: pd.DataFrame, output_png: Path) -> None:
 
 def build_pairwise_mi_matrix(df: pd.DataFrame, variables: list[str], bins: int) -> pd.DataFrame:
     matrix = pd.DataFrame(np.nan, index=variables, columns=variables, dtype=float)
-    for i, var_i in enumerate(variables):
-        matrix.loc[var_i, var_i] = compute_mi(df[var_i], df[var_i], bins=bins)["mi"]
-        for j in range(i + 1, len(variables)):
-            var_j = variables[j]
-            mi_val = compute_mi(df[var_i], df[var_j], bins=bins)["mi"]
-            matrix.loc[var_i, var_j] = mi_val
-            matrix.loc[var_j, var_i] = mi_val
+    pairs = [(i, j) for i in range(len(variables)) for j in range(i, len(variables))]
+    for i, j in tqdm(pairs, desc="Pairwise MI matrix"):
+        var_i, var_j = variables[i], variables[j]
+        mi_val = compute_mi(df[var_i], df[var_j], bins=bins)["mi"]
+        matrix.loc[var_i, var_j] = mi_val
+        matrix.loc[var_j, var_i] = mi_val
+    return matrix
+
+
+def build_pairwise_mi_p_matrix(
+    df: pd.DataFrame,
+    variables: list[str],
+    bins: int,
+    n_perm: int = MI_PERM_N,
+) -> pd.DataFrame:
+    matrix = pd.DataFrame(np.nan, index=variables, columns=variables, dtype=float)
+    pairs = [(i, j) for i in range(len(variables)) for j in range(i + 1, len(variables))]
+    results = Parallel(n_jobs=MI_N_JOBS)(
+        delayed(permutation_test_mi)(
+            df[variables[i]],
+            df[variables[j]],
+            bins=bins,
+            n_perm=n_perm,
+        )
+        for i, j in tqdm(pairs, desc="Pairwise MI p-value")
+    )
+    for (i, j), stats in zip(pairs, results):
+        var_i, var_j = variables[i], variables[j]
+        p_val = stats["mi_p_value"]
+        matrix.loc[var_i, var_j] = p_val
+        matrix.loc[var_j, var_i] = p_val
     return matrix
 
 
@@ -242,54 +431,62 @@ def plot_pairwise_triangle_heatmap(matrix: pd.DataFrame, output_png: Path, title
 
 
 def build_panel(geo_module: Any) -> pd.DataFrame:
-    if USE_PANEL_CSV:
-        panel_csv = geo_module.resolve_existing_path(
-            PANEL_CSV_PATH,
-            path_desc="panel file",
+    def _load_panel() -> pd.DataFrame:
+        if USE_PANEL_CSV:
+            panel_csv = geo_module.resolve_existing_path(
+                PANEL_CSV_PATH,
+                path_desc="panel file",
+                fallback_candidates=[
+                    SCRIPT_DIR / "bth_panel.csv",
+                    geo_module.OUTPUT_DIR / "bth_panel_from_interfaces.csv",
+                ],
+            )
+            return pd.read_csv(panel_csv, encoding="utf-8-sig")
+
+        pm25_discovered = geo_module._discover_pm25_candidates(THESIS_DIR)  # pylint: disable=protected-access
+        pm25_csv_config = PM25_CITY_YEAR_CSV_PATH.expanduser().resolve()
+        if not pm25_csv_config.exists():
+            nc_dir = PM25_NC_DIR.expanduser()
+            city_geojson_dir = PM25_CITY_GEOJSON_DIR.expanduser()
+            geojson_dir_configured = str(PM25_CITY_GEOJSON_DIR).strip() not in {"", ".", ".\\"}
+            if geojson_dir_configured and nc_dir.exists() and city_geojson_dir.exists():
+                print("[INFO] PM2.5 city-year csv not found, building from NC + GeoJSON.")
+                pm25_city_year_df = geo_module.build_pm25_city_year_from_nc(
+                    nc_dir=nc_dir,
+                    city_geojson_dir=city_geojson_dir,
+                    target_cities=geo_module.BTH_CITIES,
+                )
+                pm25_csv_config.parent.mkdir(parents=True, exist_ok=True)
+                pm25_city_year_df.to_csv(pm25_csv_config, index=False, encoding="utf-8-sig")
+                print(f"[INFO] Generated PM2.5 city-year csv: {pm25_csv_config}")
+
+        pm25_csv = geo_module.resolve_existing_path(
+            PM25_CITY_YEAR_CSV_PATH,
+            path_desc="PM2.5 city-year file",
             fallback_candidates=[
-                SCRIPT_DIR / "bth_panel.csv",
-                geo_module.OUTPUT_DIR / "bth_panel_from_interfaces.csv",
+                SCRIPT_DIR / "inputs" / "pm25_city_year.csv",
+                *pm25_discovered,
             ],
         )
-        return pd.read_csv(panel_csv, encoding="utf-8-sig")
+        data_read_dir = geo_module.resolve_existing_path(
+            DATA_READ_DIR,
+            path_desc="Data Read directory",
+            fallback_candidates=[THESIS_DIR / "Data Read"],
+        )
+        p = geo_module.build_panel_from_interfaces(
+            data_read_dir=data_read_dir,
+            pm25_city_year_csv=pm25_csv,
+        )
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        p.to_csv(OUTPUT_DIR / "bth_panel_from_interfaces.csv", index=False, encoding="utf-8-sig")
+        return p
 
-    pm25_discovered = geo_module._discover_pm25_candidates(THESIS_DIR)  # pylint: disable=protected-access
-    pm25_csv_config = PM25_CITY_YEAR_CSV_PATH.expanduser().resolve()
-    if not pm25_csv_config.exists():
-        nc_dir = PM25_NC_DIR.expanduser()
-        city_geojson_dir = PM25_CITY_GEOJSON_DIR.expanduser()
-        geojson_dir_configured = str(PM25_CITY_GEOJSON_DIR).strip() not in {"", ".", ".\\"}
-        if geojson_dir_configured and nc_dir.exists() and city_geojson_dir.exists():
-            print("[INFO] PM2.5 city-year csv not found, building from NC + GeoJSON.")
-            pm25_city_year_df = geo_module.build_pm25_city_year_from_nc(
-                nc_dir=nc_dir,
-                city_geojson_dir=city_geojson_dir,
-                target_cities=geo_module.BTH_CITIES,
-            )
-            pm25_csv_config.parent.mkdir(parents=True, exist_ok=True)
-            pm25_city_year_df.to_csv(pm25_csv_config, index=False, encoding="utf-8-sig")
-            print(f"[INFO] Generated PM2.5 city-year csv: {pm25_csv_config}")
-
-    pm25_csv = geo_module.resolve_existing_path(
-        PM25_CITY_YEAR_CSV_PATH,
-        path_desc="PM2.5 city-year file",
-        fallback_candidates=[
-            SCRIPT_DIR / "inputs" / "pm25_city_year.csv",
-            *pm25_discovered,
-        ],
-    )
-    data_read_dir = geo_module.resolve_existing_path(
-        DATA_READ_DIR,
-        path_desc="Data Read directory",
-        fallback_candidates=[THESIS_DIR / "Data Read"],
-    )
-    panel = geo_module.build_panel_from_interfaces(
-        data_read_dir=data_read_dir,
-        pm25_city_year_csv=pm25_csv,
-    )
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    panel.to_csv(OUTPUT_DIR / "bth_panel_from_interfaces.csv", index=False, encoding="utf-8-sig")
-    return panel
+    config = {
+        "region": "BTH",
+        "use_panel_csv": USE_PANEL_CSV,
+        "pm25_csv": str(PM25_CITY_YEAR_CSV_PATH.expanduser().resolve()),
+    }
+    return load_df_cached("bth_panel", _load_panel, {}, config)
 
 
 def main() -> int:
@@ -325,12 +522,40 @@ def main() -> int:
 
     overall = panel.dropna(subset=["pm25"]).copy()
     factor_mi = run_factor_mi(overall, y_col="pm25", factor_cols=factor_cols, bins=DISCRETIZE_BINS)
+    if not factor_mi.empty:
+        factors_list = factor_mi["factor"].astype(str).tolist()
+        results = Parallel(n_jobs=MI_N_JOBS)(
+            delayed(permutation_test_mi)(
+                overall[factor],
+                overall["pm25"],
+                bins=DISCRETIZE_BINS,
+                n_perm=MI_PERM_N,
+            )
+            for factor in tqdm(factors_list, desc="Factor MI p-value")
+        )
+        factor_mi["mi_p_value"] = [r["mi_p_value"] for r in results]
+        factor_mi["mi_significant"] = factor_mi["mi_p_value"] <= MI_PERM_ALPHA
 
     by_year_rows: list[pd.DataFrame] = []
-    for year, sub_df in overall.groupby("year", observed=True):
+    year_groups = list(overall.groupby("year", observed=True))
+    for year, sub_df in tqdm(year_groups, desc="MI by year"):
         if sub_df["city"].nunique() < 3:
             continue
         year_mi = run_factor_mi(sub_df, y_col="pm25", factor_cols=factor_cols, bins=DISCRETIZE_BINS)
+        if year_mi.empty:
+            continue
+        factors_year = year_mi["factor"].astype(str).tolist()
+        results_year = Parallel(n_jobs=MI_N_JOBS)(
+            delayed(permutation_test_mi)(
+                sub_df[factor],
+                sub_df["pm25"],
+                bins=DISCRETIZE_BINS,
+                n_perm=MI_PERM_N,
+            )
+            for factor in factors_year
+        )
+        year_mi["mi_p_value"] = [r["mi_p_value"] for r in results_year]
+        year_mi["mi_significant"] = year_mi["mi_p_value"] <= MI_PERM_ALPHA
         year_mi["year"] = int(year)
         by_year_rows.append(year_mi)
     mi_by_year = pd.concat(by_year_rows, ignore_index=True) if by_year_rows else pd.DataFrame()
@@ -339,13 +564,36 @@ def main() -> int:
     factor_mi.to_csv(OUTPUT_DIR / "bth_mi_factor.csv", index=False, encoding="utf-8-sig")
     mi_by_year.to_csv(OUTPUT_DIR / "bth_mi_factor_by_year.csv", index=False, encoding="utf-8-sig")
     plot_factor_mi_heatmap(mi_by_year, OUTPUT_DIR / "bth_mi_factor_heatmap.png")
+    if not mi_by_year.empty:
+        factor_rank = (
+            mi_by_year.groupby("factor", as_index=False)["mi"]
+            .mean()
+            .sort_values("mi", ascending=False)
+        )
+        all_factors = factor_rank["factor"].tolist()
+        if all_factors:
+            mid = max(1, len(all_factors) // 2)
+            factors_top, factors_bottom = all_factors[:mid], all_factors[mid:]
+            plot_factor_mi_heatmap(
+                mi_by_year,
+                OUTPUT_DIR / "bth_mi_factor_heatmap_top.png",
+                factor_subset=factors_top,
+            )
+            if factors_bottom:
+                plot_factor_mi_heatmap(
+                    mi_by_year,
+                    OUTPUT_DIR / "bth_mi_factor_heatmap_bottom.png",
+                    factor_subset=factors_bottom,
+                )
     pairwise_vars = ["pm25", *factor_cols]
     pairwise_mi = build_pairwise_mi_matrix(overall, variables=pairwise_vars, bins=DISCRETIZE_BINS)
+    pairwise_p = build_pairwise_mi_p_matrix(overall, variables=pairwise_vars, bins=DISCRETIZE_BINS)
     plot_pairwise_triangle_heatmap(
         pairwise_mi,
         OUTPUT_DIR / "bth_mi_pairwise_triangle_heatmap.png",
         title="BTH Pairwise MI Triangle Heatmap",
     )
+    pairwise_p.to_csv(OUTPUT_DIR / "bth_mi_pairwise_p_matrix.csv", index=True, encoding="utf-8-sig")
 
     print("=" * 80)
     print("[INFO] BTH Mutual Information analysis completed")

@@ -5,6 +5,10 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+AUTO_RUN_DIR = Path(__file__).resolve().parent / "Auto-run"
+sys.path.insert(0, str(AUTO_RUN_DIR))
+from data_cache import load_df_cached
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
@@ -112,10 +116,20 @@ def _resolve_pm25_csv_for_region(base, target_cities: list[str], region_label: s
     return pm25_csv
 
 
-def _plot_factor_heatmap_region(base, q_by_year: pd.DataFrame, output_png: Path) -> None:
+def _plot_factor_heatmap_region(
+    base,
+    q_by_year: pd.DataFrame,
+    output_png: Path,
+    factor_subset: list[str] | None = None,
+) -> None:
     if q_by_year.empty:
         return
-    pivot = q_by_year.pivot(index="factor", columns="year", values="q").sort_index()
+    data = q_by_year
+    if factor_subset is not None:
+        data = data[data["factor"].isin(set(factor_subset))].copy()
+    if data.empty:
+        return
+    pivot = data.pivot(index="factor", columns="year", values="q").sort_index()
     cmap = base.build_soft_blue_red_cmap()
     base._paper_plot_style()
     cell_size = 0.55
@@ -210,19 +224,32 @@ def main() -> int:
     output_dir = OUTPUT_DIR.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if USE_PANEL_CSV:
-        panel_csv = base.resolve_existing_path(
-            PANEL_CSV_PATH,
-            path_desc="面板文件",
-            fallback_candidates=[SCRIPT_DIR / "prd_panel.csv", OUTPUT_DIR / "prd_panel_from_interfaces.csv"],
-        )
-        panel = pd.read_csv(panel_csv, encoding="utf-8-sig")
-    else:
+    def _load_panel() -> pd.DataFrame:
+        if USE_PANEL_CSV:
+            panel_csv = base.resolve_existing_path(
+                PANEL_CSV_PATH,
+                path_desc="面板文件",
+                fallback_candidates=[SCRIPT_DIR / "prd_panel.csv", OUTPUT_DIR / "prd_panel_from_interfaces.csv"],
+            )
+            return pd.read_csv(panel_csv, encoding="utf-8-sig")
         pm25_csv = _resolve_pm25_csv_for_region(base, PRD_CITIES, "PRD")
-        panel = base.build_panel_from_interfaces(
+        p = base.build_panel_from_interfaces(
             data_read_dir=base.resolve_existing_path(DATA_READ_DIR, "Data Read 目录", [THESIS_DIR / "Data Read"]),
             pm25_city_year_csv=pm25_csv,
         )
+        p.to_csv(output_dir / "prd_panel_from_interfaces.csv", index=False, encoding="utf-8-sig")
+        return p
+
+    if USE_PANEL_CSV:
+        panel = _load_panel()
+    else:
+        config = {
+            "region": "PRD",
+            "use_panel_csv": USE_PANEL_CSV,
+            "pm25_csv": str(PM25_CITY_YEAR_CSV_PATH.expanduser().resolve()),
+            "target_cities": sorted(PRD_CITIES),
+        }
+        panel = load_df_cached("prd_panel", _load_panel, {}, config)
         panel.to_csv(output_dir / "prd_panel_from_interfaces.csv", index=False, encoding="utf-8-sig")
 
     panel.columns = [str(c).strip() for c in panel.columns]
@@ -255,6 +282,25 @@ def main() -> int:
     inter_q.to_csv(output_dir / "prd_interaction_detector.csv", index=False, encoding="utf-8-sig")
     q_by_year.to_csv(output_dir / "prd_factor_q_by_year.csv", index=False, encoding="utf-8-sig")
     _plot_factor_heatmap_region(base, q_by_year, output_dir / "prd_factor_q_heatmap.png")
+    if not q_by_year.empty:
+        factor_rank = (
+            q_by_year.groupby("factor", as_index=False)["q"]
+            .mean()
+            .sort_values("q", ascending=False)
+        )
+        all_factors = factor_rank["factor"].tolist()
+        if all_factors:
+            mid = max(1, len(all_factors) // 2)
+            factors_top, factors_bottom = all_factors[:mid], all_factors[mid:]
+            _plot_factor_heatmap_region(
+                base, q_by_year, output_dir / "prd_factor_q_heatmap_top.png",
+                factor_subset=factors_top,
+            )
+            if factors_bottom:
+                _plot_factor_heatmap_region(
+                    base, q_by_year, output_dir / "prd_factor_q_heatmap_bottom.png",
+                    factor_subset=factors_bottom,
+                )
     _plot_interaction_heatmap_region(base, inter_q, output_dir / "prd_interaction_q_heatmap.png")
 
     print("=" * 80)
