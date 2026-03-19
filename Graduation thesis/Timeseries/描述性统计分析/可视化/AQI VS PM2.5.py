@@ -17,12 +17,12 @@ START_YEAR = 2018
 END_YEAR = 2023
 ABS_TOL = 1e-6
 
-OUTPUT_DIR = r"H:\DATA Science\大论文Result\大论文图\三大城市群\AQI VS PM2.5"
+OUTPUT_DIR = r"H:\大论文Result\大论文图\三大城市群\AQI VS PM2.5"
 
 REGION_PATHS = {
-    "BTH": r"H:\DATA Science\大论文Result\BTH\filtered_daily",
-    "YRD": r"H:\DATA Science\大论文Result\YRD\filtered_daily",
-    "PRD": r"H:\DATA Science\大论文Result\PRD\filtered_daily",
+    "BTH": r"H:\大论文Result\BTH\filtered_daily",
+    "YRD": r"H:\大论文Result\YRD\filtered_daily",
+    "PRD": r"H:\大论文Result\PRD\filtered_daily",
 }
 
 META_COLS = {"__file__", "__missing_cols__"}

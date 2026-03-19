@@ -59,7 +59,7 @@ def safe_print(message: str) -> None:
 
 def main() -> None:
     # 数据路径
-    city_pm25_csv_path = r"H:\DATA Science\大论文Result\三大城市群（市）年度PM2.5浓度.csv"
+    city_pm25_csv_path = r"H:\大论文Result\三大城市群（市）年度PM2.5浓度.csv"
 
     # 三大城市群映射（按你给出的分组）
     cluster_cities = {
