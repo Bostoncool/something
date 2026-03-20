@@ -8,7 +8,7 @@ plt.rcParams['font.serif'] = ['Times New Roman']
 plt.rcParams['font.size'] = 10
 
 # 读取数据
-xgboost_df = pd.read_csv(r"E:\DATA Science\小论文Result\Fine_model\-XGBOOST\XGBOOST\plot_feature_importance_top20__xgboost_optimized.csv")
+xgboost_df = pd.read_csv(r"E:\小论文Result\Fine_model\-XGBOOST\XGBOOST\plot_feature_importance_top20__xgboost_optimized.csv")
 
 # 定义特征分类函数
 def classify_feature(feature_name):

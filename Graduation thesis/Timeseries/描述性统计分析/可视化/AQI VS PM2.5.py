@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Tuple
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -63,6 +64,93 @@ REGION_LABELS = {
 # 论文统一配色（ColorBrewer Set2 / 莫兰迪风格）
 COLOR_PM25_PRIMARY = "#66c2a5"  # 柔和青绿
 COLOR_OTHER_POLLUTED = "#8da0cb"  # 柔和灰蓝
+
+# 化学式下标：与中文混排时用 Unicode 下标，勿用 mathtext 的 $...$（见 plot 函数说明）
+PM25_UNICODE = "PM\u2082.\u2085"
+
+# 部分环境下 matplotlib 未索引 C:\Windows\Fonts 下的楷体/雅黑，导致 "KaiTi" 等名称解析失败；
+# 与《中文字体显示问题排查指南》一致：优先固定可解析的字体链，并在 Windows 上按需 addfont。
+_WINDOWS_FONT_FILES_REGISTERED = False
+
+
+def _register_windows_font_files_once() -> None:
+    global _WINDOWS_FONT_FILES_REGISTERED
+    if _WINDOWS_FONT_FILES_REGISTERED or os.name != "nt":
+        return
+    fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    for fname in (
+        "simkai.ttf",
+        "simkai.ttc",
+        "msyh.ttc",
+        "msyhbd.ttc",
+        "simhei.ttf",
+        "simsun.ttc",
+        "simsunb.ttf",
+    ):
+        fp = fonts_dir / fname
+        if not fp.is_file():
+            continue
+        try:
+            mpl.font_manager.fontManager.addfont(str(fp))
+        except (OSError, ValueError, RuntimeError):
+            continue
+    _WINDOWS_FONT_FILES_REGISTERED = True
+
+
+def _font_family_resolves(family: str) -> bool:
+    fm = mpl.font_manager.fontManager
+    try:
+        path = fm.findfont(
+            mpl.font_manager.FontProperties(family=family),
+            fallback_to_default=False,
+        )
+    except ValueError:
+        return False
+    return bool(path and os.path.isfile(path))
+
+
+def build_thesis_figure_font_family() -> list[str]:
+    """英文优先 Times New Roman，中文优先 KaiTi（及常见别名），与排查指南中的雅黑/黑体/宋体链兼容。"""
+    _register_windows_font_files_once()
+    ordered: list[str] = []
+
+    def append_if_new(name: str) -> None:
+        if name not in ordered and _font_family_resolves(name):
+            ordered.append(name)
+
+    for name in ("Times New Roman", "Times"):
+        append_if_new(name)
+        if ordered:
+            break
+
+    for name in (
+        "KaiTi",
+        "STKaiti",
+        "DFKai-SB",
+        "FZKai-Z03",
+        "楷体",
+        "Microsoft YaHei",
+        "SimHei",
+        "SimSun",
+        "Arial Unicode MS",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+    ):
+        append_if_new(name)
+
+    # 已注册 simkai 但 family 名仍非上述别名时，从 ttflist 按路径兜底
+    if not any(
+        x in ordered
+        for x in ("KaiTi", "STKaiti", "DFKai-SB", "FZKai-Z03", "楷体")
+    ):
+        for font in mpl.font_manager.fontManager.ttflist:
+            if "simkai" in font.fname.replace("\\", "/").lower():
+                if font.name not in ordered:
+                    ordered.insert(1 if ordered else 0, font.name)
+                break
+
+    append_if_new("DejaVu Sans")
+    return ordered if ordered else ["DejaVu Sans"]
 
 
 @dataclass
@@ -276,8 +364,8 @@ def print_region_result(region_name: str, stats_by_city: Dict[str, CityStats]) -
         f"[{region_name}] "
         f"城市数: {len(stats_by_city):,} | "
         f"有效AQI观测数: {valid_aqi_obs:,} | "
-        f"污染时刻(AQI>100): {polluted_total:,} | "
-        f"AQI>100占比: {polluted_ratio_text} | "
+        f"污染时刻(AQI > 100): {polluted_total:,} | "
+        f"AQI > 100占比: {polluted_ratio_text} | "
         f"PM2.5为首要占比: {pm25_ratio_text}"
     )
 
@@ -294,8 +382,8 @@ def build_city_results_df(all_results: Dict[str, Dict[str, CityStats]]) -> pd.Da
                     "区域": REGION_LABELS.get(region_name, region_name),
                     "城市": city_name,
                     "有效AQI观测数": stats.valid_aqi_obs,
-                    "污染时刻数(AQI>100)": stats.polluted_total,
-                    "AQI>100占所有有效AQI数据占比": (
+                    "污染时刻数(AQI > 100)": stats.polluted_total,
+                    "AQI > 100占所有有效AQI数据占比": (
                         polluted_ratio if not np.isnan(polluted_ratio) else None
                     ),
                     "可判断首要污染物数": stats.judged_total,
@@ -342,70 +430,81 @@ def plot_aqi_polluted_ratio_by_region(
     pm25_plot = [value if not np.isnan(value) else 0.0 for value in pm25_ratios]
     other_polluted_plot = [max(aqi - pm25, 0.0) for aqi, pm25 in zip(aqi_plot, pm25_plot)]
 
-    plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
-    plt.rcParams["axes.unicode_minus"] = False
+    # 具体字体名列表 + 多文件回退（Agg）；Windows 上先注册系统字体文件，避免 KaiTi/SimHei 解析不到。
+    figure_rc = {
+        "font.family": build_thesis_figure_font_family(),
+        "axes.unicode_minus": False,
+    }
 
-    fig_width = max(10, len(labels) * 0.5)
-    fig, ax = plt.subplots(figsize=(fig_width, 6))
-    bars_pm25 = ax.bar(
-        labels,
-        [value * 100 for value in pm25_plot],
-        color=COLOR_PM25_PRIMARY,
-        label="PM2.5为首要污染物（占有效AQI）",
-    )
-    bars_other = ax.bar(
-        labels,
-        [value * 100 for value in other_polluted_plot],
-        bottom=[value * 100 for value in pm25_plot],
-        color=COLOR_OTHER_POLLUTED,
-        label="其他AQI>100污染（占有效AQI）",
-    )
-
-    for idx, (bar_pm25, bar_other, aqi_ratio, pm25_ratio) in enumerate(
-        zip(bars_pm25, bars_other, aqi_ratios, pm25_ratios)
-    ):
-        if np.isnan(aqi_ratio):
-            continue
-        total_height = (pm25_plot[idx] + other_polluted_plot[idx]) * 100
-        text = f"{aqi_ratio:.1%}"
-        ax.text(
-            bar_pm25.get_x() + bar_pm25.get_width() / 2,
-            total_height + 0.8,
-            text,
-            ha="center",
-            va="bottom",
-            fontsize=9,
+    with mpl.rc_context(figure_rc):
+        fig_width = max(10, len(labels) * 0.5)
+        fig, ax = plt.subplots(figsize=(fig_width, 6))
+        bars_pm25 = ax.bar(
+            labels,
+            [value * 100 for value in pm25_plot],
+            color=COLOR_PM25_PRIMARY,
+            label=PM25_UNICODE + "为首要污染物（占有效AQI）",
         )
-        if not np.isnan(pm25_ratio) and pm25_plot[idx] >= 0.01:
+        bars_other = ax.bar(
+            labels,
+            [value * 100 for value in other_polluted_plot],
+            bottom=[value * 100 for value in pm25_plot],
+            color=COLOR_OTHER_POLLUTED,
+            label="其他AQI > 100污染（占有效AQI）",
+        )
+
+        for idx, (bar_pm25, bar_other, aqi_ratio, pm25_ratio) in enumerate(
+            zip(bars_pm25, bars_other, aqi_ratios, pm25_ratios)
+        ):
+            if np.isnan(aqi_ratio):
+                continue
+            total_height = (pm25_plot[idx] + other_polluted_plot[idx]) * 100
+            text = f"{aqi_ratio:.1%}"
             ax.text(
                 bar_pm25.get_x() + bar_pm25.get_width() / 2,
-                (pm25_plot[idx] * 100) / 2,
-                f"{pm25_ratio:.1%}",
+                total_height + 0.8,
+                text,
                 ha="center",
-                va="center",
-                fontsize=8,
-                color="#2d5a4a",
+                va="bottom",
+                fontsize=9,
             )
+            if not np.isnan(pm25_ratio) and pm25_plot[idx] >= 0.01:
+                ax.text(
+                    bar_pm25.get_x() + bar_pm25.get_width() / 2,
+                    (pm25_plot[idx] * 100) / 2,
+                    f"{pm25_ratio:.1%}",
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                    color="#2d5a4a",
+                )
 
-    ax.set_ylabel("占所有有效AQI数据占比 (%)", fontsize=12)
-    ax.set_title(
-        f"{START_YEAR}-{END_YEAR} {REGION_LABELS.get(region_name, region_name)} 各城市AQI>100及PM2.5首要占比",
-        fontsize=13,
-    )
-    ax.legend(loc="upper right", fontsize=9)
-    max_height = max(aqi_plot) * 100 if aqi_plot else 0
-    ax.set_ylim(0, max(10, max_height * 1.15 + 3))
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.tick_params(axis="x", rotation=60, labelsize=9)
-    plt.tight_layout()
+        ax.set_ylabel("占所有有效AQI数据占比 (%)", fontsize=12)
+        region_label = REGION_LABELS.get(region_name, region_name)
+        ax.set_title(
+            f"{START_YEAR}-{END_YEAR} {region_label}\n各城市AQI > 100及{PM25_UNICODE}首要占比",
+            fontsize=13,
+        )
+        ax.legend(loc="upper right", fontsize=9)
+        max_height_pct = max(aqi_plot) * 100 if aqi_plot else 0.0
+        if max_height_pct <= 0:
+            y_upper = 5.0
+        else:
+            # 随数据上限伸缩，避免小占比区域（如珠三角）被强制拉到 10% 显得柱子过矮
+            y_upper = max_height_pct * 1.18 + max(1.0, max_height_pct * 0.05)
+        ax.set_ylim(0, y_upper)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.tick_params(axis="x", rotation=60, labelsize=9)
+        plt.tight_layout()
 
-    region_tag = region_name.lower()
-    png_path = out_dir / f"{region_tag}_各城市AQI大于100占比.png"
-    svg_path = out_dir / f"{region_tag}_各城市AQI大于100占比.svg"
-    fig.savefig(png_path, dpi=300, bbox_inches="tight")
-    fig.savefig(svg_path, format="svg", bbox_inches="tight")
-    plt.close()
+        region_tag = region_name.lower()
+        png_path = out_dir / f"{region_tag}_各城市AQI大于100占比.png"
+        svg_path = out_dir / f"{region_tag}_各城市AQI大于100占比.svg"
+        fig.savefig(png_path, dpi=300, bbox_inches="tight")
+        fig.savefig(svg_path, format="svg", bbox_inches="tight")
+        plt.close()
+
     print(f"统计图已保存: {png_path}")
     print(f"统计图已保存: {svg_path}")
 

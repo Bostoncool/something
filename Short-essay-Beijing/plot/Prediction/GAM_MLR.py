@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.dates import MonthLocator, DateFormatter
 
 # CSV file path
-path = r"E:\DATA Science\小论文Result\Fine_model\-MLR_GAM\Split2\output\predictions_optimized.csv"
+path = r"E:\小论文Result\Fine_model\-MLR_GAM\Split2\output\predictions_optimized.csv"
 
 # Read CSV
 df = pd.read_csv(path)

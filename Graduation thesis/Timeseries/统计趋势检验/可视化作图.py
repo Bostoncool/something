@@ -16,7 +16,7 @@ from scipy import stats
 # =========================
 # 路径配置（按需修改）
 # =========================
-OUTPUT_DIR = r"H:\DATA Science\大论文Result\大论文图\三大城市群\统计趋势检验"
+OUTPUT_DIR = r"H:\大论文Result\大论文图\三大城市群\统计趋势检验"
 
 
 def safe_print(*args, **kwargs) -> None:

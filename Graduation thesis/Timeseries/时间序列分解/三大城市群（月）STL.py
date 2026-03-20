@@ -281,8 +281,8 @@ def main():
     safe_print("三大城市群（月）PM2.5 STL 分解分析")
     safe_print("=" * 60)
 
-    input_csv = r"H:\DATA Science\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
-    output_dir = r"H:\DATA Science\大论文Result\大论文图\三大城市群\STL时间序列分解"
+    input_csv = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
+    output_dir = r"H:\大论文Result\大论文图\三大城市群\STL时间序列分解"
     os.makedirs(output_dir, exist_ok=True)
 
     city_cluster_map = get_city_cluster_map()

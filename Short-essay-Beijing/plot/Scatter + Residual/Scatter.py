@@ -213,7 +213,7 @@ def make_plot(
 
 if __name__ == "__main__":
     # 修改为你的文件
-    csv_file = r"E:\DATA Science\小论文Result\Fine_model\-MLR_GAM\CSV\output\plot_scatter__mlr.csv"
+    csv_file = r"E:\小论文Result\Fine_model\-MLR_GAM\CSV\output\plot_scatter__mlr.csv"
 
     # ✅ 方案1：hexbin（强烈推荐：点很密集时最清晰）
     # make_plot(

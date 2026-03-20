@@ -81,9 +81,9 @@ def plot_single_cluster_monthly_series(
 def main() -> None:
     # 数据路径
     csv_paths = {
-        "京津冀城市群(BTH)": r"H:\DATA Science\大论文Result\BTH\描述性统计分析\Monthly_Means.csv",
-        "长江三角洲城市群(YRD)": r"H:\DATA Science\大论文Result\YRD\描述性统计分析\Monthly_Means.csv",
-        "珠江三角洲城市群(PRD)": r"H:\DATA Science\大论文Result\PRD\描述性统计分析\Monthly_Means.csv",
+        "京津冀城市群(BTH)": r"H:大论文Result\BTH\描述性统计分析\Monthly_Means.csv",
+        "长江三角洲城市群(YRD)": r"H:\大论文Result\YRD\描述性统计分析\Monthly_Means.csv",
+        "珠江三角洲城市群(PRD)": r"H:\大论文Result\PRD\描述性统计分析\Monthly_Means.csv",
     }
 
     # 字体设置

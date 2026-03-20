@@ -12,9 +12,9 @@ import pandas as pd
 
 # 路径常量
 EXCEL_PATH = Path(
-    r"h:\DATA Science\大论文Result\大论文图\机器学习结果\评价指标docs\合并文件.xlsx"
+    r"h:\大论文Result\大论文图\机器学习结果\评价指标docs\合并文件.xlsx"
 )
-OUTPUT_DIR = Path(r"H:\DATA Science\大论文Result\大论文图\机器学习结果\评价指标docs")
+OUTPUT_DIR = Path(r"H:\大论文Result\大论文图\机器学习结果\评价指标docs")
 OUTPUT_CSV = OUTPUT_DIR / "test_statistic_top5_by_region.csv"
 FIG_DPI = 300
 

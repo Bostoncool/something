@@ -284,9 +284,9 @@ def monthly_analysis_main(file_path, city_group_path=None):
 # ====================== 6. 运行分析 ======================
 if __name__ == "__main__":
     # 数据文件路径（城市级月均PM2.5宽表：城市 + 201801/2018-01 等月份列）
-    data_file_path = r"H:\DATA Science\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
+    data_file_path = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
     # 城市归属文件（城市 -> 城市群 映射，用于聚合）
-    city_group_path = r"H:\DATA Science\大论文Result\大论文图\三大城市群\MSTL时间序列分解\城市归属_三大城市群.csv"
+    city_group_path = r"H:\大论文Result\大论文图\三大城市群\MSTL时间序列分解\城市归属_三大城市群.csv"
 
     # 执行分析
     analysis_results = monthly_analysis_main(data_file_path, city_group_path)

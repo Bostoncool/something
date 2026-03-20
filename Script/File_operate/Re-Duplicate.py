@@ -39,7 +39,7 @@ def remove_nested_folders(base_path):
             continue
 
 # 指定需要处理的路径
-base_path = r"H:\DATA Science\Datebase Origin"
+base_path = r"H:\Datebase Origin"
 remove_nested_folders(base_path)
 
 print("Processing complete.")

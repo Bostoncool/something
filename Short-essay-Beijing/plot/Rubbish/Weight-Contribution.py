@@ -26,8 +26,8 @@ COLORS = [
 # ======================
 # 1. Parameter Settings (Modifiable)
 # ======================
-csv_path = r"H:\DATA Science\小论文Result\Fine_model\-XGBOOST\XGBOOST\plot_feature_importance__xgboost_optimized.csv"
-output_dir = r"H:\DATA Science\小论文Result\Weight"  # 图片输出目录
+csv_path = r"H:\小论文Result\Fine_model\-XGBOOST\XGBOOST\plot_feature_importance__xgboost_optimized.csv"
+output_dir = r"H:\小论文Result\Weight"  # 图片输出目录
 top_n = 10                     # Maximum number of features to display
 
 # 确保输出目录存在

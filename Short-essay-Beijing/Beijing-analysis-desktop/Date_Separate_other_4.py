@@ -36,7 +36,7 @@ for year in range(2015, 2025): # 左闭右开
 
     # 设定该年份的文件夹路径
     # path_name = fr"C:\Users\IU\Desktop\Beijing-AQI-Date\beijing_{year}0101-{year}1231\all"
-    path_name = fr"E:\DATA Science\Datebase Origin\Date\beijing_{year}0101-{year}1231\extra"
+    path_name = fr"E:\Datebase Origin\Date\beijing_{year}0101-{year}1231\extra"
     folder_path = os.path.join(path_name)
 
     # 检查文件夹是否存在

@@ -14,7 +14,7 @@ from scipy import stats
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 # 配置路径
-DATA_DIR = Path(r"h:\DATA Science\大论文Result\大论文图\机器学习结果\adaboost_daily_pm25\bth")
+DATA_DIR = Path(r"h:\大论文Result\大论文图\机器学习结果\adaboost_daily_pm25\bth")
 REGRESSION_FILE = DATA_DIR / "regression_test_data.csv"
 METRICS_FILE = DATA_DIR / "metrics_overall.csv"
 OUTPUT_DIR = Path(__file__).resolve().parent

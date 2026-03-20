@@ -598,10 +598,10 @@ def main():
 
     # 设置原始CSV文件所在文件夹路径
     # 参考BTH-月度变化.py的输入路径
-    input_folder = r"H:\DATA Science\大论文Result\BTH\filtered_daily"
+    input_folder = r"H:\大论文Result\BTH\filtered_daily"
 
     # 设置输出目录
-    output_dir = r"H:\DATA Science\大论文Result\BTH\STL时间序列分解"
+    output_dir = r"H:\大论文Result\BTH\STL时间序列分解"
 
     # 检查输入文件夹是否存在
     if not os.path.exists(input_folder):

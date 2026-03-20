@@ -388,10 +388,10 @@ def print_summary(sliding_t_results, years):
 # 主程序
 if __name__ == "__main__":
     # 设置文件夹路径（根据您的实际情况修改）
-    folder_path = r"E:\DATA Science\大论文Result\BTH\filtered_daily"
+    folder_path = r"E:\大论文Result\BTH\filtered_daily"
 
     # 输出目录路径
-    output_dir = r"E:\DATA Science\大论文Result\BTH\统计趋势检验"
+    output_dir = r"E:\大论文Result\BTH\统计趋势检验"
 
     # 设置滑动窗口大小（None表示自动计算，也可以指定具体数字，如3或5）
     window_size = None

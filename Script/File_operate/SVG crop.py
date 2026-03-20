@@ -22,8 +22,8 @@ except ImportError:
 
 
 # ============ 在此直接配置要裁切的路径 ============
-INPUT_FOLDER = r"H:\DATA Science\大论文Result\大论文图\三大城市群\三大城市群_（年）莫兰结果\China_combined_yearly_maps"  # 输入文件夹   
-OUTPUT_FOLDER = r"H:\DATA Science\大论文Result\大论文图\三大城市群\三大城市群_（年）莫兰结果\China_combined_yearly_maps_cropped"  # 输出文件夹，None 表示与输入相同（覆盖原文件）
+INPUT_FOLDER = r"H:\大论文Result\大论文图\三大城市群\三大城市群_（年）莫兰结果\China_combined_yearly_maps"  # 输入文件夹   
+OUTPUT_FOLDER = r"H:\大论文Result\大论文图\三大城市群\三大城市群_（年）莫兰结果\China_combined_yearly_maps_cropped"  # 输出文件夹，None 表示与输入相同（覆盖原文件）
 PADDING = 0 # 内边距比例，0 表示无内边距
 # ================================================
 

@@ -531,8 +531,8 @@ def main():
     print("PM2.5 Time Series MSTL Decomposition Analysis")
     print("=" * 60)
 
-    input_folder = r"H:\DATA Science\大论文Result\BTH\filtered_daily"
-    output_dir = r"H:\DATA Science\大论文Result\BTH\MSTL时间序列分解"
+    input_folder = r"H:\大论文Result\BTH\filtered_daily"
+    output_dir = r"H:\大论文Result\BTH\MSTL时间序列分解"
 
     # 你当前脚本是“月度序列”，推荐先用(12,)
     # 若后续改为“日度序列”，可改为(7, 365)

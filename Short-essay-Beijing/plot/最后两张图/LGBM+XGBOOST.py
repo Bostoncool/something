@@ -14,8 +14,8 @@ plt.rcParams['font.family'] = 'Times New Roman'
 plt.rcParams['font.size'] = 11
 
 # ====== 1) Read two feature importance files ======
-xgb_path = r"H:\DATA Science\小论文Result\Fine_model\-XGBOOST\XGBOOST\plot_feature_importance__xgboost_optimized.csv"
-lgb_path = r"H:\DATA Science\小论文Result\Fine_model\-LightGBM\Split2\output\feature_importance.csv"
+xgb_path = r"H:\小论文Result\Fine_model\-XGBOOST\XGBOOST\plot_feature_importance__xgboost_optimized.csv"
+lgb_path = r"H:\小论文Result\Fine_model\-LightGBM\Split2\output\feature_importance.csv"
 
 xgb = pd.read_csv(xgb_path)
 lgb = pd.read_csv(lgb_path)

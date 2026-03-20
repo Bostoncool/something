@@ -18,11 +18,11 @@ from shapely.geometry import box
 
 
 DEFAULT_GEOJSON_DIRS = {
-    "BTH": r"H:\DATA Science\大论文Result\大论文图\2.京津冀\具体城市（区分辨率）",
-    "YRD": r"H:\DATA Science\大论文Result\大论文图\3.长三角\具体城市（区分辨率）",
-    "PRD": r"H:\DATA Science\大论文Result\大论文图\4.珠三角\具体城市（区分辨率）",
+    "BTH": r"H:\大论文Result\大论文图\2.京津冀\具体城市（区分辨率）",
+    "YRD": r"H:\大论文Result\大论文图\3.长三角\具体城市（区分辨率）",
+    "PRD": r"H:\大论文Result\大论文图\4.珠三角\具体城市（区分辨率）",
 }
-DEFAULT_CHINA_GEOJSON = r"H:\DATA Science\大论文Result\大论文图\1.总图\中国（市）.geojson"
+DEFAULT_CHINA_GEOJSON = r"H:\大论文Result\大论文图\1.总图\中国（市）.geojson"
 DEFAULT_PM25_NC_DIR = r"G:\2000-2023[PM2.5-china]\Year"
 DEFAULT_YEARS = list(range(2018, 2024))
 FIG_DPI = 300

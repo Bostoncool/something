@@ -38,7 +38,7 @@ except ImportError:
 
 # 数据根目录（包含 CSV 文件的目录）
 # TODO: 改成你的真实数据路径
-INPUT_ROOT = Path(r"E:\DATA Science\大论文Result\PRD")  # 相对路径示例，需要根据实际情况调整
+INPUT_ROOT = Path(r"E:\大论文Result\PRD")  # 相对路径示例，需要根据实际情况调整
 
 # 需要检查的城市列表
 CITIES = [

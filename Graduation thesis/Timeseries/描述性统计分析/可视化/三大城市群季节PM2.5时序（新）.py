@@ -260,12 +260,12 @@ def plot_cluster_seasonal_curves(seasonal_df: pd.DataFrame, output_dir: Path) ->
 
 
 def main() -> None:
-    csv_path = r"H:\DATA Science\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
+    csv_path = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
 
     mpl.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial Unicode MS"]
     mpl.rcParams["axes.unicode_minus"] = False
 
-    output_dir = Path(r"H:\DATA Science\大论文Result\大论文图\三大城市群\PM2.5_季节_时序图")
+    output_dir = Path(r"H:\大论文Result\大论文图\三大城市群\PM2.5_季节_时序图")
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_df = read_city_wide_table(csv_path)
     cluster_monthly = build_cluster_monthly_from_wide_city_table(raw_df, city_col=raw_df.columns[0])

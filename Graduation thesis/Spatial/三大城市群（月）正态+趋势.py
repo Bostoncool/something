@@ -15,11 +15,11 @@ from scipy import stats
 
 
 DEFAULT_GEOJSON_DIRS = {
-    "BTH": r"H:\DATA Science\大论文Result\大论文图\2.京津冀\具体城市",
-    "YRD": r"H:\DATA Science\大论文Result\大论文图\3.长三角\具体城市",
-    "PRD": r"H:\DATA Science\大论文Result\大论文图\4.珠三角\具体城市",
+    "BTH": r"H:\大论文Result\大论文图\2.京津冀\具体城市",
+    "YRD": r"H:\大论文Result\大论文图\3.长三角\具体城市",
+    "PRD": r"H:\大论文Result\大论文图\4.珠三角\具体城市",
 }
-DEFAULT_PM25_CSV = r"H:\DATA Science\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
+DEFAULT_PM25_CSV = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
 FIG_DPI = 300
 
 

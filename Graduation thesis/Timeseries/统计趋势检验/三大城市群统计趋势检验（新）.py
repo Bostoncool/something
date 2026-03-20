@@ -19,10 +19,10 @@ from scipy.stats import norm
 # =========================
 # 路径配置（按需修改）
 # =========================
-ANNUAL_DATA_PATH = r"H:\DATA Science\大论文Result\三大城市群（市）年度PM2.5浓度.csv"
-MONTHLY_DATA_PATH = r"H:\DATA Science\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
-CITY_GROUP_PATH = r"H:\DATA Science\大论文Result\大论文图\三大城市群\MSTL时间序列分解\城市归属_三大城市群.csv"
-OUTPUT_DIR = r"H:\DATA Science\大论文Result\大论文图\三大城市群\统计趋势检验"
+ANNUAL_DATA_PATH = r"H:\大论文Result\三大城市群（市）年度PM2.5浓度.csv"
+MONTHLY_DATA_PATH = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
+CITY_GROUP_PATH = r"H:\大论文Result\大论文图\三大城市群\MSTL时间序列分解\城市归属_三大城市群.csv"
+OUTPUT_DIR = r"H:\大论文Result\大论文图\三大城市群\统计趋势检验"
 
 ALPHA = 0.05
 ZERO_AS_MISSING = True

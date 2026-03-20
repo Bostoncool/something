@@ -8,7 +8,7 @@ plt.rcParams['font.serif'] = ['Times New Roman']
 plt.rcParams['font.size'] = 10
 
 # 读取数据
-lightgbm_df = pd.read_csv(r"E:\DATA Science\小论文Result\Fine_model\-LightGBM\Split2\output\feature_importance.csv")
+lightgbm_df = pd.read_csv(r"E:\小论文Result\Fine_model\-LightGBM\Split2\output\feature_importance.csv")
 
 # 定义特征分类函数
 def classify_feature(feature_name):

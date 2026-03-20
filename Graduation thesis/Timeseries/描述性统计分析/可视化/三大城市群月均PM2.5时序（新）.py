@@ -233,6 +233,17 @@ def choose_color(cluster_name: str) -> str:
     return "#6c757d"
 
 
+# PM₂.₅ 下标格式（符合化学规范），Unicode: ₂=U+2082, ₅=U+2085
+PM25_LABEL = "PM₂.₅"
+
+# 城市群中文名 → 英文图例标签
+CLUSTER_TO_ENGLISH = {
+    "京津冀城市群(BTH)": "Beijing-Tianjin-Hebei (BTH)",
+    "长江三角洲城市群(YRD)": "Yangtze River Delta (YRD)",
+    "珠江三角洲城市群(PRD)": "Pearl River Delta (PRD)",
+}
+
+
 def plot_cluster_trends(cluster_monthly_df: pd.DataFrame, output_dir: Path) -> Path:
     """绘制三大城市群（或数据中存在的城市群）月均 PM2.5 时序变化图。"""
     fig, ax = plt.subplots(figsize=(12.0, 6.0), dpi=150)
@@ -243,10 +254,11 @@ def plot_cluster_trends(cluster_monthly_df: pd.DataFrame, output_dir: Path) -> P
         series = cluster_monthly_df[col].dropna()
         if series.empty:
             continue
+        legend_label = CLUSTER_TO_ENGLISH.get(str(col), col)
         ax.plot(
             series.index,
             series.values,
-            label=col,
+            label=legend_label,
             color=choose_color(str(col)),
             linewidth=2.0,
             marker="o",
@@ -254,17 +266,28 @@ def plot_cluster_trends(cluster_monthly_df: pd.DataFrame, output_dir: Path) -> P
             alpha=0.95,
         )
 
-    ax.set_title("三大城市群月均PM2.5时序变化（2018-2023）", fontsize=14, pad=10)
-    ax.set_xlabel("时间", fontsize=12)
-    ax.set_ylabel("PM2.5/(μg/m³)", fontsize=12, fontfamily="Times New Roman")
+    ax.set_title(
+        f"Monthly Mean {PM25_LABEL} Time Series of Three Major Urban Agglomerations (2018-2023)",
+        fontsize=14,
+        pad=10,
+        fontfamily="Times New Roman",
+    )
+    ax.set_xlabel("Time", fontsize=12, fontfamily="Times New Roman")
+    ax.set_ylabel(
+        f"Monthly mean {PM25_LABEL} concentration (μg/m³)",
+        fontsize=12,
+        fontfamily="Times New Roman",
+    )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_linewidth(1.2)
     ax.spines["bottom"].set_linewidth(1.2)
     ax.tick_params(axis="both", width=1.0, length=5, labelsize=10)
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontfamily("Times New Roman")
     ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.35)
     if len(ax.lines) > 0:
-        ax.legend(frameon=False, fontsize=10)
+        ax.legend(frameon=False, fontsize=10, prop={"family": "Times New Roman"})
 
     output_path = output_dir / "三大城市群月均PM2.5时序变化.svg"
     fig.savefig(output_path, format="svg", transparent=True, bbox_inches="tight")
@@ -273,12 +296,12 @@ def plot_cluster_trends(cluster_monthly_df: pd.DataFrame, output_dir: Path) -> P
 
 
 def main() -> None:
-    csv_path = r"H:\DATA Science\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
+    csv_path = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
 
     mpl.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial Unicode MS"]
     mpl.rcParams["axes.unicode_minus"] = False
 
-    output_dir = Path(r"H:\DATA Science\大论文Result\大论文图\三大城市群\PM2.5_月均_时序图")
+    output_dir = Path(r"H:\大论文Result\大论文图\三大城市群\PM2.5_月均_时序图")
     cluster_monthly_df = build_cluster_monthly_series(csv_path)
     figure_path = plot_cluster_trends(cluster_monthly_df, output_dir=output_dir)
 

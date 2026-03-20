@@ -85,7 +85,7 @@ def plot_training_validation_curve(
 
 if __name__ == "__main__":
     # 示例1: 使用默认设置（自动生成输出文件名和标题）
-    csv_path = r"H:\DATA Science\小论文Result\Fine_model\-CNN-GridSearch\CSV\output\plot_training_curves__cnn_basic.csv"
+    csv_path = r"H:\小论文Result\Fine_model\-CNN-GridSearch\CSV\output\plot_training_curves__cnn_basic.csv"
     plot_training_validation_curve(
         csv_path=csv_path,
         fig_size=6.0,

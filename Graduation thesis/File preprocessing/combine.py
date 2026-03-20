@@ -10,7 +10,7 @@ import pandas as pd
 from pathlib import Path
 
 # 输入文件路径
-INPUT_DIR = Path(r"h:\DATA Science\大论文Result\大论文图\机器学习结果\开发文档docs")
+INPUT_DIR = Path(r"h:\大论文Result\大论文图\机器学习结果\开发文档docs")
 METRICS_FILE = INPUT_DIR / "model_metrics_summary.csv"
 GENERALIZATION_FILE = INPUT_DIR / "model_generalization_summary.csv"
 

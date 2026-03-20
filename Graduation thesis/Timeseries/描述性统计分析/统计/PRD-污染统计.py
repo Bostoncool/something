@@ -183,7 +183,7 @@ def analyze_pm25_trends(pm25_df):
 
 def main():
     # 设置文件夹路径
-    folder_path = r"E:\DATA Science\大论文Result\PRD\filtered_daily"
+    folder_path = r"E:\大论文Result\PRD\filtered_daily"
     
     # 检查文件夹是否存在
     if not os.path.exists(folder_path):
@@ -211,7 +211,7 @@ def main():
     print(f"包含 {len(pm25_results['city'].unique())} 个城市")
     
     # 保存原始PM2.5数据
-    output_file1 = r"E:\DATA Science\大论文Result\PRD\daily_pm25_data.csv"
+    output_file1 = r"E:\大论文Result\PRD\daily_pm25_data.csv"
     pm25_results.to_csv(output_file1, index=False, encoding='utf-8-sig')
     print(f"\n日均PM2.5数据已保存到: {output_file1}")
     
@@ -220,7 +220,7 @@ def main():
     
     if stats_results is not None and not stats_results.empty:
         # 保存统计分析结果
-        output_file2 = r"E:\DATA Science\大论文Result\PRD\pm25_statistics.csv"
+        output_file2 = r"E:\大论文Result\PRD\pm25_statistics.csv"
         stats_results.to_csv(output_file2, index=False, encoding='utf-8-sig')
         print(f"PM2.5统计分析结果已保存到: {output_file2}")
         
@@ -255,7 +255,7 @@ def main():
         level_distribution = level_distribution[existing_levels + ['平均PM2.5']]
         
         # 保存等级分布
-        output_file3 = r"E:\DATA Science\大论文Result\PRD\pm25_level_distribution.csv"
+        output_file3 = r"E:\大论文Result\PRD\pm25_level_distribution.csv"
         level_distribution.to_csv(output_file3, encoding='utf-8-sig')
         print(f"\nPM2.5空气质量等级分布已保存到: {output_file3}")
         

@@ -16,9 +16,9 @@ from libpysal.weights import KNN, Queen
 
 
 DEFAULT_GEOJSON_DIRS = {
-    "BTH": r"H:\DATA Science\大论文Result\大论文图\2.京津冀\具体城市（区分辨率）",
-    "YRD": r"H:\DATA Science\大论文Result\大论文图\3.长三角\具体城市（区分辨率）",
-    "PRD": r"H:\DATA Science\大论文Result\大论文图\4.珠三角\具体城市（区分辨率）",
+    "BTH": r"H:\大论文Result\大论文图\2.京津冀\具体城市（区分辨率）",
+    "YRD": r"H:\大论文Result\大论文图\3.长三角\具体城市（区分辨率）",
+    "PRD": r"H:\大论文Result\大论文图\4.珠三角\具体城市（区分辨率）",
 }
 DEFAULT_PM25_NC_DIR = r"G:\2000-2023[PM2.5-china]\Year"
 DEFAULT_YEARS = list(range(2018, 2024))
@@ -33,7 +33,8 @@ def normalize_city_name(name: str) -> str:
 
 
 def setup_matplotlib() -> None:
-    plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial Unicode MS", "DejaVu Sans"]
+    plt.rcParams["font.family"] = "serif"
+    plt.rcParams["font.serif"] = ["Times New Roman", "DejaVu Serif", "serif"]
     plt.rcParams["axes.unicode_minus"] = False
 
 
@@ -87,9 +88,9 @@ def sort_periods(periods: list[str]) -> list[str]:
 
 def lisa_type(q: int, p_val: float, alpha: float) -> str:
     if p_val >= alpha:
-        return "不显著"
-    mapping = {1: "高-高", 2: "低-高", 3: "低-低", 4: "高-低"}
-    return mapping.get(int(q), "不显著")
+        return "Not Significant"
+    mapping = {1: "High-High", 2: "Low-High", 3: "Low-Low", 4: "High-Low"}
+    return mapping.get(int(q), "Not Significant")
 
 
 def find_yearly_nc_file(nc_dir: Path, year: int) -> Path:
@@ -220,11 +221,11 @@ def build_pm25_long_from_nc(nc_dir: Path, years: list[int], cluster_geo: dict[st
 
 def plot_lisa_cluster_map(gdf_plot: gpd.GeoDataFrame, cluster_key: str, period: str, save_path: Path) -> None:
     color_map = {
-        "高-高": "#d7191c",
-        "低-低": "#2c7bb6",
-        "高-低": "#fdae61",
-        "低-高": "#abd9e9",
-        "不显著": "#d9d9d9",
+        "High-High": "#d7191c",
+        "Low-Low": "#2c7bb6",
+        "High-Low": "#fdae61",
+        "Low-High": "#abd9e9",
+        "Not Significant": "#d9d9d9",
     }
     gdf_plot["plot_color"] = gdf_plot["lisa_type"].map(color_map).fillna("#d9d9d9")
 
@@ -233,14 +234,13 @@ def plot_lisa_cluster_map(gdf_plot: gpd.GeoDataFrame, cluster_key: str, period: 
     ax.patch.set_alpha(0.0)
     gdf_plot.plot(color=gdf_plot["plot_color"], edgecolor="#333333", linewidth=0.8, ax=ax)
     ax.set_axis_off()
-    ax.set_title(f"{cluster_key} LISA聚类图 ({period})", fontsize=12)
+    ax.set_title(rf"{cluster_key} LISA Cluster Map ({period})", fontsize=26, fontfamily="Times New Roman")
 
-    for key in ["高-高", "低-低", "高-低", "低-高", "不显著"]:
+    for key in ["High-High", "Low-Low", "High-Low", "Low-High", "Not Significant"]:
         ax.scatter([], [], color=color_map[key], label=key, s=80)
-    if cluster_key == "BTH":
-        ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
-    else:
-        ax.legend(loc="lower left", frameon=False)
+    legend_font = {"family": "Times New Roman", "size": 16}
+    legend_loc = "lower left" if cluster_key == "YRD" else "lower right"
+    ax.legend(loc=legend_loc, frameon=False, prop=legend_font)
 
     fig.tight_layout()
     fig.savefig(save_path, format="svg", dpi=FIG_DPI, transparent=True)
@@ -264,12 +264,22 @@ def plot_pm25_map_with_global_text(
         edgecolor="#333333",
         linewidth=0.8,
         legend=True,
+        legend_kwds={"label": r"PM$_{2.5}$ ($\mu$g/m$^3$)", "shrink": 0.8},
         vmin=pm25_vmin,
         vmax=pm25_vmax,
         ax=ax,
     )
     ax.set_axis_off()
-    ax.set_title(f"{cluster_key} PM2.5空间分布 ({period})", fontsize=12)
+    ax.set_title(rf"{cluster_key} PM$_{{2.5}}$ Spatial Distribution ({period})", fontsize=26, fontfamily="Times New Roman")
+    for ax_sub in fig.axes:
+        if ax_sub != ax:
+            lbl = ax_sub.yaxis.get_label()
+            if lbl.get_text():
+                lbl.set_fontfamily("Times New Roman")
+                lbl.set_fontsize(20)
+            for tick in ax_sub.get_yticklabels():
+                tick.set_fontfamily("Times New Roman")
+                tick.set_fontsize(20)
 
     fig.tight_layout()
     fig.savefig(save_path, format="svg", dpi=FIG_DPI, transparent=True)
@@ -403,7 +413,7 @@ def compute_cluster_metrics(
                 ["city_norm", "lisa_type"],
             ].copy()
             gdf_period = gdf_period.merge(local_period, on="city_norm", how="left")
-            gdf_period["lisa_type"] = gdf_period["lisa_type"].fillna("不显著")
+            gdf_period["lisa_type"] = gdf_period["lisa_type"].fillna("Not Significant")
 
             plot_lisa_cluster_map(
                 gdf_plot=gdf_period,

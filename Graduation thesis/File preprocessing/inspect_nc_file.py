@@ -12,7 +12,7 @@ import xarray as xr
 
 
 DEFAULT_TARGET: Path = Path(
-    r"E:\DATA Science\ERA5-Beijing-NC"
+    r"E:\ERA5-Beijing-NC"
 )
 EXPECTED_COORDS: Sequence[str] = ("time", "latitude", "longitude")
 EXPECTED_VARS: Sequence[str] = (

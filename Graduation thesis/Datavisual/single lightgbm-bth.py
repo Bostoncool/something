@@ -16,10 +16,10 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 # 路径配置
 PREDICTIONS_CSV = Path(
-    r"H:\DATA Science\大论文Result\大论文图\机器学习结果\lightgbm_bth_daily_pm25\predictions_test.csv"
+    r"H:\大论文Result\大论文图\机器学习结果\lightgbm_bth_daily_pm25\predictions_test.csv"
 )
 OUTPUT_DIR = Path(
-    r"H:\DATA Science\大论文Result\大论文图\机器学习结果\三大城市群散点图"
+    r"H:\大论文Result\大论文图\机器学习结果\三大城市群散点图"
 )
 OUTPUT_FILENAME = "lightgbm_bth_daily_pm25.svg"
 

@@ -211,47 +211,47 @@ if __name__ == "__main__":
     # 定义9个文件路径及其对应的标题和输出文件名
     file_configs = [
         {
-            "path": r"E:\DATA Science\小论文Result\Fine_model\-BPNN\Split2\output\predictions.csv",
+            "path": r"E:\小论文Result\Fine_model\-BPNN\Split2\output\predictions.csv",
             "title": "BPNN-Optimized",
             "out_path": "BPNN-Optimized-Residual.svg"
         },
         {
-            "path": r"E:\DATA Science\小论文Result\Fine_model\-CNN- LSTM-Transformer\C-L-N\predictions__transformer__test.csv",
+            "path": r"E:\小论文Result\Fine_model\-CNN- LSTM-Transformer\C-L-N\predictions__transformer__test.csv",
             "title": "CNN-LSTM-Transformer",
             "out_path": "CNN-LSTM-Transformer-Residual.svg"
         },
         {
-            "path": r"E:\DATA Science\小论文Result\Fine_model\-CNN-GridSearch\Split2\output\predictions.csv",
+            "path": r"E:\小论文Result\Fine_model\-CNN-GridSearch\Split2\output\predictions.csv",
             "title": "CNN-Optimized",
             "out_path": "CNN-Optimized-Residual.svg"
         },
         {
-            "path": r"E:\DATA Science\小论文Result\Fine_model\-MLR_GAM\Split2\output\predictions_optimized.csv",
+            "path": r"E:\小论文Result\Fine_model\-MLR_GAM\Split2\output\predictions_optimized.csv",
             "title": "GAM-MLR-Optimized",
             "out_path": "GAM-MLR-Optimized-Residual.svg"
         },
         {
-            "path": r"E:\DATA Science\小论文Result\Fine_model\-LightGBM\Split2\output\predictions.csv",
+            "path": r"E:\小论文Result\Fine_model\-LightGBM\Split2\output\predictions.csv",
             "title": "LightGBM-Optimized",
             "out_path": "LightGBM-Optimized-Residual.svg"
         },
         {
-            "path": r"E:\DATA Science\小论文Result\Fine_model\-RF\Split2\output\rf_predictions_nc.csv",
+            "path": r"E:\小论文Result\Fine_model\-RF\Split2\output\rf_predictions_nc.csv",
             "title": "RF-Optimized",
             "out_path": "RF-Optimized-Residual.svg"
         },
         {
-            "path": r"E:\DATA Science\小论文Result\Fine_model\-SVR\Split2\output\time_series_prediction.csv",
+            "path": r"E:\小论文Result\Fine_model\-SVR\Split2\output\time_series_prediction.csv",
             "title": "SVR-Optimized",
             "out_path": "SVR-Optimized-Residual.svg"
         },
         {
-            "path": r"E:\DATA Science\小论文Result\Fine_model\-Transformer\Split2\output\predictions_test.csv",
+            "path": r"E:\小论文Result\Fine_model\-Transformer\Split2\output\predictions_test.csv",
             "title": "Transformer-Optimized",
             "out_path": "Transformer-Optimized-Residual.svg"
         },
         {
-            "path": r"E:\DATA Science\小论文Result\Fine_model\-XGBOOST\CSV\output\xgboost_predictions__xgboost_optimized__test.csv",
+            "path": r"E:\小论文Result\Fine_model\-XGBOOST\CSV\output\xgboost_predictions__xgboost_optimized__test.csv",
             "title": "XGBOOST-Optimized",
             "out_path": "XGBOOST-Optimized-Residual.svg"
         }

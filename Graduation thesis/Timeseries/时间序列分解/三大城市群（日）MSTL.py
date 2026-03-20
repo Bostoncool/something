@@ -428,12 +428,12 @@ def main() -> None:
     safe_print("=" * 60)
 
     input_folders = [
-        r"H:\DATA Science\大论文Result\BTH\filtered_daily",
-        r"H:\DATA Science\大论文Result\PRD\filtered_daily",
-        r"H:\DATA Science\大论文Result\YRD\filtered_daily",
+        r"H:\大论文Result\BTH\filtered_daily",
+        r"H:\大论文Result\PRD\filtered_daily",
+        r"H:\大论文Result\YRD\filtered_daily",
     ]
-    city_cluster_path = r"H:\DATA Science\大论文Result\大论文图\三大城市群\STL\城市归属_三大城市群.csv"
-    output_dir = r"H:\DATA Science\大论文Result\大论文图\三大城市群\MSTL时间序列分解"
+    city_cluster_path = r"H:\大论文Result\大论文图\三大城市群\STL\城市归属_三大城市群.csv"
+    output_dir = r"H:\大论文Result\大论文图\三大城市群\MSTL时间序列分解"
     seasonal_periods = (7, 365)
 
     os.makedirs(output_dir, exist_ok=True)

@@ -21,7 +21,7 @@ from scipy import stats
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 # 配置路径
-ROOT_DIR = Path(r"H:\DATA Science\大论文Result\大论文图\机器学习结果")
+ROOT_DIR = Path(r"H:\大论文Result\大论文图\机器学习结果")
 OUTPUT_DIR = ROOT_DIR / "三大城市群散点图"
 
 # 配色：柔和蓝绿色系

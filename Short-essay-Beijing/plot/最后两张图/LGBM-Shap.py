@@ -7,7 +7,7 @@ import matplotlib.font_manager as fm
 # =========================
 # 1. 读取 LightGBM 特征重要性结果
 # =========================
-path = r"H:\DATA Science\小论文Result\Fine_model\-LightGBM\Split2\output\feature_importance.csv"   # 改成你的实际路径
+path = r"H:\小论文Result\Fine_model\-LightGBM\Split2\output\feature_importance.csv"   # 改成你的实际路径
 df = pd.read_csv(path)
 
 # =========================
