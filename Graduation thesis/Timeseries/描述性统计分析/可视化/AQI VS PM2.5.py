@@ -65,6 +65,9 @@ REGION_LABELS = {
 COLOR_PM25_PRIMARY = "#66c2a5"  # 柔和青绿
 COLOR_OTHER_POLLUTED = "#8da0cb"  # 柔和灰蓝
 
+# 柱状图横轴（城市名）刻度字号，按需改数值即可
+PLOT_X_TICK_LABELSIZE = 16
+
 # 化学式下标：与中文混排时用 Unicode 下标，勿用 mathtext 的 $...$（见 plot 函数说明）
 PM25_UNICODE = "PM\u2082.\u2085"
 
@@ -466,7 +469,7 @@ def plot_aqi_polluted_ratio_by_region(
                 text,
                 ha="center",
                 va="bottom",
-                fontsize=9,
+                fontsize=12,
             )
             if not np.isnan(pm25_ratio) and pm25_plot[idx] >= 0.01:
                 ax.text(
@@ -475,7 +478,7 @@ def plot_aqi_polluted_ratio_by_region(
                     f"{pm25_ratio:.1%}",
                     ha="center",
                     va="center",
-                    fontsize=8,
+                    fontsize=11,
                     color="#2d5a4a",
                 )
 
@@ -495,7 +498,8 @@ def plot_aqi_polluted_ratio_by_region(
         ax.set_ylim(0, y_upper)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-        ax.tick_params(axis="x", rotation=60, labelsize=9)
+        ax.tick_params(axis="x", rotation=60, labelsize=PLOT_X_TICK_LABELSIZE)
+        ax.tick_params(axis="y", labelsize=16)
         plt.tight_layout()
 
         region_tag = region_name.lower()

@@ -4,11 +4,14 @@
 需要先运行 三大城市群统计趋势检验（新）.py 生成结果文件。
 """
 import os
+import re
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib import font_manager as fm
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -18,8 +21,35 @@ from scipy import stats
 # =========================
 OUTPUT_DIR = r"H:\大论文Result\大论文图\三大城市群\统计趋势检验"
 
-# 图内化学式：正体 PM，下标 2.5（与中文/单位用 + 拼接，勿把中文放进 $...$）
-PM25_MATH = r"$\mathrm{PM}_{2.5}$"
+# 图内化学式：与中文同串勿用 $...$（mathtext 会把相邻中文走 STIX，SVG 里变成 ¤）。
+PM25_PLAIN = "PM\u2082.\u2085"
+LABEL_UNIT_UGM3 = "(\u03bcg/m\u00b3)"
+
+_WINDOWS_FONT_FILES_REGISTERED = False
+
+
+def _register_windows_font_files_once() -> None:
+    global _WINDOWS_FONT_FILES_REGISTERED
+    if _WINDOWS_FONT_FILES_REGISTERED or os.name != "nt":
+        return
+    fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    for fname in (
+        "simkai.ttf",
+        "simkai.ttc",
+        "msyh.ttc",
+        "msyhbd.ttc",
+        "simhei.ttf",
+        "simsun.ttc",
+        "simsunb.ttf",
+    ):
+        fp = fonts_dir / fname
+        if not fp.is_file():
+            continue
+        try:
+            fm.fontManager.addfont(str(fp))
+        except (OSError, ValueError, RuntimeError):
+            continue
+    _WINDOWS_FONT_FILES_REGISTERED = True
 
 
 def safe_print(*args, **kwargs) -> None:
@@ -34,15 +64,75 @@ def safe_print(*args, **kwargs) -> None:
         sys.stdout.write(fallback + end)
 
 
-def configure_thesis_fonts() -> None:
-    """英文 Times New Roman、中文楷体（Matplotlib 3.6+ 按字形回退）；mathtext 正体与 TNR 一致。"""
-    mpl.rcParams["font.family"] = "serif"
-    mpl.rcParams["font.serif"] = [
+def _thesis_font_family_list() -> List[str]:
+    """西文优先 TNR，中文优先楷体；仅加入 fontManager 已登记的名称，避免无效 findfont 刷屏。
+
+    本机若无楷体（或注册名非 KaiTi），仍会有雅黑/黑体等可显示汉字。
+    """
+    _register_windows_font_files_once()
+    by_lower: Dict[str, str] = {}
+    for info in fm.fontManager.ttflist:
+        k = info.name.lower()
+        if k not in by_lower:
+            by_lower[k] = info.name
+
+    want_order = [
         "Times New Roman",
         "KaiTi",
         "STKaiti",
+        "DFKai-SB",
+        "FZKai-Z03",
+        "楷体",
+        "Kaiti SC",
         "SimKai",
+        "KaiTi_GB2312",
+        "华文楷体",
+        "Microsoft YaHei",
+        "SimHei",
+        "SimSun",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "Arial Unicode MS",
     ]
+    seen = set()
+    resolved: List[str] = []
+    for name in want_order:
+        got = by_lower.get(name.lower())
+        if got is not None and got not in seen:
+            resolved.append(got)
+            seen.add(got)
+
+    if not resolved:
+        return ["DejaVu Sans"]
+    if resolved[0].lower() != "times new roman":
+        tnr = by_lower.get("times new roman")
+        if tnr is not None:
+            resolved = [tnr] + [x for x in resolved if x.lower() != "times new roman"]
+        else:
+            resolved = ["Times New Roman"] + [x for x in resolved if x.lower() != "times new roman"]
+
+    has_kai = any(
+        "kaiti" in x.lower() or "kai" in x.lower() or "楷" in x
+        for x in resolved
+    )
+    if not has_kai:
+        for info in fm.fontManager.ttflist:
+            if "simkai" in info.fname.replace("\\", "/").lower():
+                if info.name not in seen:
+                    insert_at = 1 if len(resolved) > 1 else len(resolved)
+                    resolved.insert(insert_at, info.name)
+                    seen.add(info.name)
+                break
+    return resolved
+
+
+def configure_thesis_fonts() -> None:
+    """西文/数字用 Times New Roman，中文优先楷体，否则雅黑/黑体/宋体（按字形在列表中回退）。
+
+    svg.fonttype=none 避免把文字烧成 path（TNR 对汉字易产生占位轮廓导致「乱码」）。
+    """
+    mpl.rcParams["svg.fonttype"] = "none"
+    mpl.rcParams["font.family"] = _thesis_font_family_list()
     mpl.rcParams["axes.unicode_minus"] = False
     mpl.rcParams["mathtext.fontset"] = "custom"
     mpl.rcParams["mathtext.rm"] = "Times New Roman"
@@ -50,11 +140,50 @@ def configure_thesis_fonts() -> None:
     mpl.rcParams["mathtext.bf"] = "Times New Roman:bold"
 
 
+def _svg_font_reorder_disabled() -> bool:
+    for key in (
+        "TREND_SVG_NO_FONT_REORDER",
+        "STL_SVG_NO_FONT_REORDER",
+        "MSTL_SVG_NO_FONT_REORDER",
+        "MONTHLY_PM25_SVG_NO_FONT_REORDER",
+    ):
+        if os.environ.get(key, "").strip().lower() in ("1", "true", "yes"):
+            return True
+    return False
+
+
+def _patch_svg_font_family_for_weak_viewers(svg_path: str) -> None:
+    """Word 等只认 font-family 首项时避免中文方框（排查指南 §2.3.1）。"""
+    if _svg_font_reorder_disabled():
+        return
+    try:
+        with open(svg_path, encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return
+    office_first = (
+        "'Microsoft YaHei', 'KaiTi', 'SimHei', 'SimSun', "
+        "'Times New Roman', 'DejaVu Sans', serif"
+    )
+    patched, n = re.subn(
+        r"font-family:\s*[^;]+;",
+        f"font-family: {office_first};",
+        content,
+    )
+    if n and patched != content:
+        try:
+            with open(svg_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(patched)
+        except OSError:
+            return
+
+
 def save_figure_dual(fig: plt.Figure, save_path_png: str, dpi: int = 300) -> None:
     """同时保存 PNG 与 SVG。"""
     fig.savefig(save_path_png, dpi=dpi, bbox_inches="tight")
     save_path_svg = os.path.splitext(save_path_png)[0] + ".svg"
     fig.savefig(save_path_svg, format="svg", bbox_inches="tight")
+    _patch_svg_font_family_for_weak_viewers(save_path_svg)
 
 
 def read_csv_flexible(path: str) -> pd.DataFrame:
@@ -265,8 +394,6 @@ def plot_group_series(
         ) if group_line_data else np.empty((0, 2), dtype=float)
         used_group_point_labels = set()
         for _, row in sliding_t_df.iterrows():
-            if not bool(row.get("Significant", False)):
-                continue
             group = str(row.get("城市群", ""))
             if group not in group_line_data:
                 continue
@@ -297,9 +424,15 @@ def plot_group_series(
                 zorder=7,
                 label=label,
             )
+            p_val = pd.to_numeric(row.get("P_Value"), errors="coerce")
+            ann_lines = [str(change_label), f"|t|={t_stat:.2f}"]
+            if pd.notna(p_val):
+                ann_lines.append(f"p={p_val:.3f}")
+            if not bool(row.get("Significant", False)):
+                ann_lines.append("(α=0.05未显著)")
             text_dx, text_dy = _pick_annotation_offset(ax, float(x_pos), float(y_val), all_line_points)
             ax.annotate(
-                f"{change_label}\nT={t_stat:.2f}",
+                "\n".join(ann_lines),
                 xy=(x_pos, y_val),
                 xytext=(text_dx, text_dy),
                 textcoords="offset points",
@@ -323,7 +456,7 @@ def plot_group_series(
 
     ax.set_title(title, fontsize=14)
     ax.set_xlabel(xlabel, fontsize=12)
-    ax.set_ylabel(PM25_MATH + "浓度 (μg/m³)", fontsize=12)
+    ax.set_ylabel(PM25_PLAIN + "浓度 " + LABEL_UNIT_UGM3, fontsize=12)
     ax.grid(alpha=0.3, linestyle="--")
     plt.xticks(rotation=45, ha="right")
     handles, labels = ax.get_legend_handles_labels()
@@ -345,7 +478,7 @@ def plot_test_comparison_2x2(
         key=lambda g: ["京津冀", "长三角", "珠三角"].index(g) if g in ["京津冀", "长三角", "珠三角"] else 99,
     )
     x = np.arange(len(groups))
-    width = 0.36
+    width = 0.26
     alpha_line = 0.05
 
     annual_mk = annual_results["annual_mann_kendall"].set_index("城市群")
@@ -356,7 +489,6 @@ def plot_test_comparison_2x2(
     monthly_st = monthly_results["month_sliding_t"].set_index("城市群")
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("三大城市群" + PM25_MATH + "浓度统计检验结果对比", fontsize=16, y=0.98)
 
     ax1 = axes[0, 0]
     mk_vals = np.array([pd.to_numeric(annual_mk.loc[g, "P_Value"], errors="coerce") for g in groups], dtype=float)
@@ -370,7 +502,7 @@ def plot_test_comparison_2x2(
     ax1.set_xticklabels(groups)
     ax1.grid(axis="y", alpha=0.25, linestyle="--")
     _annotate_bar_values(ax1, list(bars1) + list(bars2), decimals=3)
-    ax1.legend(fontsize=9, loc="upper right")
+    ax1.legend(fontsize=9, loc="upper right", bbox_to_anchor=(0.98, 0.75))
 
     ax2 = axes[0, 1]
     apt_vals = np.array([pd.to_numeric(annual_pt.loc[g, "P_Value"], errors="coerce") for g in groups], dtype=float)
@@ -411,15 +543,15 @@ def plot_test_comparison_2x2(
     )
     bars7 = ax4.bar(x - width / 2, sen_vals, width, label="Sen斜率", color="#f77f00", alpha=0.8)
     bars8 = ax4.bar(x + width / 2, lr_slope_vals, width, label="线性回归斜率", color="#ffb703", alpha=0.8)
-    ax4.set_title("年度" + PM25_MATH + "减少速率对比", fontsize=12)
-    ax4.set_ylabel(PM25_MATH + "减少速率 (μg/m³/年)")
+    ax4.set_title("年度" + PM25_PLAIN + "减少速率对比", fontsize=12)
+    ax4.set_ylabel(PM25_PLAIN + "减少速率 " + LABEL_UNIT_UGM3 + "/年")
     ax4.set_xticks(x)
     ax4.set_xticklabels(groups)
     ax4.grid(axis="y", alpha=0.25, linestyle="--")
     _annotate_bar_values(ax4, list(bars7) + list(bars8), decimals=2)
     ax4.legend(fontsize=9, loc="upper right")
 
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.tight_layout()
     save_figure_dual(fig, output_png_path, dpi=300)
     plt.close(fig)
     safe_print(f"已保存图像: {output_png_path} 及同名 SVG")
@@ -444,7 +576,7 @@ def _sliding_t_change_point_for_plot(
     min_window: int = 3,
     min_each_side: int = 3,
 ) -> Dict[str, object]:
-    """用于绘图标注的滑动T突变点：返回 |t| 最大位置（不以显著性作为是否返回的条件）。"""
+    """用于绘图标注的滑动T：返回 |t| 最大位置；显著性仅写入 Significant，作图是否标注由 plot 决定。"""
     n = len(data)
     if n < max(2 * min_each_side, 6):
         return {"change_point": None, "t_statistic": np.nan, "p_value": np.nan, "significant": False}
@@ -546,7 +678,7 @@ def main() -> None:
     safe_print("开始绘图...")
     plot_group_series(
         annual_group_series,
-        "三大城市群年度" + PM25_MATH + "浓度变化",
+        "三大城市群年度" + PM25_PLAIN + "浓度变化",
         "年份",
         os.path.join(OUTPUT_DIR, "三大城市群_年度PM2.5时序.png"),
         annual_mk_df=annual_results["annual_mann_kendall"],
@@ -554,13 +686,13 @@ def main() -> None:
     )
     plot_group_series(
         monthly_group_series,
-        "三大城市群月均" + PM25_MATH + "浓度变化（2018-2023）",
+        "三大城市群月均" + PM25_PLAIN + "浓度变化（2018-2023）",
         "月份",
         os.path.join(OUTPUT_DIR, "三大城市群_月度PM2.5时序.png"),
     )
     plot_group_series(
         seasonal_group_series,
-        "三大城市群季度" + PM25_MATH + "浓度变化（由月均聚合）",
+        "三大城市群季度" + PM25_PLAIN + "浓度变化（由月均聚合）",
         "季度",
         os.path.join(OUTPUT_DIR, "三大城市群_季度PM2.5时序.png"),
         pettitt_df=seasonal_results["season_pettitt"],

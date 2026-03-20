@@ -1,14 +1,123 @@
 import os
+import re
 import warnings
+from pathlib import Path
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib import font_manager
 from statsmodels.tsa.seasonal import STL
 
 warnings.filterwarnings("ignore")
+
+# 与 main() 中 output_dir 一致；导出的城市归属表等同目录，便于与其它脚本对齐
+DEFAULT_STL_OUTPUT_DIR = r"H:\大论文Result\大论文图\三大城市群\STL时间序列分解"
+DEFAULT_STL_INPUT_CSV = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
+
+# 图题/轴标签用 Unicode 下标（PM₂.₅），勿与 mathtext 的 $...$ 混排中文（见《中文字体显示问题排查指南》§2.4）
+PM25_UNICODE = "PM\u2082.\u2085"
+
+# 与 Other tips/Python version/Study area.py 对齐的论文字号（单图主标题 32；子图标题与轴标签 24；刻度 22；图例 28）
+THESIS_MAIN_TITLE_SIZE = 32
+THESIS_SUBPLOT_TITLE_SIZE = 24
+THESIS_LABEL_SIZE = 24
+THESIS_TICK_SIZE = 22
+THESIS_LEGEND_SIZE = 28
+THESIS_LEGEND_TITLE_SIZE = 32
+
+# Windows 下将 simkai 等注册进 matplotlib（见《中文字体显示问题排查指南》§3.4）
+_WINDOWS_FONT_FILES_REGISTERED = False
+
+
+def _register_windows_font_files_once() -> None:
+    global _WINDOWS_FONT_FILES_REGISTERED
+    if _WINDOWS_FONT_FILES_REGISTERED or os.name != "nt":
+        return
+    fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    for fname in (
+        "simkai.ttf",
+        "simkai.ttc",
+        "msyh.ttc",
+        "msyhbd.ttc",
+        "simhei.ttf",
+        "simsun.ttc",
+        "simsunb.ttf",
+    ):
+        fp = fonts_dir / fname
+        if not fp.is_file():
+            continue
+        try:
+            mpl.font_manager.fontManager.addfont(str(fp))
+        except (OSError, ValueError, RuntimeError):
+            continue
+    _WINDOWS_FONT_FILES_REGISTERED = True
+
+
+def _font_family_resolves(family: str) -> bool:
+    fm = mpl.font_manager.fontManager
+    try:
+        path = fm.findfont(
+            mpl.font_manager.FontProperties(family=family),
+            fallback_to_default=False,
+        )
+    except ValueError:
+        return False
+    return bool(path and os.path.isfile(path))
+
+
+def _build_thesis_serif_font_chain() -> list[str]:
+    """英文 Times New Roman，中文 KaiTi（及回退），与三大城市群（日）MSTL.py / AQI VS PM2.5.py 一致。"""
+    _register_windows_font_files_once()
+    ordered: list[str] = []
+
+    def append_if_new(name: str) -> None:
+        if name not in ordered and _font_family_resolves(name):
+            ordered.append(name)
+
+    for name in ("Times New Roman", "Times"):
+        append_if_new(name)
+        if ordered:
+            break
+    if not ordered:
+        for name in ("DejaVu Serif", "DejaVu Sans", "Arial"):
+            append_if_new(name)
+            if ordered:
+                break
+
+    for name in (
+        "KaiTi",
+        "STKaiti",
+        "DFKai-SB",
+        "FZKai-Z03",
+        "楷体",
+        "Kaiti SC",
+        "SimKai",
+        "KaiTi_GB2312",
+        "华文楷体",
+        "Microsoft YaHei",
+        "SimHei",
+        "SimSun",
+        "Arial Unicode MS",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+    ):
+        append_if_new(name)
+
+    if not any(
+        x in ordered
+        for x in ("KaiTi", "STKaiti", "DFKai-SB", "FZKai-Z03", "楷体", "Kaiti SC", "SimKai", "KaiTi_GB2312")
+    ):
+        for font in mpl.font_manager.fontManager.ttflist:
+            if "simkai" in font.fname.replace("\\", "/").lower():
+                if font.name not in ordered:
+                    insert_at = 1 if len(ordered) > 1 else len(ordered)
+                    ordered.insert(insert_at, font.name)
+                break
+
+    append_if_new("DejaVu Sans")
+    return ordered if ordered else ["DejaVu Sans"]
 
 
 def safe_print(message: str) -> None:
@@ -19,30 +128,70 @@ def safe_print(message: str) -> None:
         print(message.encode("ascii", errors="backslashreplace").decode("ascii"))
 
 
-def configure_plot_fonts():
-    """固定中文字体链，避免中文渲染为方框。"""
-    # 使用与“可正常中文输出脚本”一致的优先字体逻辑
-    chinese_font_chain = [
-        "SimHei",
-        "Microsoft YaHei",
-        "Arial Unicode MS",
-        "SimSun",
-        "Noto Sans CJK SC",
-        "Source Han Sans SC",
-    ]
-    available = {font.name for font in font_manager.fontManager.ttflist}
-    available_in_chain = [name for name in chinese_font_chain if name in available]
-    if not available_in_chain:
-        safe_print("警告: 未检测到常用中文字体，图片中文可能显示异常。")
+def configure_plot_fonts() -> None:
+    """英文 Times New Roman，中文 KaiTi（楷体），按字形回退。"""
+    serif_chain = _build_thesis_serif_font_chain()
+    if not any(
+        x in serif_chain
+        for x in ("KaiTi", "STKaiti", "DFKai-SB", "FZKai-Z03", "楷体", "Kaiti SC", "SimKai", "KaiTi_GB2312")
+    ):
+        safe_print("警告: 未解析到 KaiTi/楷体，中文将使用链中后续字体（如雅黑/宋体）。")
 
-    # 先设置 seaborn 主题，再强制覆盖字体相关 rc，避免被 theme 重置。
     sns.set_theme(style="whitegrid")
-    plt.rcParams["font.family"] = "sans-serif"
-    plt.rcParams["font.sans-serif"] = chinese_font_chain
+    mpl.rcParams["svg.fonttype"] = "none"
+    plt.rcParams["font.family"] = "serif"
+    plt.rcParams["font.serif"] = serif_chain
     plt.rcParams["axes.unicode_minus"] = False
+    plt.rcParams["axes.titlesize"] = THESIS_SUBPLOT_TITLE_SIZE
+    plt.rcParams["axes.titleweight"] = "bold"
+    plt.rcParams["axes.labelsize"] = THESIS_LABEL_SIZE
+    plt.rcParams["axes.labelweight"] = "bold"
+    plt.rcParams["xtick.labelsize"] = THESIS_TICK_SIZE
+    plt.rcParams["ytick.labelsize"] = THESIS_TICK_SIZE
+    plt.rcParams["legend.fontsize"] = THESIS_LEGEND_SIZE
+    if "legend.title_fontsize" in plt.rcParams:
+        plt.rcParams["legend.title_fontsize"] = THESIS_LEGEND_TITLE_SIZE
 
-    if available_in_chain:
-        safe_print(f"可用中文字体: {', '.join(available_in_chain)}")
+    safe_print(
+        "绘图字体链(西文优先 Times New Roman，中文回退楷体及备用): "
+        + ", ".join(serif_chain)
+    )
+
+
+def _svg_font_reorder_disabled() -> bool:
+    for key in ("STL_SVG_NO_FONT_REORDER", "MSTL_SVG_NO_FONT_REORDER"):
+        if os.environ.get(key, "").strip().lower() in ("1", "true", "yes"):
+            return True
+    return False
+
+
+def _patch_svg_font_family_for_weak_viewers(svg_path: str) -> None:
+    """Word 等若只认 font-family 首项，TNR 会导致中文方框；保存后重写为中文优先（见排查指南 §2.3.1）。
+
+    设 STL_SVG_NO_FONT_REORDER=1 或 MSTL_SVG_NO_FONT_REORDER=1 可关闭。
+    """
+    if _svg_font_reorder_disabled():
+        return
+    try:
+        with open(svg_path, encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return
+    office_first = (
+        "'Microsoft YaHei', 'KaiTi', 'SimHei', 'SimSun', "
+        "'Times New Roman', 'DejaVu Sans', serif"
+    )
+    patched, n = re.subn(
+        r"font-family:\s*[^;]+;",
+        f"font-family: {office_first};",
+        content,
+    )
+    if n and patched != content:
+        try:
+            with open(svg_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(patched)
+        except OSError:
+            return
 
 
 def save_figure_dual(fig, save_path_png: str, dpi: int = 300) -> None:
@@ -50,6 +199,34 @@ def save_figure_dual(fig, save_path_png: str, dpi: int = 300) -> None:
     fig.savefig(save_path_png, dpi=dpi, bbox_inches="tight")
     save_path_svg = os.path.splitext(save_path_png)[0] + ".svg"
     fig.savefig(save_path_svg, format="svg", bbox_inches="tight")
+    _patch_svg_font_family_for_weak_viewers(save_path_svg)
+
+
+def resolve_stl_input_csv_path() -> str:
+    """宽表输入：环境变量 STL_INPUT_CSV > 脚本同目录合并数据 > 默认 H: 路径。"""
+    script_dir = Path(__file__).resolve().parent
+    candidates: list[str] = []
+    env = os.environ.get("STL_INPUT_CSV", "").strip()
+    if env:
+        candidates.append(env)
+    candidates.append(str(script_dir / "合并数据_2018-2023.csv"))
+    candidates.append(DEFAULT_STL_INPUT_CSV)
+
+    tried: list[str] = []
+    for p in candidates:
+        if not p or p in tried:
+            continue
+        tried.append(p)
+        if os.path.isfile(p):
+            safe_print(f"使用月均输入文件: {p}")
+            return os.path.abspath(p)
+
+    msg_lines = ["未找到月均宽表 CSV（需含 `城市` 与 YYYYMM 列）。已尝试:"]
+    msg_lines.extend(f"  - {p}" for p in tried)
+    msg_lines.append(
+        "请将 `合并数据_2018-2023.csv` 放在本脚本同目录，或设置环境变量 STL_INPUT_CSV=绝对路径。"
+    )
+    raise FileNotFoundError("\n".join(msg_lines))
 
 
 def get_city_cluster_map():
@@ -72,9 +249,9 @@ def get_city_cluster_map():
     }
 
 
-def load_and_transform_data(csv_path):
+def load_and_transform_data(csv_path: str) -> pd.DataFrame:
     """读取宽表并转为长表: 城市, Month, PM2.5。"""
-    if not os.path.exists(csv_path):
+    if not os.path.isfile(csv_path):
         raise FileNotFoundError(f"输入文件不存在: {csv_path}")
 
     try:
@@ -182,24 +359,29 @@ def plot_stl_components(result, cluster_name, save_path):
     fig, axes = plt.subplots(4, 1, figsize=(14, 11), sharex=True)
 
     axes[0].plot(result.observed, color="#1f77b4", lw=1.5)
-    axes[0].set_title(f"{cluster_name} PM2.5 原始序列", fontsize=13, fontweight="bold")
+    axes[0].set_title(
+        f"{cluster_name} {PM25_UNICODE} 原始序列",
+        fontsize=THESIS_SUBPLOT_TITLE_SIZE,
+        fontweight="bold",
+    )
     axes[0].set_ylabel("浓度")
 
     axes[1].plot(result.trend, color="#d62728", lw=1.5)
-    axes[1].set_title("趋势项", fontsize=12, fontweight="bold")
+    axes[1].set_title("趋势项", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold")
     axes[1].set_ylabel("趋势")
 
     axes[2].plot(result.seasonal, color="#2ca02c", lw=1.5)
-    axes[2].set_title("季节项", fontsize=12, fontweight="bold")
+    axes[2].set_title("季节项", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold")
     axes[2].set_ylabel("季节")
 
     axes[3].plot(result.resid, color="#ff7f0e", lw=1.0)
     axes[3].axhline(0, ls="--", c="black", alpha=0.6)
-    axes[3].set_title("残差项", fontsize=12, fontweight="bold")
+    axes[3].set_title("残差项", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold")
     axes[3].set_ylabel("残差")
     axes[3].set_xlabel("时间")
 
     for ax in axes:
+        ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
         ax.grid(alpha=0.25)
     plt.tight_layout()
     save_figure_dual(fig, save_path_png=save_path, dpi=300)
@@ -219,20 +401,37 @@ def plot_seasonal_analysis(result, cluster_name, save_path):
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
     sns.boxplot(data=seasonal_df, x="月份", y="季节项", ax=axes[0, 0], color="#91c8f6")
-    axes[0, 0].set_title(f"{cluster_name} 季节项(月)箱线图", fontweight="bold")
+    axes[0, 0].set_title(
+        f"{cluster_name} 季节项(月)箱线图",
+        fontsize=THESIS_SUBPLOT_TITLE_SIZE,
+        fontweight="bold",
+    )
 
     sns.violinplot(data=seasonal_df, x="月份", y="季节项", ax=axes[0, 1], color="#b8e986")
-    axes[0, 1].set_title("季节项分布(小提琴图)", fontweight="bold")
+    axes[0, 1].set_title(
+        "季节项分布(小提琴图)",
+        fontsize=THESIS_SUBPLOT_TITLE_SIZE,
+        fontweight="bold",
+    )
 
     axes[1, 0].plot(trend_change.index, trend_change.values, color="#1f77b4", lw=1.2)
     axes[1, 0].axhline(0, ls="--", c="red", alpha=0.6)
-    axes[1, 0].set_title("趋势月变化率(%)", fontweight="bold")
+    axes[1, 0].set_title(
+        "趋势月变化率(%)",
+        fontsize=THESIS_SUBPLOT_TITLE_SIZE,
+        fontweight="bold",
+    )
 
     axes[1, 1].hist(result.resid.values, bins=20, color="#f7b267", edgecolor="black", alpha=0.85)
     axes[1, 1].axvline(0, ls="--", c="red", alpha=0.7)
-    axes[1, 1].set_title("残差分布直方图", fontweight="bold")
+    axes[1, 1].set_title(
+        "残差分布直方图",
+        fontsize=THESIS_SUBPLOT_TITLE_SIZE,
+        fontweight="bold",
+    )
 
     for ax in axes.ravel():
+        ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
         ax.grid(alpha=0.25)
     plt.tight_layout()
     save_figure_dual(fig, save_path_png=save_path, dpi=300)
@@ -251,10 +450,21 @@ def plot_cluster_raw_comparison(cluster_monthly_df, save_path):
         linewidth=1.8,
         ax=ax,
     )
-    ax.set_title("三大城市群月均 PM2.5 浓度对比 (2018-2023)", fontsize=13, fontweight="bold")
+    ax.set_title(
+        f"三大城市群月均 {PM25_UNICODE} 浓度对比 (2018-2023)",
+        fontsize=THESIS_MAIN_TITLE_SIZE,
+        fontweight="bold",
+    )
     ax.set_xlabel("时间")
-    ax.set_ylabel("PM2.5")
+    ax.set_ylabel(PM25_UNICODE)
+    ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
     ax.grid(alpha=0.25)
+    leg = ax.get_legend()
+    if leg is not None:
+        plt.setp(leg.get_texts(), fontsize=THESIS_LEGEND_SIZE)
+        t = leg.get_title()
+        if t is not None and t.get_text():
+            t.set_fontsize(THESIS_LEGEND_TITLE_SIZE)
     plt.tight_layout()
     save_figure_dual(fig, save_path_png=save_path, dpi=300)
     plt.close(fig)
@@ -265,10 +475,15 @@ def plot_cluster_trend_comparison(stl_result_map, save_path):
     fig, ax = plt.subplots(figsize=(14, 6))
     for cluster_name, result in stl_result_map.items():
         ax.plot(result.trend.index, result.trend.values, lw=2.0, label=cluster_name)
-    ax.set_title("三大城市群 PM2.5 STL 趋势项对比", fontsize=13, fontweight="bold")
+    ax.set_title(
+        f"三大城市群 {PM25_UNICODE} STL 趋势项对比",
+        fontsize=THESIS_MAIN_TITLE_SIZE,
+        fontweight="bold",
+    )
     ax.set_xlabel("时间")
     ax.set_ylabel("趋势项")
-    ax.legend()
+    ax.legend(fontsize=THESIS_LEGEND_SIZE)
+    ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
     ax.grid(alpha=0.25)
     plt.tight_layout()
     save_figure_dual(fig, save_path_png=save_path, dpi=300)
@@ -281,8 +496,8 @@ def main():
     safe_print("三大城市群（月）PM2.5 STL 分解分析")
     safe_print("=" * 60)
 
-    input_csv = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
-    output_dir = r"H:\大论文Result\大论文图\三大城市群\STL时间序列分解"
+    input_csv = resolve_stl_input_csv_path()
+    output_dir = DEFAULT_STL_OUTPUT_DIR
     os.makedirs(output_dir, exist_ok=True)
 
     city_cluster_map = get_city_cluster_map()

@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib import font_manager as fm
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -36,8 +37,9 @@ GROUP_NAME_ALIASES = {
     "珠江三角洲城市群(PRD)": "珠三角",
 }
 
-# 图中 PM2.5 化学式：2.5 为下标，PM 为正体（matplotlib mathtext）
-PM25_MATH = r"$\mathrm{PM}_{2.5}$"
+# 与中文同串勿用 $...$（mathtext+中文易在 SVG 中变成 ¤）；用 Unicode 下标作普通文本。
+PM25_PLAIN = "PM\u2082.\u2085"
+LABEL_UNIT_UGM3 = "(\u03bcg/m\u00b3)"
 
 
 def safe_print(*args, **kwargs) -> None:
@@ -52,19 +54,55 @@ def safe_print(*args, **kwargs) -> None:
         sys.stdout.write(fallback + end)
 
 
-def configure_chinese_font() -> None:
-    """配置中文字体，避免图中出现方框。"""
-    chinese_font_chain = [
-        "SimHei",
+def _thesis_font_family_list() -> List[str]:
+    """与可视化作图.py 一致：TNR + 楷体（若已安装）+ 雅黑/黑体等，仅保留 fontManager 已登记名。"""
+    by_lower: Dict[str, str] = {}
+    for info in fm.fontManager.ttflist:
+        k = info.name.lower()
+        if k not in by_lower:
+            by_lower[k] = info.name
+
+    want_order = [
+        "Times New Roman",
+        "KaiTi",
+        "STKaiti",
+        "SimKai",
+        "KaiTi_GB2312",
         "Microsoft YaHei",
-        "Arial Unicode MS",
+        "SimHei",
         "SimSun",
         "Noto Sans CJK SC",
         "Source Han Sans SC",
+        "Arial Unicode MS",
     ]
-    mpl.rcParams["font.family"] = "sans-serif"
-    mpl.rcParams["font.sans-serif"] = chinese_font_chain
+    seen = set()
+    resolved: List[str] = []
+    for name in want_order:
+        got = by_lower.get(name.lower())
+        if got is not None and got not in seen:
+            resolved.append(got)
+            seen.add(got)
+
+    if not resolved:
+        return ["DejaVu Sans"]
+    if resolved[0].lower() != "times new roman":
+        tnr = by_lower.get("times new roman")
+        if tnr is not None:
+            resolved = [tnr] + [x for x in resolved if x.lower() != "times new roman"]
+        else:
+            resolved = ["Times New Roman"] + [x for x in resolved if x.lower() != "times new roman"]
+    return resolved
+
+
+def configure_chinese_font() -> None:
+    """西文 Times New Roman，中文优先楷体否则雅黑/黑体；SVG 保留 <text> 以免 path 占位字。"""
+    mpl.rcParams["svg.fonttype"] = "none"
+    mpl.rcParams["font.family"] = _thesis_font_family_list()
     mpl.rcParams["axes.unicode_minus"] = False
+    mpl.rcParams["mathtext.fontset"] = "custom"
+    mpl.rcParams["mathtext.rm"] = "Times New Roman"
+    mpl.rcParams["mathtext.it"] = "Times New Roman:italic"
+    mpl.rcParams["mathtext.bf"] = "Times New Roman:bold"
 
 
 def save_figure_dual(fig: plt.Figure, save_path_png: str, dpi: int = 300) -> None:
@@ -121,16 +159,25 @@ def load_annual_city_data(annual_path: str) -> pd.DataFrame:
     """读取年度城市 PM2.5 数据并转换成长表。"""
     df = read_csv_flexible(annual_path)
     city_col = choose_column(df, ["城市", "city", "City"], "城市")
-    year_cols = extract_columns_by_regex(list(df.columns), r"^\d{4}$")
+    # 支持 2018 或 2018年 等列名
+    year_cols = extract_columns_by_regex(list(df.columns), r"^\d{4}年?$")
     if not year_cols:
-        raise ValueError("年度数据中未找到年份列（如 2018、2019）")
-    long_df = df[[city_col] + year_cols].melt(
-        id_vars=[city_col],
+        raise ValueError("年度数据中未找到年份列（如 2018、2019 或 2018年、2019年）")
+    id_vars: List[str] = [city_col]
+    if "城市群" in df.columns:
+        id_vars = ["城市群", city_col]
+    long_df = df[id_vars + year_cols].melt(
+        id_vars=id_vars,
         var_name="year",
         value_name="pm25",
     )
     long_df = long_df.rename(columns={city_col: "城市"})
     long_df["城市"] = long_df["城市"].astype(str).str.strip()
+    if "城市群" in long_df.columns:
+        long_df["城市群"] = long_df["城市群"].astype(str).str.strip()
+    long_df["year"] = (
+        long_df["year"].astype(str).str.replace("年", "", regex=False).str.strip()
+    )
     long_df["year"] = pd.to_numeric(long_df["year"], errors="coerce")
     long_df["pm25"] = pd.to_numeric(long_df["pm25"], errors="coerce")
     long_df = long_df.dropna(subset=["year", "pm25"])
@@ -138,7 +185,10 @@ def load_annual_city_data(annual_path: str) -> pd.DataFrame:
     if ZERO_AS_MISSING:
         long_df.loc[long_df["pm25"] <= 0, "pm25"] = np.nan
         long_df = long_df.dropna(subset=["pm25"])
-    return long_df
+    out_cols = ["城市", "year", "pm25"]
+    if "城市群" in long_df.columns:
+        out_cols = ["城市群", "城市", "year", "pm25"]
+    return long_df[out_cols]
 
 
 def load_monthly_city_data(monthly_path: str) -> pd.DataFrame:
@@ -177,11 +227,21 @@ def attach_group_and_aggregate(
 ) -> pd.DataFrame:
     """将城市映射到城市群，并按城市群+时间取均值。支持城市级与城市群级数据。"""
     df = long_df.copy()
-    df["城市群"] = df["城市"].map(city_group_map)
-    # 若直接映射失败，尝试城市群名称别名（年度数据可能已是城市群级）
-    still_missing = df["城市群"].isna()
-    if still_missing.any():
-        df.loc[still_missing, "城市群"] = df.loc[still_missing, "城市"].map(GROUP_NAME_ALIASES)
+    if "城市群" in df.columns:
+        raw = df["城市群"].astype(str).str.strip()
+        df["城市群"] = raw.map(GROUP_NAME_ALIASES)
+        miss = df["城市群"].isna()
+        if miss.any():
+            df.loc[miss, "城市群"] = df.loc[miss, "城市"].map(city_group_map)
+        miss2 = df["城市群"].isna()
+        if miss2.any():
+            df.loc[miss2, "城市群"] = df.loc[miss2, "城市"].map(GROUP_NAME_ALIASES)
+    else:
+        df["城市群"] = df["城市"].map(city_group_map)
+        # 若直接映射失败，尝试城市群名称别名（年度数据可能已是城市群级）
+        still_missing = df["城市群"].isna()
+        if still_missing.any():
+            df.loc[still_missing, "城市群"] = df.loc[still_missing, "城市"].map(GROUP_NAME_ALIASES)
     missing_city = df[df["城市群"].isna()]["城市"].drop_duplicates().tolist()
     if missing_city:
         preview = missing_city[:10]
@@ -487,6 +547,67 @@ def _extract_change_label(row: pd.Series) -> Optional[str]:
     return None
 
 
+def _sliding_t_change_point_for_plot(
+    data: np.ndarray,
+    min_window: int = 3,
+    min_each_side: int = 3,
+) -> Dict[str, object]:
+    """与可视化作图.py 一致：|t| 最大位置；Significant 仅表示该处 p<0.05。"""
+    n = len(data)
+    if n < max(2 * min_each_side, 6):
+        return {"change_point": None, "t_statistic": np.nan, "p_value": np.nan, "significant": False}
+    window_size = max(min_window, n // 3)
+    window_size = min(window_size, n - min_each_side)
+    t_stats, p_values, positions = [], [], []
+    for i in range(window_size, n - window_size + 1):
+        before, after = data[i - window_size:i], data[i:i + window_size]
+        if len(before) < 2 or len(after) < 2:
+            continue
+        try:
+            t_stat, p_val = stats.ttest_ind(before, after, equal_var=False)
+            if not (np.isnan(t_stat) or np.isnan(p_val)):
+                t_stats.append(abs(float(t_stat)))
+                p_values.append(float(p_val))
+                positions.append(i)
+        except Exception:
+            continue
+    if not t_stats:
+        return {"change_point": None, "t_statistic": np.nan, "p_value": np.nan, "significant": False}
+    max_idx = int(np.argmax(t_stats))
+    return {
+        "change_point": positions[max_idx],
+        "t_statistic": t_stats[max_idx],
+        "p_value": p_values[max_idx],
+        "significant": bool(p_values[max_idx] < 0.05),
+    }
+
+
+def build_change_points_df_for_plot(
+    group_series: Dict[str, pd.Series],
+    time_name: str,
+    min_window: int,
+    min_each_side: int,
+) -> pd.DataFrame:
+    rows = []
+    for group, s in group_series.items():
+        s = s.dropna().sort_index()
+        times = s.index.tolist()
+        y = s.values.astype(float)
+        cp = _sliding_t_change_point_for_plot(y, min_window=min_window, min_each_side=min_each_side)
+        cp_idx = cp["change_point"]
+        change_label = times[cp_idx] if cp_idx is not None and 0 <= cp_idx < len(times) else None
+        rows.append(
+            {
+                "城市群": group,
+                f"Change_{time_name}": change_label,
+                "T_Statistic": cp["t_statistic"],
+                "P_Value": cp["p_value"],
+                "Significant": cp["significant"],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _annotate_bar_values(ax: plt.Axes, bars: List[object], decimals: int = 3) -> None:
     for bar in bars:
         height = bar.get_height()
@@ -547,8 +668,6 @@ def plot_group_series(
     if annotate_change_points and sliding_t_df is not None and not sliding_t_df.empty:
         used_group_point_labels = set()
         for _, row in sliding_t_df.iterrows():
-            if not bool(row.get("Significant", False)):
-                continue
             group = str(row.get("城市群", ""))
             if group not in group_line_data:
                 continue
@@ -579,9 +698,14 @@ def plot_group_series(
                 zorder=7,
                 label=label,
             )
-            # 标注样式按示例图：显示时间与 T 值。
+            p_val = pd.to_numeric(row.get("P_Value"), errors="coerce")
+            ann_lines = [str(change_label), f"|t|={t_stat:.2f}"]
+            if pd.notna(p_val):
+                ann_lines.append(f"p={p_val:.3f}")
+            if not bool(row.get("Significant", False)):
+                ann_lines.append("(α=0.05未显著)")
             ax.annotate(
-                f"{change_label}\nT={t_stat:.2f}",
+                "\n".join(ann_lines),
                 xy=(x_pos, y_val),
                 xytext=(6, 8),
                 textcoords="offset points",
@@ -604,7 +728,7 @@ def plot_group_series(
 
     ax.set_title(title, fontsize=14)
     ax.set_xlabel(xlabel, fontsize=12)
-    ax.set_ylabel(f"{PM25_MATH}浓度 (μg/m³)", fontsize=12)
+    ax.set_ylabel(f"{PM25_PLAIN}浓度 {LABEL_UNIT_UGM3}", fontsize=12)
     ax.grid(alpha=0.3, linestyle="--")
     plt.xticks(rotation=45, ha="right")
     handles, labels = ax.get_legend_handles_labels()
@@ -623,8 +747,15 @@ def plot_test_comparison_2x2(
     monthly_results: Dict[str, pd.DataFrame],
     output_png_path: str,
 ) -> None:
+    amk = annual_results["annual_mann_kendall"]
+    if amk.empty or "城市群" not in amk.columns:
+        safe_print(
+            "跳过「统计检验结果对比」图：年度 Mann-Kendall 结果为空或缺少城市群列。"
+            "请检查城市归属表是否与「城市」名称一致，或在年度 CSV 中提供「城市群」列。"
+        )
+        return
     groups = sorted(
-        annual_results["annual_mann_kendall"]["城市群"].astype(str).unique().tolist(),
+        amk["城市群"].astype(str).unique().tolist(),
         key=lambda g: ["京津冀", "长三角", "珠三角"].index(g) if g in ["京津冀", "长三角", "珠三角"] else 99,
     )
     x = np.arange(len(groups))
@@ -639,7 +770,7 @@ def plot_test_comparison_2x2(
     monthly_st = monthly_results["month_sliding_t"].set_index("城市群")
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f"三大城市群{PM25_MATH}浓度统计检验结果对比", fontsize=16, y=0.98)
+    fig.suptitle(f"三大城市群{PM25_PLAIN}浓度统计检验结果对比", fontsize=16, y=0.98)
 
     # 子图1：年度趋势检验 P 值
     ax1 = axes[0, 0]
@@ -698,8 +829,8 @@ def plot_test_comparison_2x2(
     )
     bars7 = ax4.bar(x - width / 2, sen_vals, width, label="Sen斜率", color="#f77f00", alpha=0.8)
     bars8 = ax4.bar(x + width / 2, lr_slope_vals, width, label="线性回归斜率", color="#ffb703", alpha=0.8)
-    ax4.set_title(f"年度{PM25_MATH}减少速率对比", fontsize=12)
-    ax4.set_ylabel(f"{PM25_MATH}减少速率 (μg/m³/年)")
+    ax4.set_title(f"年度{PM25_PLAIN}减少速率对比", fontsize=12)
+    ax4.set_ylabel(f"{PM25_PLAIN}减少速率 {LABEL_UNIT_UGM3}/年")
     ax4.set_xticks(x)
     ax4.set_xticklabels(groups)
     ax4.grid(axis="y", alpha=0.25, linestyle="--")
@@ -764,9 +895,15 @@ def main() -> None:
     save_df(monthly_results["month_sliding_t"], os.path.join(OUTPUT_DIR, "月度_滑动T检验_城市群.csv"))
     save_df(seasonal_results["season_pettitt"], os.path.join(OUTPUT_DIR, "季度_Pettitt_城市群.csv"))
     save_df(seasonal_results["season_sliding_t"], os.path.join(OUTPUT_DIR, "季度_滑动T检验_城市群.csv"))
+    seasonal_plot_change_df = build_change_points_df_for_plot(
+        seasonal_group_series,
+        "Season",
+        min_window=4,
+        min_each_side=4,
+    )
     plot_group_series(
         annual_group_series,
-        f"三大城市群年度{PM25_MATH}浓度变化",
+        f"三大城市群年度{PM25_PLAIN}浓度变化",
         "年份",
         os.path.join(OUTPUT_DIR, "三大城市群_年度PM2.5时序.png"),
         annual_mk_df=annual_results["annual_mann_kendall"],
@@ -774,17 +911,17 @@ def main() -> None:
     )
     plot_group_series(
         monthly_group_series,
-        f"三大城市群月均{PM25_MATH}浓度变化（2018-2023）",
+        f"三大城市群月均{PM25_PLAIN}浓度变化（2018-2023）",
         "月份",
         os.path.join(OUTPUT_DIR, "三大城市群_月度PM2.5时序.png"),
     )
     plot_group_series(
         seasonal_group_series,
-        f"三大城市群季度{PM25_MATH}浓度变化（由月均聚合）",
+        f"三大城市群季度{PM25_PLAIN}浓度变化（由月均聚合）",
         "季度",
         os.path.join(OUTPUT_DIR, "三大城市群_季度PM2.5时序.png"),
         pettitt_df=seasonal_results["season_pettitt"],
-        sliding_t_df=seasonal_results["season_sliding_t"],
+        sliding_t_df=seasonal_plot_change_df,
         annotate_change_points=True,
     )
     plot_test_comparison_2x2(

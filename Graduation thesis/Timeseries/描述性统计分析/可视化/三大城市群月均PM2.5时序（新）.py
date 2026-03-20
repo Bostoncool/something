@@ -1,7 +1,216 @@
+import os
+import re
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
+
+# 与 main() 中路径一致（见《中文字体显示问题排查指南》）
+DEFAULT_MONTHLY_INPUT_CSV = (
+    r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
+)
+DEFAULT_MONTHLY_OUTPUT_DIR = r"H:\大论文Result\大论文图\三大城市群\PM2.5_月均_时序图"
+
+# 图内 PM₂.₅：Unicode 下标，勿用 mathtext 的 $...$（排查指南 §2.4）
+PM25_UNICODE = "PM\u2082.\u2085"
+
+
+def safe_print(message: str) -> None:
+    """在 Windows 终端编码不支持中文时，降级输出。"""
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        print(message.encode("ascii", errors="backslashreplace").decode("ascii"))
+
+
+_WINDOWS_FONT_FILES_REGISTERED = False
+
+
+def _register_windows_font_files_once() -> None:
+    global _WINDOWS_FONT_FILES_REGISTERED
+    if _WINDOWS_FONT_FILES_REGISTERED or os.name != "nt":
+        return
+    fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    for fname in (
+        "simkai.ttf",
+        "simkai.ttc",
+        "msyh.ttc",
+        "msyhbd.ttc",
+        "simhei.ttf",
+        "simsun.ttc",
+        "simsunb.ttf",
+    ):
+        fp = fonts_dir / fname
+        if not fp.is_file():
+            continue
+        try:
+            mpl.font_manager.fontManager.addfont(str(fp))
+        except (OSError, ValueError, RuntimeError):
+            continue
+    _WINDOWS_FONT_FILES_REGISTERED = True
+
+
+def _font_family_resolves(family: str) -> bool:
+    fm = mpl.font_manager.fontManager
+    try:
+        path = fm.findfont(
+            mpl.font_manager.FontProperties(family=family),
+            fallback_to_default=False,
+        )
+    except ValueError:
+        return False
+    return bool(path and os.path.isfile(path))
+
+
+def _build_thesis_serif_font_chain() -> list[str]:
+    """与 MSTL / STL / AQI VS PM2.5 脚本一致的 TNR + 楷体链。"""
+    _register_windows_font_files_once()
+    ordered: list[str] = []
+
+    def append_if_new(name: str) -> None:
+        if name not in ordered and _font_family_resolves(name):
+            ordered.append(name)
+
+    for name in ("Times New Roman", "Times"):
+        append_if_new(name)
+        if ordered:
+            break
+    if not ordered:
+        for name in ("DejaVu Serif", "DejaVu Sans", "Arial"):
+            append_if_new(name)
+            if ordered:
+                break
+
+    for name in (
+        "KaiTi",
+        "STKaiti",
+        "DFKai-SB",
+        "FZKai-Z03",
+        "楷体",
+        "Kaiti SC",
+        "SimKai",
+        "KaiTi_GB2312",
+        "华文楷体",
+        "Microsoft YaHei",
+        "SimHei",
+        "SimSun",
+        "Arial Unicode MS",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+    ):
+        append_if_new(name)
+
+    if not any(
+        x in ordered
+        for x in ("KaiTi", "STKaiti", "DFKai-SB", "FZKai-Z03", "楷体", "Kaiti SC", "SimKai", "KaiTi_GB2312")
+    ):
+        for font in mpl.font_manager.fontManager.ttflist:
+            if "simkai" in font.fname.replace("\\", "/").lower():
+                if font.name not in ordered:
+                    insert_at = 1 if len(ordered) > 1 else len(ordered)
+                    ordered.insert(insert_at, font.name)
+                break
+
+    append_if_new("DejaVu Sans")
+    return ordered if ordered else ["DejaVu Sans"]
+
+
+def configure_plot_fonts() -> None:
+    """西文 Times New Roman，中文楷体回退；`svg.fonttype=none`（排查指南 §2.3）。"""
+    serif_chain = _build_thesis_serif_font_chain()
+    if not any(
+        x in serif_chain
+        for x in ("KaiTi", "STKaiti", "DFKai-SB", "FZKai-Z03", "楷体", "Kaiti SC", "SimKai", "KaiTi_GB2312")
+    ):
+        safe_print("警告: 未解析到 KaiTi/楷体，中文将使用链中后续字体（如雅黑/宋体）。")
+    mpl.rcParams["svg.fonttype"] = "none"
+    mpl.rcParams["font.family"] = "serif"
+    mpl.rcParams["font.serif"] = serif_chain
+    mpl.rcParams["axes.unicode_minus"] = False
+    safe_print(
+        "绘图字体链(西文优先 Times New Roman，中文回退楷体及备用): "
+        + ", ".join(serif_chain)
+    )
+
+
+def _svg_font_reorder_disabled() -> bool:
+    for key in (
+        "MONTHLY_PM25_SVG_NO_FONT_REORDER",
+        "STL_SVG_NO_FONT_REORDER",
+        "MSTL_SVG_NO_FONT_REORDER",
+    ):
+        if os.environ.get(key, "").strip().lower() in ("1", "true", "yes"):
+            return True
+    return False
+
+
+def _patch_svg_font_family_for_weak_viewers(svg_path: str) -> None:
+    """Word 等只认 font-family 首项时避免中文方框（排查指南 §2.3.1）。"""
+    if _svg_font_reorder_disabled():
+        return
+    try:
+        with open(svg_path, encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return
+    office_first = (
+        "'Microsoft YaHei', 'KaiTi', 'SimHei', 'SimSun', "
+        "'Times New Roman', 'DejaVu Sans', serif"
+    )
+    patched, n = re.subn(
+        r"font-family:\s*[^;]+;",
+        f"font-family: {office_first};",
+        content,
+    )
+    if n and patched != content:
+        try:
+            with open(svg_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(patched)
+        except OSError:
+            return
+
+
+def save_figure_dual(
+    fig, save_path_png: str, dpi: int = 300, *, transparent: bool = False
+) -> None:
+    """同时保存 PNG 与 SVG；SVG 可选后处理 font-family。"""
+    fig.savefig(
+        save_path_png, dpi=dpi, bbox_inches="tight", transparent=transparent
+    )
+    save_path_svg = os.path.splitext(save_path_png)[0] + ".svg"
+    fig.savefig(
+        save_path_svg, format="svg", bbox_inches="tight", transparent=transparent
+    )
+    _patch_svg_font_family_for_weak_viewers(save_path_svg)
+
+
+def resolve_monthly_pm25_csv_path() -> str:
+    """环境变量 MONTHLY_PM25_INPUT_CSV > 脚本同目录合并数据 > 默认 H: 路径。"""
+    script_dir = Path(__file__).resolve().parent
+    candidates: list[str] = []
+    env = os.environ.get("MONTHLY_PM25_INPUT_CSV", "").strip()
+    if env:
+        candidates.append(env)
+    candidates.append(str(script_dir / "合并数据_2018-2023.csv"))
+    candidates.append(DEFAULT_MONTHLY_INPUT_CSV)
+
+    tried: list[str] = []
+    for p in candidates:
+        if not p or p in tried:
+            continue
+        tried.append(p)
+        if os.path.isfile(p):
+            safe_print(f"使用月均输入文件: {p}")
+            return os.path.abspath(p)
+
+    msg_lines = ["未找到月均宽表 CSV。已尝试:"]
+    msg_lines.extend(f"  - {p}" for p in tried)
+    msg_lines.append(
+        "请将 `合并数据_2018-2023.csv` 放在本脚本同目录，或设置 MONTHLY_PM25_INPUT_CSV=绝对路径。"
+    )
+    raise FileNotFoundError("\n".join(msg_lines))
+
 
 CITY_TO_CLUSTER = {
     # 京津冀
@@ -57,14 +266,6 @@ CITY_TO_CLUSTER = {
     "肇庆": "珠江三角洲城市群(PRD)",
     "惠州": "珠江三角洲城市群(PRD)",
 }
-
-
-def safe_print(message: str) -> None:
-    """在 Windows 终端编码不支持中文时，降级输出。"""
-    try:
-        print(message)
-    except UnicodeEncodeError:
-        print(message.encode("ascii", errors="backslashreplace").decode("ascii"))
 
 
 def find_column_by_alias(df: pd.DataFrame, aliases: list[str]) -> str | None:
@@ -233,9 +434,6 @@ def choose_color(cluster_name: str) -> str:
     return "#6c757d"
 
 
-# PM₂.₅ 下标格式（符合化学规范），Unicode: ₂=U+2082, ₅=U+2085
-PM25_LABEL = "PM₂.₅"
-
 # 城市群中文名 → 英文图例标签
 CLUSTER_TO_ENGLISH = {
     "京津冀城市群(BTH)": "Beijing-Tianjin-Hebei (BTH)",
@@ -267,48 +465,44 @@ def plot_cluster_trends(cluster_monthly_df: pd.DataFrame, output_dir: Path) -> P
         )
 
     ax.set_title(
-        f"Monthly Mean {PM25_LABEL} Time Series of Three Major Urban Agglomerations (2018-2023)",
+        f"Monthly Mean {PM25_UNICODE} Time Series of Three Major Urban Agglomerations (2018-2023)",
         fontsize=14,
         pad=10,
-        fontfamily="Times New Roman",
     )
-    ax.set_xlabel("Time", fontsize=12, fontfamily="Times New Roman")
+    ax.set_xlabel("Time", fontsize=12)
     ax.set_ylabel(
-        f"Monthly mean {PM25_LABEL} concentration (μg/m³)",
+        f"Monthly mean {PM25_UNICODE} concentration (\u03bcg/m\u00b3)",
         fontsize=12,
-        fontfamily="Times New Roman",
     )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_linewidth(1.2)
     ax.spines["bottom"].set_linewidth(1.2)
     ax.tick_params(axis="both", width=1.0, length=5, labelsize=10)
-    for label in ax.get_xticklabels() + ax.get_yticklabels():
-        label.set_fontfamily("Times New Roman")
     ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.35)
     if len(ax.lines) > 0:
-        ax.legend(frameon=False, fontsize=10, prop={"family": "Times New Roman"})
+        ax.legend(frameon=False, fontsize=10)
 
-    output_path = output_dir / "三大城市群月均PM2.5时序变化.svg"
-    fig.savefig(output_path, format="svg", transparent=True, bbox_inches="tight")
+    base_path = output_dir / "三大城市群月均PM2.5时序变化"
+    png_path = base_path.with_suffix(".png")
+    save_figure_dual(fig, str(png_path), dpi=300, transparent=True)
     plt.close(fig)
-    return output_path
+    return base_path.with_suffix(".svg")
 
 
 def main() -> None:
-    csv_path = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
+    configure_plot_fonts()
+    csv_path = resolve_monthly_pm25_csv_path()
+    output_dir = Path(DEFAULT_MONTHLY_OUTPUT_DIR)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    mpl.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial Unicode MS"]
-    mpl.rcParams["axes.unicode_minus"] = False
-
-    output_dir = Path(r"H:\大论文Result\大论文图\三大城市群\PM2.5_月均_时序图")
     cluster_monthly_df = build_cluster_monthly_series(csv_path)
-    figure_path = plot_cluster_trends(cluster_monthly_df, output_dir=output_dir)
+    figure_svg = plot_cluster_trends(cluster_monthly_df, output_dir=output_dir)
 
     output_data_path = output_dir / "三大城市群_月均PM2.5_聚合结果.csv"
     cluster_monthly_df.to_csv(output_data_path, encoding="utf-8-sig")
 
-    safe_print(f"图片已保存到: {figure_path}")
+    safe_print(f"图片已保存到: {figure_svg}（同路径 PNG 已一并输出）")
     safe_print(f"聚合数据已保存到: {output_data_path}")
 
 
