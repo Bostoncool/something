@@ -18,6 +18,9 @@ from scipy import stats
 # =========================
 OUTPUT_DIR = r"H:\大论文Result\大论文图\三大城市群\统计趋势检验"
 
+# 图内化学式：正体 PM，下标 2.5（与中文/单位用 + 拼接，勿把中文放进 $...$）
+PM25_MATH = r"$\mathrm{PM}_{2.5}$"
+
 
 def safe_print(*args, **kwargs) -> None:
     """兼容终端编码差异的安全输出。"""
@@ -31,19 +34,20 @@ def safe_print(*args, **kwargs) -> None:
         sys.stdout.write(fallback + end)
 
 
-def configure_chinese_font() -> None:
-    """配置中文字体，避免图中出现方框。"""
-    chinese_font_chain = [
-        "SimHei",
-        "Microsoft YaHei",
-        "Arial Unicode MS",
-        "SimSun",
-        "Noto Sans CJK SC",
-        "Source Han Sans SC",
+def configure_thesis_fonts() -> None:
+    """英文 Times New Roman、中文楷体（Matplotlib 3.6+ 按字形回退）；mathtext 正体与 TNR 一致。"""
+    mpl.rcParams["font.family"] = "serif"
+    mpl.rcParams["font.serif"] = [
+        "Times New Roman",
+        "KaiTi",
+        "STKaiti",
+        "SimKai",
     ]
-    mpl.rcParams["font.family"] = "sans-serif"
-    mpl.rcParams["font.sans-serif"] = chinese_font_chain
     mpl.rcParams["axes.unicode_minus"] = False
+    mpl.rcParams["mathtext.fontset"] = "custom"
+    mpl.rcParams["mathtext.rm"] = "Times New Roman"
+    mpl.rcParams["mathtext.it"] = "Times New Roman:italic"
+    mpl.rcParams["mathtext.bf"] = "Times New Roman:bold"
 
 
 def save_figure_dual(fig: plt.Figure, save_path_png: str, dpi: int = 300) -> None:
@@ -319,7 +323,7 @@ def plot_group_series(
 
     ax.set_title(title, fontsize=14)
     ax.set_xlabel(xlabel, fontsize=12)
-    ax.set_ylabel("PM2.5浓度 (μg/m³)", fontsize=12)
+    ax.set_ylabel(PM25_MATH + "浓度 (μg/m³)", fontsize=12)
     ax.grid(alpha=0.3, linestyle="--")
     plt.xticks(rotation=45, ha="right")
     handles, labels = ax.get_legend_handles_labels()
@@ -352,7 +356,7 @@ def plot_test_comparison_2x2(
     monthly_st = monthly_results["month_sliding_t"].set_index("城市群")
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("三大城市群PM2.5浓度统计检验结果对比", fontsize=16, y=0.98)
+    fig.suptitle("三大城市群" + PM25_MATH + "浓度统计检验结果对比", fontsize=16, y=0.98)
 
     ax1 = axes[0, 0]
     mk_vals = np.array([pd.to_numeric(annual_mk.loc[g, "P_Value"], errors="coerce") for g in groups], dtype=float)
@@ -407,8 +411,8 @@ def plot_test_comparison_2x2(
     )
     bars7 = ax4.bar(x - width / 2, sen_vals, width, label="Sen斜率", color="#f77f00", alpha=0.8)
     bars8 = ax4.bar(x + width / 2, lr_slope_vals, width, label="线性回归斜率", color="#ffb703", alpha=0.8)
-    ax4.set_title("年度PM2.5减少速率对比", fontsize=12)
-    ax4.set_ylabel("PM2.5减少速率 (μg/m³/年)")
+    ax4.set_title("年度" + PM25_MATH + "减少速率对比", fontsize=12)
+    ax4.set_ylabel(PM25_MATH + "减少速率 (μg/m³/年)")
     ax4.set_xticks(x)
     ax4.set_xticklabels(groups)
     ax4.grid(axis="y", alpha=0.25, linestyle="--")
@@ -504,7 +508,7 @@ def main() -> None:
     except Exception:
         pass
 
-    configure_chinese_font()
+    configure_thesis_fonts()
 
     safe_print("加载聚合序列...")
     annual_group_series = load_series_from_csv(
@@ -542,7 +546,7 @@ def main() -> None:
     safe_print("开始绘图...")
     plot_group_series(
         annual_group_series,
-        "三大城市群年度PM2.5浓度变化",
+        "三大城市群年度" + PM25_MATH + "浓度变化",
         "年份",
         os.path.join(OUTPUT_DIR, "三大城市群_年度PM2.5时序.png"),
         annual_mk_df=annual_results["annual_mann_kendall"],
@@ -550,13 +554,13 @@ def main() -> None:
     )
     plot_group_series(
         monthly_group_series,
-        "三大城市群月均PM2.5浓度变化（2018-2023）",
+        "三大城市群月均" + PM25_MATH + "浓度变化（2018-2023）",
         "月份",
         os.path.join(OUTPUT_DIR, "三大城市群_月度PM2.5时序.png"),
     )
     plot_group_series(
         seasonal_group_series,
-        "三大城市群季度PM2.5浓度变化（由月均聚合）",
+        "三大城市群季度" + PM25_MATH + "浓度变化（由月均聚合）",
         "季度",
         os.path.join(OUTPUT_DIR, "三大城市群_季度PM2.5时序.png"),
         pettitt_df=seasonal_results["season_pettitt"],

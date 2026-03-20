@@ -36,6 +36,9 @@ GROUP_NAME_ALIASES = {
     "珠江三角洲城市群(PRD)": "珠三角",
 }
 
+# 图中 PM2.5 化学式：2.5 为下标，PM 为正体（matplotlib mathtext）
+PM25_MATH = r"$\mathrm{PM}_{2.5}$"
+
 
 def safe_print(*args, **kwargs) -> None:
     """兼容终端编码差异的安全输出。"""
@@ -601,7 +604,7 @@ def plot_group_series(
 
     ax.set_title(title, fontsize=14)
     ax.set_xlabel(xlabel, fontsize=12)
-    ax.set_ylabel("PM2.5浓度 (μg/m³)", fontsize=12)
+    ax.set_ylabel(f"{PM25_MATH}浓度 (μg/m³)", fontsize=12)
     ax.grid(alpha=0.3, linestyle="--")
     plt.xticks(rotation=45, ha="right")
     handles, labels = ax.get_legend_handles_labels()
@@ -636,7 +639,7 @@ def plot_test_comparison_2x2(
     monthly_st = monthly_results["month_sliding_t"].set_index("城市群")
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("三大城市群PM2.5浓度统计检验结果对比", fontsize=16, y=0.98)
+    fig.suptitle(f"三大城市群{PM25_MATH}浓度统计检验结果对比", fontsize=16, y=0.98)
 
     # 子图1：年度趋势检验 P 值
     ax1 = axes[0, 0]
@@ -695,8 +698,8 @@ def plot_test_comparison_2x2(
     )
     bars7 = ax4.bar(x - width / 2, sen_vals, width, label="Sen斜率", color="#f77f00", alpha=0.8)
     bars8 = ax4.bar(x + width / 2, lr_slope_vals, width, label="线性回归斜率", color="#ffb703", alpha=0.8)
-    ax4.set_title("年度PM2.5减少速率对比", fontsize=12)
-    ax4.set_ylabel("PM2.5减少速率 (μg/m³/年)")
+    ax4.set_title(f"年度{PM25_MATH}减少速率对比", fontsize=12)
+    ax4.set_ylabel(f"{PM25_MATH}减少速率 (μg/m³/年)")
     ax4.set_xticks(x)
     ax4.set_xticklabels(groups)
     ax4.grid(axis="y", alpha=0.25, linestyle="--")
@@ -763,17 +766,21 @@ def main() -> None:
     save_df(seasonal_results["season_sliding_t"], os.path.join(OUTPUT_DIR, "季度_滑动T检验_城市群.csv"))
     plot_group_series(
         annual_group_series,
-        "三大城市群年度PM2.5浓度变化",
+        f"三大城市群年度{PM25_MATH}浓度变化",
         "年份",
         os.path.join(OUTPUT_DIR, "三大城市群_年度PM2.5时序.png"),
         annual_mk_df=annual_results["annual_mann_kendall"],
         annotate_sen_slope=True,
     )
-    plot_group_series(monthly_group_series, "三大城市群月均PM2.5浓度变化（2018-2023）", "月份",
-                     os.path.join(OUTPUT_DIR, "三大城市群_月度PM2.5时序.png"))
+    plot_group_series(
+        monthly_group_series,
+        f"三大城市群月均{PM25_MATH}浓度变化（2018-2023）",
+        "月份",
+        os.path.join(OUTPUT_DIR, "三大城市群_月度PM2.5时序.png"),
+    )
     plot_group_series(
         seasonal_group_series,
-        "三大城市群季度PM2.5浓度变化（由月均聚合）",
+        f"三大城市群季度{PM25_MATH}浓度变化（由月均聚合）",
         "季度",
         os.path.join(OUTPUT_DIR, "三大城市群_季度PM2.5时序.png"),
         pettitt_df=seasonal_results["season_pettitt"],
