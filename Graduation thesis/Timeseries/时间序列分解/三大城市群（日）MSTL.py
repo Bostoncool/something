@@ -20,6 +20,17 @@ DEFAULT_MSTL_OUTPUT_DIR = r"H:\大论文Result\大论文图\三大城市群\MSTL
 # 图题/轴标签用 Unicode 下标（PM₂.₅），勿与 mathtext 的 $...$ 混排中文（见《中文字体显示问题排查指南》§2.4）
 PM25_UNICODE = "PM\u2082.\u2085"
 
+# 作图时城市群中文名 → 英文缩写
+CLUSTER_CHINESE_TO_ABBR = {
+    "京津冀": "BTH",
+    "珠三角": "PRD",
+    "长三角": "YRD",
+}
+
+
+def cluster_plot_label(name: str) -> str:
+    return CLUSTER_CHINESE_TO_ABBR.get(name, name)
+
 # 与 Other tips/Python version/Study area.py 对齐的论文字号（单图主标题 32；子图标题与轴标签 24；刻度 22；图例 28）
 THESIS_MAIN_TITLE_SIZE = 32
 THESIS_SUBPLOT_TITLE_SIZE = 24
@@ -141,7 +152,8 @@ def configure_plot_fonts() -> None:
     sns.set_theme(style="whitegrid")
     # SVG 默认 path 模式下，西文字体可能对汉字生成错误占位轮廓（指南 §2.3）；保留 <text> 由查看器按本机字体绘制
     mpl.rcParams["svg.fonttype"] = "none"
-    plt.rcParams["font.family"] = "serif"
+    # 须为列表才按字形回退；font.family="serif" 时 PNG 易整段用 TNR 致中文方框（排查指南 §6.2）
+    plt.rcParams["font.family"] = serif_chain
     plt.rcParams["font.serif"] = serif_chain
     plt.rcParams["axes.unicode_minus"] = False
     # 字号与 Study area.py 一致；子图默认标题用 24，单图总览在绘图函数中显式 32
@@ -510,14 +522,14 @@ def plot_mstl_components(result, cluster_name: str, save_path: str) -> None:
 
     axes[0].plot(result.observed, color="#1f77b4", lw=1.5)
     axes[0].set_title(
-        f"{cluster_name} {PM25_UNICODE} 原始序列",
+        f"{cluster_plot_label(cluster_name)} {PM25_UNICODE} 原始序列",
         fontsize=THESIS_SUBPLOT_TITLE_SIZE,
         fontweight="bold",
     )
     axes[0].set_ylabel("浓度")
 
     axes[1].plot(result.trend, color="#d62728", lw=1.5)
-    axes[1].set_title("趋势项", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold")
+    axes[1].set_title("Trend items", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold")
     axes[1].set_ylabel("趋势")
 
     for idx, col in enumerate(seasonal_df.columns, start=2):
@@ -536,7 +548,7 @@ def plot_mstl_components(result, cluster_name: str, save_path: str) -> None:
         "残差项", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold"
     )
     axes[resid_axis].set_ylabel("残差")
-    axes[resid_axis].set_xlabel("时间")
+    axes[resid_axis].set_xlabel("Time")
 
     for ax in axes:
         ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
@@ -559,7 +571,7 @@ def plot_seasonal_analysis(result, cluster_name: str, save_path: str) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     sns.boxplot(data=seasonal_plot_df, x="月份", y="季节项", ax=axes[0, 0], color="#91c8f6")
     axes[0, 0].set_title(
-        f"{cluster_name} 总季节项(月)箱线图",
+        f"{cluster_plot_label(cluster_name)} 总季节项(月)箱线图",
         fontsize=THESIS_SUBPLOT_TITLE_SIZE,
         fontweight="bold",
     )
@@ -598,29 +610,30 @@ def plot_seasonal_analysis(result, cluster_name: str, save_path: str) -> None:
 def plot_cluster_raw_comparison(cluster_daily_df: pd.DataFrame, save_path: str) -> None:
     """绘制三大城市群日均 PM2.5 对比图。"""
     fig, ax = plt.subplots(figsize=(15, 6))
+    plot_df = cluster_daily_df.assign(
+        _plot_region=lambda d: d["城市群"]
+        .map(CLUSTER_CHINESE_TO_ABBR)
+        .fillna(d["城市群"])
+    )
     sns.lineplot(
-        data=cluster_daily_df,
+        data=plot_df,
         x="日期",
         y="PM2.5",
-        hue="城市群",
+        hue="_plot_region",
         linewidth=1.2,
         ax=ax,
     )
-    ax.set_title(
-        f"三大城市群日均 {PM25_UNICODE} 浓度对比",
-        fontsize=THESIS_MAIN_TITLE_SIZE,
-        fontweight="bold",
-    )
-    ax.set_xlabel("时间")
-    ax.set_ylabel(PM25_UNICODE)
+    ax.set_xlabel("Time")
+    ax.set_ylabel(f"{PM25_UNICODE} (μg/m³)")
     ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
     ax.grid(alpha=0.25)
     leg = ax.get_legend()
     if leg is not None:
-        plt.setp(leg.get_texts(), fontsize=THESIS_LEGEND_SIZE)
+        leg.set_title("")
+        plt.setp(leg.get_texts(), fontsize=THESIS_LEGEND_SIZE // 2)
         t = leg.get_title()
         if t is not None and t.get_text():
-            t.set_fontsize(THESIS_LEGEND_TITLE_SIZE)
+            t.set_fontsize(THESIS_LEGEND_TITLE_SIZE // 2)
     plt.tight_layout()
     save_figure_dual(fig, save_path_png=save_path, dpi=300)
     plt.close(fig)
@@ -630,15 +643,15 @@ def plot_cluster_trend_comparison(mstl_result_map: dict, save_path: str) -> None
     """绘制三大城市群 MSTL 趋势项对比图。"""
     fig, ax = plt.subplots(figsize=(15, 6))
     for cluster_name, result in mstl_result_map.items():
-        ax.plot(result.trend.index, result.trend.values, lw=2.0, label=cluster_name)
-    ax.set_title(
-        f"三大城市群 {PM25_UNICODE} MSTL 趋势项对比",
-        fontsize=THESIS_MAIN_TITLE_SIZE,
-        fontweight="bold",
-    )
-    ax.set_xlabel("时间")
-    ax.set_ylabel("趋势项")
-    ax.legend(fontsize=THESIS_LEGEND_SIZE)
+        ax.plot(
+            result.trend.index,
+            result.trend.values,
+            lw=2.0,
+            label=cluster_plot_label(cluster_name),
+        )
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Trend items")
+    ax.legend(fontsize=THESIS_LEGEND_SIZE // 2)
     ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
     ax.grid(alpha=0.25)
     plt.tight_layout()

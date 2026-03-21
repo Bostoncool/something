@@ -19,6 +19,17 @@ DEFAULT_STL_INPUT_CSV = r"H:\大论文Result\三大城市群（市）月均PM2.5
 # 图题/轴标签用 Unicode 下标（PM₂.₅），勿与 mathtext 的 $...$ 混排中文（见《中文字体显示问题排查指南》§2.4）
 PM25_UNICODE = "PM\u2082.\u2085"
 
+# 图内展示用英文缩写（数据与 CSV 仍用中文城市群名）
+CLUSTER_NAME_TO_PLOT_LABEL = {
+    "京津冀": "BTH",
+    "长三角": "YRD",
+    "珠三角": "PRD",
+}
+
+
+def cluster_plot_label(cluster_name: str) -> str:
+    return CLUSTER_NAME_TO_PLOT_LABEL.get(cluster_name, cluster_name)
+
 # 与 Other tips/Python version/Study area.py 对齐的论文字号（单图主标题 32；子图标题与轴标签 24；刻度 22；图例 28）
 THESIS_MAIN_TITLE_SIZE = 32
 THESIS_SUBPLOT_TITLE_SIZE = 24
@@ -139,7 +150,9 @@ def configure_plot_fonts() -> None:
 
     sns.set_theme(style="whitegrid")
     mpl.rcParams["svg.fonttype"] = "none"
-    plt.rcParams["font.family"] = "serif"
+    # 必须为字体名列表才触发按字形回退；若仅设 font.family="serif" + font.serif，PNG 易整段锁在
+    # Times New Roman 上，中文缺字为方框（控制台或见 Glyph missing from Times New Roman；见排查指南 §6.2）
+    plt.rcParams["font.family"] = serif_chain
     plt.rcParams["font.serif"] = serif_chain
     plt.rcParams["axes.unicode_minus"] = False
     plt.rcParams["axes.titlesize"] = THESIS_SUBPLOT_TITLE_SIZE
@@ -360,15 +373,15 @@ def plot_stl_components(result, cluster_name, save_path):
 
     axes[0].plot(result.observed, color="#1f77b4", lw=1.5)
     axes[0].set_title(
-        f"{cluster_name} {PM25_UNICODE} 原始序列",
+        f"{cluster_plot_label(cluster_name)} {PM25_UNICODE} 原始序列",
         fontsize=THESIS_SUBPLOT_TITLE_SIZE,
         fontweight="bold",
     )
     axes[0].set_ylabel("浓度")
 
     axes[1].plot(result.trend, color="#d62728", lw=1.5)
-    axes[1].set_title("趋势项", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold")
-    axes[1].set_ylabel("趋势")
+    axes[1].set_title("Trend items", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold")
+    axes[1].set_ylabel("Trend")
 
     axes[2].plot(result.seasonal, color="#2ca02c", lw=1.5)
     axes[2].set_title("季节项", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold")
@@ -378,7 +391,7 @@ def plot_stl_components(result, cluster_name, save_path):
     axes[3].axhline(0, ls="--", c="black", alpha=0.6)
     axes[3].set_title("残差项", fontsize=THESIS_SUBPLOT_TITLE_SIZE, fontweight="bold")
     axes[3].set_ylabel("残差")
-    axes[3].set_xlabel("时间")
+    axes[3].set_xlabel("Time")
 
     for ax in axes:
         ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
@@ -402,7 +415,7 @@ def plot_seasonal_analysis(result, cluster_name, save_path):
 
     sns.boxplot(data=seasonal_df, x="月份", y="季节项", ax=axes[0, 0], color="#91c8f6")
     axes[0, 0].set_title(
-        f"{cluster_name} 季节项(月)箱线图",
+        f"{cluster_plot_label(cluster_name)} 季节项(月)箱线图",
         fontsize=THESIS_SUBPLOT_TITLE_SIZE,
         fontweight="bold",
     )
@@ -438,50 +451,23 @@ def plot_seasonal_analysis(result, cluster_name, save_path):
     plt.close(fig)
 
 
-def plot_cluster_raw_comparison(cluster_monthly_df, save_path):
-    """三大城市群月均 PM2.5 对比图。"""
-    fig, ax = plt.subplots(figsize=(14, 6))
-    sns.lineplot(
-        data=cluster_monthly_df,
-        x="Month",
-        y="PM2.5",
-        hue="城市群",
-        marker="o",
-        linewidth=1.8,
-        ax=ax,
-    )
-    ax.set_title(
-        f"三大城市群月均 {PM25_UNICODE} 浓度对比 (2018-2023)",
-        fontsize=THESIS_MAIN_TITLE_SIZE,
-        fontweight="bold",
-    )
-    ax.set_xlabel("时间")
-    ax.set_ylabel(PM25_UNICODE)
-    ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
-    ax.grid(alpha=0.25)
-    leg = ax.get_legend()
-    if leg is not None:
-        plt.setp(leg.get_texts(), fontsize=THESIS_LEGEND_SIZE)
-        t = leg.get_title()
-        if t is not None and t.get_text():
-            t.set_fontsize(THESIS_LEGEND_TITLE_SIZE)
-    plt.tight_layout()
-    save_figure_dual(fig, save_path_png=save_path, dpi=300)
-    plt.close(fig)
-
-
 def plot_cluster_trend_comparison(stl_result_map, save_path):
     """三大城市群 STL 趋势项对比图。"""
     fig, ax = plt.subplots(figsize=(14, 6))
     for cluster_name, result in stl_result_map.items():
-        ax.plot(result.trend.index, result.trend.values, lw=2.0, label=cluster_name)
+        ax.plot(
+            result.trend.index,
+            result.trend.values,
+            lw=2.0,
+            label=cluster_plot_label(cluster_name),
+        )
     ax.set_title(
-        f"三大城市群 {PM25_UNICODE} STL 趋势项对比",
+        f"三大城市群 {PM25_UNICODE} STL Trend items 对比",
         fontsize=THESIS_MAIN_TITLE_SIZE,
         fontweight="bold",
     )
-    ax.set_xlabel("时间")
-    ax.set_ylabel("趋势项")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Trend items")
     ax.legend(fontsize=THESIS_LEGEND_SIZE)
     ax.tick_params(axis="both", labelsize=THESIS_TICK_SIZE)
     ax.grid(alpha=0.25)
@@ -514,12 +500,6 @@ def main():
     monthly_output_path = os.path.join(output_dir, "城市群月均PM25_2018_2023.csv")
     cluster_monthly_df.to_csv(monthly_output_path, index=False, encoding="utf-8-sig")
     safe_print(f"城市群月度数据已保存: {monthly_output_path}")
-
-    # 总体对比图
-    plot_cluster_raw_comparison(
-        cluster_monthly_df=cluster_monthly_df,
-        save_path=os.path.join(output_dir, "三大城市群_PM25月均对比.png"),
-    )
 
     all_analysis = []
     stl_result_map = {}

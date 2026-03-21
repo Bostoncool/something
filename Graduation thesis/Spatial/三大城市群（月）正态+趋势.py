@@ -21,6 +21,26 @@ DEFAULT_GEOJSON_DIRS = {
 }
 DEFAULT_PM25_CSV = r"H:\大论文Result\三大城市群（市）月均PM2.5浓度\合并数据_2018-2023.csv"
 FIG_DPI = 300
+# 图内化学规范：正体 PM，下标 2.5（mathtext）
+PM25_MATH_LABEL = r"$\mathrm{PM}_{2.5}$"
+# 图内英文使用 Times New Roman（含 mathtext 罗马体）
+# 标题 / 轴名 / 刻度相对默认略放大，便于论文插图阅读
+FIG_TITLE_FONTSIZE = 21
+FIG_AXIS_LABEL_FONTSIZE = 19
+FIG_TICK_FONTSIZE = 17
+FIG_TEXT_RC = {
+    "font.family": "serif",
+    "font.serif": ["Times New Roman", "DejaVu Serif", "Liberation Serif", "Times"],
+    "axes.unicode_minus": False,
+    "mathtext.fontset": "custom",
+    "mathtext.rm": "Times New Roman",
+    "mathtext.it": "Times New Roman:italic",
+    "mathtext.bf": "Times New Roman:bold",
+    "axes.titlesize": FIG_TITLE_FONTSIZE,
+    "axes.labelsize": FIG_AXIS_LABEL_FONTSIZE,
+    "xtick.labelsize": FIG_TICK_FONTSIZE,
+    "ytick.labelsize": FIG_TICK_FONTSIZE,
+}
 
 
 def setup_matplotlib() -> None:
@@ -298,34 +318,54 @@ def fit_linear_trend_plane(df: pd.DataFrame, value_col: str) -> dict:
 
 
 def save_qq_plot(values: np.ndarray, title: str, save_path: Path) -> None:
-    fig = plt.figure(figsize=(6, 6))
-    fig.patch.set_alpha(0.0)
-    ax = fig.add_subplot(111)
-    ax.patch.set_alpha(0.0)
-    stats.probplot(values, dist="norm", plot=ax)
-    ax.set_title(title)
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=FIG_DPI, transparent=True)
-    plt.close(fig)
-
-
-def save_trend_plots(df: pd.DataFrame, value_col: str, save_path: Path) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-    fig.patch.set_alpha(0.0)
-    for ax, coord_col, label in zip(axes, ["x", "y"], ["X direction", "Y direction"]):
+    with plt.rc_context(FIG_TEXT_RC):
+        fig = plt.figure(figsize=(6, 6))
+        fig.patch.set_alpha(0.0)
+        ax = fig.add_subplot(111)
         ax.patch.set_alpha(0.0)
-        sns.scatterplot(data=df, x=coord_col, y=value_col, ax=ax, s=55, color="#2c7fb8")
-        coef = np.polyfit(df[coord_col], df[value_col], 1)
-        x_line = np.linspace(df[coord_col].min(), df[coord_col].max(), 200)
-        y_line = coef[0] * x_line + coef[1]
-        ax.plot(x_line, y_line, color="#d7301f", linewidth=2)
-        ax.set_box_aspect(1)
-        ax.set_xlabel(f"{label} projected coordinate (m)")
-        ax.set_ylabel("PM2.5 (transformed)" if value_col == "pm25_for_test" else "PM2.5")
-        ax.set_title(f"{label} trend")
-    fig.tight_layout()
-    fig.savefig(save_path, dpi=FIG_DPI, transparent=True)
-    plt.close(fig)
+        stats.probplot(values, dist="norm", plot=ax)
+        ax.set_title(title, fontsize=FIG_TITLE_FONTSIZE)
+        ax.tick_params(axis="both", which="major", labelsize=FIG_TICK_FONTSIZE)
+        for axis_label in (ax.xaxis.label, ax.yaxis.label):
+            if axis_label is not None:
+                axis_label.set_fontsize(FIG_AXIS_LABEL_FONTSIZE)
+        fig.tight_layout()
+        fig.savefig(save_path, dpi=FIG_DPI, transparent=True)
+        plt.close(fig)
+
+
+def save_trend_plots(
+    df: pd.DataFrame,
+    value_col: str,
+    save_path_x: Path,
+    save_path_y: Path,
+    cluster_key: str,
+) -> None:
+    """分别输出 X、Y 方向趋势散点图（原左右并排为两张独立 SVG）。"""
+    code = cluster_key.strip().upper()
+    y_label = f"{PM25_MATH_LABEL} (transformed)" if value_col == "pm25_for_test" else PM25_MATH_LABEL
+    with plt.rc_context(FIG_TEXT_RC):
+        for save_path, coord_col, label in zip(
+            [save_path_x, save_path_y],
+            ["x", "y"],
+            ["X direction", "Y direction"],
+        ):
+            fig, ax = plt.subplots(figsize=(6, 6))
+            fig.patch.set_alpha(0.0)
+            ax.patch.set_alpha(0.0)
+            sns.scatterplot(data=df, x=coord_col, y=value_col, ax=ax, s=55, color="#2c7fb8")
+            coef = np.polyfit(df[coord_col], df[value_col], 1)
+            x_line = np.linspace(df[coord_col].min(), df[coord_col].max(), 200)
+            y_line = coef[0] * x_line + coef[1]
+            ax.plot(x_line, y_line, color="#d7301f", linewidth=2)
+            ax.set_box_aspect(1)
+            ax.set_xlabel(f"{label} projected coordinate (m)", fontsize=FIG_AXIS_LABEL_FONTSIZE)
+            ax.set_ylabel(y_label, fontsize=FIG_AXIS_LABEL_FONTSIZE)
+            ax.set_title(f"{code}: {label} trend", fontsize=FIG_TITLE_FONTSIZE)
+            ax.tick_params(axis="both", which="major", labelsize=FIG_TICK_FONTSIZE)
+            fig.tight_layout()
+            fig.savefig(save_path, dpi=FIG_DPI, transparent=True)
+            plt.close(fig)
 
 
 def run_single_cluster(
@@ -359,10 +399,11 @@ def run_single_cluster(
 
     qq_orig = cluster_output / "qqplot_original.svg"
     qq_final = cluster_output / "qqplot_for_trend.svg"
-    trend_plot = cluster_output / "trend_xy.svg"
+    trend_plot_x = cluster_output / "trend_x.svg"
+    trend_plot_y = cluster_output / "trend_y.svg"
     save_qq_plot(original_values, f"Q-Q Plot ({cluster_key} Original)", qq_orig)
     save_qq_plot(transformed_values, f"Q-Q Plot ({cluster_key} {transform_name})", qq_final)
-    save_trend_plots(merged, "pm25_for_test", trend_plot)
+    save_trend_plots(merged, "pm25_for_test", trend_plot_x, trend_plot_y, cluster_key)
 
     merged_path = cluster_output / f"{cluster_key}_normality_trend_result.csv"
     report_path = cluster_output / f"{cluster_key}_report.json"
@@ -394,7 +435,8 @@ def run_single_cluster(
             "report_json": str(report_path),
             "qqplot_original": str(qq_orig),
             "qqplot_final": str(qq_final),
-            "trend_plot": str(trend_plot),
+            "trend_plot_x": str(trend_plot_x),
+            "trend_plot_y": str(trend_plot_y),
         },
     }
     with report_path.open("w", encoding="utf-8") as file_obj:

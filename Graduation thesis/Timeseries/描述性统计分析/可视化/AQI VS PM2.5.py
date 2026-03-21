@@ -446,14 +446,14 @@ def plot_aqi_polluted_ratio_by_region(
             labels,
             [value * 100 for value in pm25_plot],
             color=COLOR_PM25_PRIMARY,
-            label=PM25_UNICODE + "为首要污染物（占有效AQI）",
+            label=PM25_UNICODE + "为首要污染物",
         )
         bars_other = ax.bar(
             labels,
             [value * 100 for value in other_polluted_plot],
             bottom=[value * 100 for value in pm25_plot],
             color=COLOR_OTHER_POLLUTED,
-            label="其他AQI > 100污染（占有效AQI）",
+            label="其他AQI > 100污染",
         )
 
         for idx, (bar_pm25, bar_other, aqi_ratio, pm25_ratio) in enumerate(
@@ -482,13 +482,13 @@ def plot_aqi_polluted_ratio_by_region(
                     color="#2d5a4a",
                 )
 
-        ax.set_ylabel("占所有有效AQI数据占比 (%)", fontsize=12)
+        ax.set_ylabel("占所有有效AQI数据占比 (%)", fontsize=16)
         region_label = REGION_LABELS.get(region_name, region_name)
         ax.set_title(
             f"{START_YEAR}-{END_YEAR} {region_label}\n各城市AQI > 100及{PM25_UNICODE}首要占比",
-            fontsize=13,
+            fontsize=17,
         )
-        ax.legend(loc="upper right", fontsize=9)
+        ax.legend(loc="upper right", fontsize=16)
         max_height_pct = max(aqi_plot) * 100 if aqi_plot else 0.0
         if max_height_pct <= 0:
             y_upper = 5.0

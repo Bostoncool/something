@@ -125,7 +125,8 @@ def configure_plot_fonts() -> None:
     ):
         safe_print("警告: 未解析到 KaiTi/楷体，中文将使用链中后续字体（如雅黑/宋体）。")
     mpl.rcParams["svg.fonttype"] = "none"
-    mpl.rcParams["font.family"] = "serif"
+    # 须为列表才按字形回退；font.family="serif" 时 PNG 易整段用 TNR 致中文方框（排查指南 §6.2）
+    mpl.rcParams["font.family"] = serif_chain
     mpl.rcParams["font.serif"] = serif_chain
     mpl.rcParams["axes.unicode_minus"] = False
     safe_print(
@@ -436,9 +437,9 @@ def choose_color(cluster_name: str) -> str:
 
 # 城市群中文名 → 英文图例标签
 CLUSTER_TO_ENGLISH = {
-    "京津冀城市群(BTH)": "Beijing-Tianjin-Hebei (BTH)",
-    "长江三角洲城市群(YRD)": "Yangtze River Delta (YRD)",
-    "珠江三角洲城市群(PRD)": "Pearl River Delta (PRD)",
+    "京津冀城市群(BTH)": "BTH",
+    "长江三角洲城市群(YRD)": "YRD",
+    "珠江三角洲城市群(PRD)": "PRD",
 }
 
 
@@ -464,24 +465,21 @@ def plot_cluster_trends(cluster_monthly_df: pd.DataFrame, output_dir: Path) -> P
             alpha=0.95,
         )
 
-    ax.set_title(
-        f"Monthly Mean {PM25_UNICODE} Time Series of Three Major Urban Agglomerations (2018-2023)",
-        fontsize=14,
-        pad=10,
-    )
-    ax.set_xlabel("Time", fontsize=12)
+    # 轴标签、刻度、图例字号与 Study area.py 一致：轴标签 24 加粗，刻度 22，图例 28
+    ax.set_xlabel("Time", fontsize=24, fontweight="bold")
     ax.set_ylabel(
-        f"Monthly mean {PM25_UNICODE} concentration (\u03bcg/m\u00b3)",
-        fontsize=12,
+        f" {PM25_UNICODE} (\u03bcg/m\u00b3)",
+        fontsize=24,
+        fontweight="bold",
     )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_linewidth(1.2)
     ax.spines["bottom"].set_linewidth(1.2)
-    ax.tick_params(axis="both", width=1.0, length=5, labelsize=10)
+    ax.tick_params(axis="both", width=1.0, length=5, labelsize=22)
     ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.35)
     if len(ax.lines) > 0:
-        ax.legend(frameon=False, fontsize=10)
+        ax.legend(frameon=False, fontsize=28)
 
     base_path = output_dir / "三大城市群月均PM2.5时序变化"
     png_path = base_path.with_suffix(".png")
