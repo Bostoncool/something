@@ -465,21 +465,21 @@ def plot_cluster_trends(cluster_monthly_df: pd.DataFrame, output_dir: Path) -> P
             alpha=0.95,
         )
 
-    # 轴标签、刻度、图例字号与 Study area.py 一致：轴标签 24 加粗，刻度 22，图例 28
-    ax.set_xlabel("Time", fontsize=24, fontweight="bold")
+    # 轴标签、刻度、图例字号（较 Study area.py 整体小 4）：轴标签 20 加粗，刻度 18，图例 24
+    ax.set_xlabel("Time", fontsize=20, fontweight="bold")
     ax.set_ylabel(
         f" {PM25_UNICODE} (\u03bcg/m\u00b3)",
-        fontsize=24,
+        fontsize=20,
         fontweight="bold",
     )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_linewidth(1.2)
     ax.spines["bottom"].set_linewidth(1.2)
-    ax.tick_params(axis="both", width=1.0, length=5, labelsize=22)
+    ax.tick_params(axis="both", width=1.0, length=5, labelsize=18)
     ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.35)
     if len(ax.lines) > 0:
-        ax.legend(frameon=False, fontsize=28)
+        ax.legend(frameon=False, fontsize=24)
 
     base_path = output_dir / "三大城市群月均PM2.5时序变化"
     png_path = base_path.with_suffix(".png")

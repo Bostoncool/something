@@ -1,10 +1,15 @@
+import os
 import re
 from pathlib import Path
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+from matplotlib import font_manager
 
+# 图内 PM₂.₅：Unicode 下标，勿与中文同串使用 mathtext 的 $...$（《中文字体显示问题排查指南》§2.4）
+PM25_UNICODE = "PM\u2082.\u2085"
 
 SEASON_ORDER = {
     "春": 1,
@@ -21,6 +26,12 @@ SEASON_ORDER = {
     "q3": 3,
     "q4": 4,
 }
+
+# 相对此前版式整体缩小 4 号（与 Study area.py 对齐后再减 4）
+TITLE_FS = 28
+AXIS_LABEL_FS = 20
+TICK_FS = 18
+LEGEND_FS = 18
 
 
 def safe_print(message: str) -> None:
@@ -73,6 +84,19 @@ def parse_season_label(label: str) -> tuple[int, int, str] | None:
     return year, order, normalized_label
 
 
+def sort_season_index_labels(labels: list[str]) -> list[str]:
+    """按年份与季节顺序排序季度标签。"""
+    items: list[tuple[int, int, str]] = []
+    for lab in labels:
+        p = parse_season_label(lab)
+        if p is not None:
+            items.append((p[0], p[1], lab))
+        else:
+            items.append((9999, 99, lab))
+    items.sort(key=lambda t: (t[0], t[1]))
+    return [t[2] for t in items]
+
+
 def build_cluster_seasonal_mean_series(csv_path: str, pollutant: str = "PM2.5") -> pd.Series:
     """
     读取单个城市群的 Seasonal_Means.csv，筛选 PM2.5，并计算该城市群季节均值时序。
@@ -108,80 +132,254 @@ def build_cluster_seasonal_mean_series(csv_path: str, pollutant: str = "PM2.5") 
     return seasonal_mean
 
 
-def plot_single_cluster_seasonal_series(
-    seasonal_series: pd.Series,
-    cluster_name: str,
-    output_dir: Path,
-    line_color: str,
-) -> Path:
-    """绘制单个城市群季节平均 PM2.5 时序图，并保存为 SVG。"""
-    fig, ax = plt.subplots(figsize=(13.5, 5.8), dpi=150)
+_WINDOWS_FONT_FILES_REGISTERED = False
+
+
+def _register_windows_font_files_once() -> None:
+    global _WINDOWS_FONT_FILES_REGISTERED
+    if _WINDOWS_FONT_FILES_REGISTERED or os.name != "nt":
+        return
+    fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    for fname in (
+        "simkai.ttf",
+        "simkai.ttc",
+        "msyh.ttc",
+        "msyhbd.ttc",
+        "simhei.ttf",
+        "simsun.ttc",
+        "simsunb.ttf",
+    ):
+        fp = fonts_dir / fname
+        if not fp.is_file():
+            continue
+        try:
+            mpl.font_manager.fontManager.addfont(str(fp))
+        except (OSError, ValueError, RuntimeError):
+            continue
+    _WINDOWS_FONT_FILES_REGISTERED = True
+
+
+def _font_family_resolves(family: str) -> bool:
+    fm = mpl.font_manager.fontManager
+    try:
+        path = fm.findfont(
+            font_manager.FontProperties(family=family),
+            fallback_to_default=False,
+        )
+    except ValueError:
+        return False
+    return bool(path and os.path.isfile(path))
+
+
+def _build_thesis_serif_font_chain() -> list[str]:
+    """与 MSTL / 月均 PM2.5 / AQI 脚本一致：TNR + 楷体链；须为列表才按字形回退。"""
+    _register_windows_font_files_once()
+    ordered: list[str] = []
+
+    def append_if_new(name: str) -> None:
+        if name not in ordered and _font_family_resolves(name):
+            ordered.append(name)
+
+    for name in ("Times New Roman", "Times"):
+        append_if_new(name)
+        if ordered:
+            break
+    if not ordered:
+        for name in ("DejaVu Serif", "DejaVu Sans", "Arial"):
+            append_if_new(name)
+            if ordered:
+                break
+
+    for name in (
+        "KaiTi",
+        "STKaiti",
+        "DFKai-SB",
+        "FZKai-Z03",
+        "楷体",
+        "Kaiti SC",
+        "SimKai",
+        "KaiTi_GB2312",
+        "华文楷体",
+        "Microsoft YaHei",
+        "SimHei",
+        "SimSun",
+        "Arial Unicode MS",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+    ):
+        append_if_new(name)
+
+    if not any(
+        x in ordered
+        for x in (
+            "KaiTi",
+            "STKaiti",
+            "DFKai-SB",
+            "FZKai-Z03",
+            "楷体",
+            "Kaiti SC",
+            "SimKai",
+            "KaiTi_GB2312",
+        )
+    ):
+        for font in mpl.font_manager.fontManager.ttflist:
+            if "simkai" in font.fname.replace("\\", "/").lower():
+                if font.name not in ordered:
+                    insert_at = 1 if len(ordered) > 1 else len(ordered)
+                    ordered.insert(insert_at, font.name)
+                break
+
+    append_if_new("DejaVu Sans")
+    return ordered if ordered else ["DejaVu Sans"]
+
+
+def configure_plot_fonts() -> None:
+    """svg.fonttype=none + font.family 列表，避免 SVG path 伪轮廓与整段绑 TNR 致中文方框（排查指南 §2.3、§6.2）。"""
+    serif_chain = _build_thesis_serif_font_chain()
+    mpl.rcParams["svg.fonttype"] = "none"
+    mpl.rcParams["font.family"] = serif_chain
+    mpl.rcParams["font.serif"] = serif_chain
+    mpl.rcParams["axes.unicode_minus"] = False
+
+
+def _svg_font_reorder_disabled() -> bool:
+    for key in (
+        "SEASONAL_PM25_SVG_NO_FONT_REORDER",
+        "MONTHLY_PM25_SVG_NO_FONT_REORDER",
+        "STL_SVG_NO_FONT_REORDER",
+        "MSTL_SVG_NO_FONT_REORDER",
+    ):
+        if os.environ.get(key, "").strip().lower() in ("1", "true", "yes"):
+            return True
+    return False
+
+
+def _patch_svg_font_family_for_weak_viewers(svg_path: str) -> None:
+    """Word 等只认 font-family 首项时，将中文字体提前（排查指南 §2.3.1）。"""
+    if _svg_font_reorder_disabled():
+        return
+    try:
+        with open(svg_path, encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return
+    office_first = (
+        "'Microsoft YaHei', 'KaiTi', 'SimHei', 'SimSun', "
+        "'Times New Roman', 'DejaVu Sans', serif"
+    )
+    patched, n = re.subn(
+        r"font-family:\s*[^;]+;",
+        f"font-family: {office_first};",
+        content,
+    )
+    if n and patched != content:
+        try:
+            with open(svg_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(patched)
+        except OSError:
+            return
+
+
+def plot_combined_cluster_seasonal_series(
+    series_by_cluster: dict[str, pd.Series],
+    color_map: dict[str, str],
+    output_path: Path,
+) -> tuple[Path, Path]:
+    """将 BTH / YRD / PRD 三条季节均值曲线绘制在同一坐标系内；返回 (svg 路径, png 路径)。"""
+    all_labels: set[str] = set()
+    for s in series_by_cluster.values():
+        all_labels.update(s.index)
+    sorted_labels = sort_season_index_labels(list(all_labels))
+    x_positions = np.arange(len(sorted_labels))
+
+    fig, ax = plt.subplots(figsize=(13.5, 6.2), dpi=150)
     fig.patch.set_alpha(0.0)
     ax.set_facecolor("none")
 
-    x_positions = range(len(seasonal_series))
-    ax.plot(
-        x_positions,
-        seasonal_series.values,
-        color=line_color,
-        linewidth=2.0,
-        marker="o",
-        markersize=3.2,
-        alpha=0.95,
-        zorder=3,
-    )
+    legend_prop = font_manager.FontProperties(family="Times New Roman", size=LEGEND_FS)
 
-    ax.set_title(f"{cluster_name}季节平均PM2.5时序变化", fontsize=14, pad=10)
-    ax.set_xlabel("时间", fontsize=12)
-    ax.set_ylabel("PM2.5/(μg/m³)", fontsize=12, fontfamily="Times New Roman")
-    ax.set_xticks(list(x_positions))
-    ax.set_xticklabels(seasonal_series.index, rotation=45, ha="right")
+    for cluster_name in ("BTH", "YRD", "PRD"):
+        s = series_by_cluster[cluster_name].reindex(sorted_labels)
+        ax.plot(
+            x_positions,
+            s.values.astype(float),
+            color=color_map[cluster_name],
+            linewidth=2.0,
+            marker="o",
+            markersize=3.2,
+            alpha=0.95,
+            zorder=3,
+            label=cluster_name,
+        )
+
+    ax.set_title(
+        f"三大城市群季节平均{PM25_UNICODE}时序变化",
+        fontsize=TITLE_FS,
+        fontweight="bold",
+        pad=12,
+    )
+    ax.set_xlabel("Season", fontsize=AXIS_LABEL_FS, fontweight="bold")
+    # 单位用 Unicode，整段无 $，避免 STIX / ¤（排查指南 §2.4、§6.4）
+    ax.set_ylabel(
+        f"{PM25_UNICODE} /(\u03bcg/m\u00b3)",
+        fontsize=AXIS_LABEL_FS,
+        fontweight="bold",
+    )
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(sorted_labels, rotation=45, ha="right")
 
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_linewidth(1.2)
     ax.spines["bottom"].set_linewidth(1.2)
-    ax.tick_params(axis="both", width=1.0, length=5, labelsize=9)
+    ax.tick_params(axis="both", width=1.0, length=5, labelsize=TICK_FS)
     ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.35)
+    ax.legend(loc="upper right", frameon=True, fancybox=True, prop=legend_prop)
 
-    output_path = output_dir / f"{cluster_name}_季节平均PM2.5时序变化.svg"
+    png_path = output_path.with_suffix(".png")
+    fig.savefig(png_path, dpi=300, transparent=True, bbox_inches="tight")
     fig.savefig(output_path, format="svg", transparent=True, bbox_inches="tight")
     plt.close(fig)
-    return output_path
+    _patch_svg_font_family_for_weak_viewers(str(output_path))
+    return output_path, png_path
 
 
 def main() -> None:
     csv_paths = {
-        "京津冀城市群(BTH)": r"H:\大论文Result\BTH\描述性统计分析\Seasonal_Means.csv",
-        "长江三角洲城市群(YRD)": r"H:\大论文Result\YRD\描述性统计分析\Seasonal_Means.csv",
-        "珠江三角洲城市群(PRD)": r"H:\大论文Result\PRD\描述性统计分析\Seasonal_Means.csv",
+        "BTH": r"H:\大论文Result\BTH\描述性统计分析\Seasonal_Means.csv",
+        "YRD": r"H:\大论文Result\YRD\描述性统计分析\Seasonal_Means.csv",
+        "PRD": r"H:\大论文Result\PRD\描述性统计分析\Seasonal_Means.csv",
     }
 
-    mpl.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "Arial Unicode MS"]
-    mpl.rcParams["axes.unicode_minus"] = False
+    configure_plot_fonts()
 
     color_map = {
-        "京津冀城市群(BTH)": "#d62828",
-        "长江三角洲城市群(YRD)": "#1d3557",
-        "珠江三角洲城市群(PRD)": "#2a9d8f",
+        "BTH": "#d62828",
+        "YRD": "#1d3557",
+        "PRD": "#2a9d8f",
     }
 
     output_dir = Path(__file__).resolve().parent
 
+    series_by_cluster: dict[str, pd.Series] = {}
     for cluster_name, csv_path in csv_paths.items():
-        seasonal_series = build_cluster_seasonal_mean_series(csv_path, pollutant="PM2.5")
-        output_figure_path = plot_single_cluster_seasonal_series(
-            seasonal_series=seasonal_series,
-            cluster_name=cluster_name,
-            output_dir=output_dir,
-            line_color=color_map[cluster_name],
+        series_by_cluster[cluster_name] = build_cluster_seasonal_mean_series(
+            csv_path, pollutant="PM2.5"
         )
-
         output_data_path = output_dir / f"{cluster_name}_季节平均PM2.5序列.csv"
-        seasonal_series.to_frame().to_csv(output_data_path, encoding="utf-8-sig")
-
-        safe_print(f"{cluster_name} 图片已保存到: {output_figure_path}")
+        series_by_cluster[cluster_name].to_frame().to_csv(
+            output_data_path, encoding="utf-8-sig"
+        )
         safe_print(f"{cluster_name} 数据已保存到: {output_data_path}")
+
+    combined_svg = output_dir / "三大城市群_季节平均PM2.5时序变化_合并.svg"
+    out_svg, out_png = plot_combined_cluster_seasonal_series(
+        series_by_cluster=series_by_cluster,
+        color_map=color_map,
+        output_path=combined_svg,
+    )
+    safe_print(f"合并图 SVG 已保存到: {out_svg}")
+    safe_print(f"合并图 PNG 已保存到: {out_png}")
 
 
 if __name__ == "__main__":
